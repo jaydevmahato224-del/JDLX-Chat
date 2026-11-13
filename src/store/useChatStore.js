@@ -746,6 +746,7 @@ export const useChatStore = create((set, get) => ({
   // presence is authoritative over the slower server heartbeat window.
   _peerPresenceKnown: false,
   peerLastReadId: 0,
+  peerLastDeliveredId: 0,
   realtimeAbort: null,
   realtimeRoomId: null,
   eventsCursor: 0,
@@ -905,6 +906,7 @@ export const useChatStore = create((set, get) => ({
       peerOnline: userChanged ? false : get().peerOnline,
       _peerPresenceKnown: userChanged ? false : get()._peerPresenceKnown,
       peerLastReadId: userChanged ? 0 : get().peerLastReadId,
+      peerLastDeliveredId: userChanged ? 0 : get().peerLastDeliveredId,
       eventsCursor: userChanged ? 0 : get().eventsCursor,
       error: null,
       ...(userChanged
@@ -982,6 +984,7 @@ export const useChatStore = create((set, get) => ({
       peerOnline: false,
       _peerPresenceKnown: false,
       peerLastReadId: 0,
+      peerLastDeliveredId: 0,
       eventsCursor: 0,
       socialRealtimeRevision: '',
       notifications: [],
@@ -1547,6 +1550,7 @@ export const useChatStore = create((set, get) => ({
       peerOnline: false,
       _peerPresenceKnown: false,
       peerLastReadId: 0,
+      peerLastDeliveredId: 0,
       // Clear any previous room's pre-derived key
       derivedRoomKey: null,
       conversations: state.conversations.map((c) =>
@@ -1692,22 +1696,32 @@ export const useChatStore = create((set, get) => ({
         if (uid && merged.length > 0) {
           setCachedMessages(uid, targetRoomId, merged)
         }
-        // Send instant read receipt over Supabase WebSocket to turn peer tick into double tick.
+        // Send instant delivery and read receipts over Supabase WebSocket to turn peer tick into double tick.
         // Skip while the tab/window is hidden: a desktop tab in the background is not
         // actually being read, so the sender should not get blue ticks yet.
         const isPageVisible = typeof document === 'undefined' || document.visibilityState === 'visible'
         const peerMsgs = merged.filter((m) => m && !sameId(m.user_id, uid))
-        if (isPageVisible && peerMsgs.length > 0) {
+        if (peerMsgs.length > 0) {
           const maxPeerMsgId = Math.max(...peerMsgs.map((m) => m.id))
           const roomChannel = get().supabaseRoomChannel
           if (roomChannel && maxPeerMsgId > 0) {
+            // Recipient client received the messages: send delivery_receipt
             roomChannel.send({
               type: 'broadcast',
-              event: 'read_receipt',
-              payload: { user_id: uid, last_read_id: maxPeerMsgId }
+              event: 'delivery_receipt',
+              payload: { user_id: uid, last_delivered_id: maxPeerMsgId }
             }).catch(() => {})
+
+            // If page is currently visible, also send read_receipt
+            if (isPageVisible) {
+              roomChannel.send({
+                type: 'broadcast',
+                event: 'read_receipt',
+                payload: { user_id: uid, last_read_id: maxPeerMsgId }
+              }).catch(() => {})
+            }
           }
-          if (token && maxPeerMsgId > 0) {
+          if (isPageVisible && token && maxPeerMsgId > 0) {
             apiFetch(`/chat/rooms/${targetRoomId}/read`, {
               method: 'POST',
               headers: {
@@ -1797,6 +1811,7 @@ export const useChatStore = create((set, get) => ({
       peerOnline: false,
       _peerPresenceKnown: false,
       peerLastReadId: 0,
+      peerLastDeliveredId: 0,
       eventsCursor: 0
     })
 
@@ -1840,8 +1855,17 @@ export const useChatStore = create((set, get) => ({
             const maxPeerMsgId = peerMsgs.length
               ? Math.max(...peerMsgs.map((m) => Number(m.id) || 0))
               : 0
-            // Read receipts are derived from fetched messages, never from a
-            // spoofable broadcast id.
+
+            // Broadcast delivery receipt as soon as peer message arrives on recipient device
+            if (currentMyId && maxPeerMsgId > 0) {
+              channel.send({
+                type: 'broadcast',
+                event: 'delivery_receipt',
+                payload: { user_id: currentMyId, last_delivered_id: maxPeerMsgId }
+              }).catch(() => {})
+            }
+
+            // Read receipts are derived from fetched messages, never from a spoofable broadcast id
             const pageVisible = typeof document === 'undefined' || document.visibilityState === 'visible'
             if (currentMyId && maxPeerMsgId > 0 && pageVisible) {
               channel.send({
@@ -1852,6 +1876,20 @@ export const useChatStore = create((set, get) => ({
             }
             get().fetchConversations().catch(() => {})
             get().fetchUnreadCount().catch(() => {})
+          })
+          .on('broadcast', { event: 'delivery_receipt' }, ({ payload }) => {
+            const currentMyId = get().chatUser?.id
+            const peerId = getConversationPeerId(get().activeConversation, currentMyId)
+            const lastDeliveredId = Number(payload?.last_delivered_id)
+            if (!payload || !peerId) return
+            if (!sameId(payload.user_id, peerId)) return
+            if (!Number.isFinite(lastDeliveredId) || lastDeliveredId <= 0) return
+            set((state) => ({
+              peerLastDeliveredId: Math.max(state.peerLastDeliveredId || 0, lastDeliveredId),
+              messages: state.messages.map((m) =>
+                m.id <= lastDeliveredId ? { ...m, is_delivered: 1 } : m
+              )
+            }))
           })
           .on('broadcast', { event: 'typing' }, ({ payload }) => {
             const currentMyId = get().chatUser?.id
@@ -1880,8 +1918,9 @@ export const useChatStore = create((set, get) => ({
             if (!maxKnownId || lastReadId > maxKnownId) return
             set((state) => ({
               peerLastReadId: Math.max(state.peerLastReadId || 0, lastReadId),
+              peerLastDeliveredId: Math.max(state.peerLastDeliveredId || 0, lastReadId),
               messages: state.messages.map((m) =>
-                m.id <= lastReadId ? { ...m, is_read: 1 } : m
+                m.id <= lastReadId ? { ...m, is_read: 1, is_delivered: 1 } : m
               )
             }))
           })
@@ -2045,6 +2084,7 @@ export const useChatStore = create((set, get) => ({
             if (state.peerTyping !== nextPeerTyping) patch.peerTyping = nextPeerTyping
             if (state.peerOnline !== nextPeerOnline) patch.peerOnline = nextPeerOnline
             if (state.peerLastReadId !== nextPeerLastReadId) patch.peerLastReadId = nextPeerLastReadId
+            if (nextPeerLastReadId > (state.peerLastDeliveredId || 0)) patch.peerLastDeliveredId = nextPeerLastReadId
             if (eventTs && state.eventsCursor !== eventTs) patch.eventsCursor = eventTs
             return Object.keys(patch).length > 0 ? patch : state
           })

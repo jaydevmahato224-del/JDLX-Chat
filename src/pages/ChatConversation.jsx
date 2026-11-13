@@ -1062,6 +1062,7 @@ export default function ChatConversation() {
     peerTyping,
     peerOnline,
     peerLastReadId,
+    peerLastDeliveredId,
     blockUser,
     unblockUser,
     reportUser,
@@ -1460,6 +1461,110 @@ export default function ChatConversation() {
 
     return () => clearInterval(interval)
   }, [activeRoomId, currentDisappearingMode, messages, peerLastReadId, chatUser?.id, chatUser?.username, deleteMessage])
+
+  // ── SEND & RECEIVE STATUS TICKS (Single tick = Sent, Double tick = Delivered, Highlighted = Seen) ──
+  const renderMessageStatusTicks = useCallback((targetMsg, { isFloatingDark = false, isAlbum = false, albumMessages = [], onRetry = null } = {}) => {
+    if (!targetMsg) return null
+
+    // 1. Sending / Uploading in-progress state
+    const isPending = isAlbum 
+      ? albumMessages.some((pm) => pm._pending || pm._uploading) 
+      : Boolean(targetMsg._pending || targetMsg._uploading)
+    if (isPending) {
+      return (
+        <span className="inline-flex items-center ml-0.5 select-none pointer-events-none" title="Sending…">
+          <span className={`w-3 h-3 border-2 border-t-transparent rounded-full animate-spin ${
+            isFloatingDark ? 'border-white/80' : 'border-current opacity-70'
+          }`} />
+        </span>
+      )
+    }
+
+    // 2. Failed state
+    const isFailed = isAlbum 
+      ? albumMessages.some((pm) => pm._failed || pm._uploadFailed) 
+      : Boolean(targetMsg._failed || targetMsg._uploadFailed)
+    if (isFailed) {
+      if (onRetry) {
+        return (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRetry(targetMsg); }}
+            className="inline-flex items-center gap-1 text-[9px] font-black text-rose-900 bg-rose-200/90 px-1.5 py-0.5 rounded-md hover:scale-105 active:scale-95 transition cursor-pointer shadow-xs ml-0.5"
+            title="Send failed. Tap to retry."
+          >
+            <span>Retry</span>
+            <RotateCcw className="w-2.5 h-2.5" />
+          </button>
+        )
+      }
+      return (
+        <span className="inline-flex items-center ml-0.5 select-none" title="Failed to send">
+          <span className="text-rose-500 font-black text-xs">!</span>
+        </span>
+      )
+    }
+
+    // 3. Sent / Delivered / Seen states
+    const msgId = Number(targetMsg.id) || 0
+    const isRead = Boolean(
+      (peerLastReadId && peerLastReadId >= msgId) || 
+      targetMsg.is_read
+    )
+    const isDelivered = Boolean(
+      isRead || 
+      (peerLastDeliveredId && peerLastDeliveredId >= msgId) || 
+      targetMsg.is_delivered || 
+      peerOnline
+    )
+
+    // A) Seen / Read -> Double tick highlighted (Vivid Sky Blue / Cyan)
+    if (isRead) {
+      return (
+        <span 
+          title="Seen" 
+          className="inline-flex items-center ml-0.5 select-none"
+        >
+          {isFloatingDark ? (
+            <CheckCheck className="w-3.5 h-3.5 text-sky-400 drop-shadow-sm stroke-[2.4]" />
+          ) : (
+            <CheckCheck className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 stroke-[2.4] drop-shadow-xs" />
+          )}
+        </span>
+      )
+    }
+
+    // B) Delivered / Received by user's device -> Double tick (Neutral Gray / White)
+    if (isDelivered) {
+      return (
+        <span 
+          title="Delivered" 
+          className="inline-flex items-center ml-0.5 select-none"
+        >
+          {isFloatingDark ? (
+            <CheckCheck className="w-3.5 h-3.5 text-white/70 stroke-[2]" />
+          ) : (
+            <CheckCheck className="w-3.5 h-3.5 text-[#09090b]/55 dark:text-white/60 stroke-[2]" />
+          )}
+        </span>
+      )
+    }
+
+    // C) Sent to server only (Recipient offline / waiting for delivery) -> Single tick
+    return (
+      <span 
+        title="Sent" 
+        className="inline-flex items-center ml-0.5 select-none"
+      >
+        {isFloatingDark ? (
+          <Check className="w-3.5 h-3.5 text-white/70 stroke-[2]" />
+        ) : (
+          <Check className="w-3.5 h-3.5 text-[#09090b]/50 dark:text-white/50 stroke-[2]" />
+        )}
+      </span>
+    )
+  }, [peerLastReadId, peerLastDeliveredId, peerOnline])
+
   // ── MUTE NOTIFICATIONS STATE & DURATION ENGINE (Item 2.6) ──
   const [showMuteModal, setShowMuteModal] = useState(false)
   const [selectedMuteDuration, setSelectedMuteDuration] = useState('8h')
@@ -5349,11 +5454,13 @@ export default function ChatConversation() {
                               <div className="flex items-center gap-1.5 min-w-0 flex-1">
                                 {/* Sent by me delivery / read receipts */}
                                 {isSentByMe && (
-                                  <span className="shrink-0 inline-flex items-center" title={conv.last_message_is_read ? 'Read' : 'Delivered'}>
+                                  <span className="shrink-0 inline-flex items-center" title={conv.last_message_is_read ? 'Seen' : (conv.peer_online ? 'Delivered' : 'Sent')}>
                                     {conv.last_message_is_read ? (
-                                      <CheckCheck className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-                                    ) : (
+                                      <CheckCheck className="w-3.5 h-3.5 text-sky-500 stroke-[2.3]" />
+                                    ) : conv.peer_online ? (
                                       <CheckCheck className={`w-3.5 h-3.5 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`} />
+                                    ) : (
+                                      <Check className={`w-3.5 h-3.5 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`} />
                                     )}
                                   </span>
                                 )}
@@ -6407,23 +6514,7 @@ export default function ChatConversation() {
                                             <Star className="w-2.5 h-2.5 fill-current" />
                                           </span>
                                         )}
-                                        {isUser && (
-                                          <span className="inline-flex items-center ml-0.5">
-                                            {album.some((pm) => pm._pending || pm._uploading) ? (
-                                              <span className="w-3 h-3 border-2 border-white/80 border-t-transparent rounded-full animate-spin" />
-                                            ) : album.some((pm) => pm._failed || pm._uploadFailed) ? (
-                                              <span className="text-rose-400 font-bold">!</span>
-                                            ) : (
-                                              <span title={(peerLastReadId >= lastMsg.id || lastMsg.is_read) ? 'Read' : 'Delivered'} className="inline-flex items-center">
-                                                {(peerLastReadId >= lastMsg.id || lastMsg.is_read) ? (
-                                                  <CheckCheck className="w-3.5 h-3.5 text-[#facc15]" />
-                                                ) : (
-                                                  <Check className="w-3.5 h-3.5 text-white/80" />
-                                                )}
-                                              </span>
-                                            )}
-                                          </span>
-                                        )}
+                                        {isUser && renderMessageStatusTicks(lastMsg, { isFloatingDark: true, isAlbum: true, albumMessages: album })}
                                       </div>
                                     )}
                                   </div>
@@ -6490,21 +6581,7 @@ export default function ChatConversation() {
                                       >
                                         <MoreVertical className="w-3 h-3" />
                                       </button>
-                                      {isUser && (
-                                        <span className="inline-flex items-center ml-0.5">
-                                          {album.some((pm) => pm._pending || pm._uploading) ? (
-                                            <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin opacity-70" title="Sending…" />
-                                          ) : (
-                                            <span title={(peerLastReadId >= lastMsg.id || lastMsg.is_read) ? 'Read' : 'Delivered to server'} className="inline-flex items-center">
-                                              {(peerLastReadId >= lastMsg.id || lastMsg.is_read) ? (
-                                                <CheckCheck className="w-3.5 h-3.5 text-[#09090b]" />
-                                              ) : (
-                                                <Check className="w-3.5 h-3.5 text-[#09090b]/60" />
-                                              )}
-                                            </span>
-                                          )}
-                                        </span>
-                                      )}
+                                      {isUser && renderMessageStatusTicks(lastMsg, { isFloatingDark: false, isAlbum: true, albumMessages: album })}
                                     </div>
                                   )}
                                 </div>
@@ -6585,23 +6662,7 @@ export default function ChatConversation() {
                                               <Star className="w-2.5 h-2.5 fill-current" />
                                             </span>
                                           )}
-                                          {isUser && (
-                                            <span className="inline-flex items-center ml-0.5">
-                                              {m._pending || m._uploading ? (
-                                                <span className="w-3 h-3 border-2 border-white/80 border-t-transparent rounded-full animate-spin" />
-                                              ) : m._failed || m._uploadFailed ? (
-                                                <span className="text-rose-400 font-bold">!</span>
-                                              ) : (
-                                                <span title={(peerLastReadId >= m.id || m.is_read) ? 'Read' : 'Delivered'} className="inline-flex items-center">
-                                                  {(peerLastReadId >= m.id || m.is_read) ? (
-                                                    <CheckCheck className="w-3.5 h-3.5 text-[#facc15]" />
-                                                  ) : (
-                                                    <Check className="w-3.5 h-3.5 text-white/80" />
-                                                  )}
-                                                </span>
-                                              )}
-                                            </span>
-                                          )}
+                                          {isUser && renderMessageStatusTicks(m, { isFloatingDark: true })}
                                         </div>
                                       )}
                                     </div>
@@ -6702,31 +6763,7 @@ export default function ChatConversation() {
                                         >
                                           <MoreVertical className="w-3 h-3" />
                                         </button>
-                                        {isUser && (
-                                          <span className="inline-flex items-center ml-0.5">
-                                            {m._pending ? (
-                                              <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin opacity-70" title="Sending…" />
-                                            ) : m._failed ? (
-                                              <button
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); handleRetryMessage(m); }}
-                                                className="inline-flex items-center gap-1 text-[9px] font-black text-rose-900 bg-rose-200/90 px-1.5 py-0.5 rounded-md hover:scale-105 active:scale-95 transition cursor-pointer shadow-xs"
-                                                title="Send failed. Tap to retry."
-                                              >
-                                                <span>Retry</span>
-                                                <RotateCcw className="w-2.5 h-2.5" />
-                                              </button>
-                                            ) : (
-                                              <span title={(peerLastReadId >= m.id || m.is_read) ? 'Read' : 'Delivered to server'} className="inline-flex items-center">
-                                                {(peerLastReadId >= m.id || m.is_read) ? (
-                                                  <CheckCheck className="w-3.5 h-3.5 text-[#09090b]" />
-                                                ) : (
-                                                  <Check className="w-3.5 h-3.5 text-[#09090b]/60" />
-                                                )}
-                                              </span>
-                                            )}
-                                          </span>
-                                        )}
+                                        {isUser && renderMessageStatusTicks(m, { isFloatingDark: false, onRetry: handleRetryMessage })}
                                       </div>
                                     </div>
                                   )}
