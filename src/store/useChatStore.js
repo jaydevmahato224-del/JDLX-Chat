@@ -463,9 +463,38 @@ if (INITIAL_CONVERSATIONS.length > 0) {
   }
   if (INITIAL_ACTIVE_CONV) {
     INITIAL_ACTIVE_ROOM_ID = INITIAL_ACTIVE_CONV.id
-    INITIAL_MESSAGES = getCachedMessages(INITIAL_USER_ID, INITIAL_ACTIVE_ROOM_ID)
+    const savedDelivered = getStoredDeliveredId(INITIAL_USER_ID, INITIAL_ACTIVE_ROOM_ID)
+    INITIAL_MESSAGES = getCachedMessages(INITIAL_USER_ID, INITIAL_ACTIVE_ROOM_ID).map((m) => {
+      if (savedDelivered > 0 && m && m.id <= savedDelivered) {
+        return { ...m, is_delivered: 1 }
+      }
+      return m
+    })
   }
 }
+
+function getStoredDeliveredId(uid, roomId) {
+  if (!uid || !roomId) return 0
+  try {
+    return Number(localStorage.getItem(`jdlx_chat_delivered_${uid}_${roomId}`)) || 0
+  } catch {
+    return 0
+  }
+}
+
+function setStoredDeliveredId(uid, roomId, deliveredId) {
+  if (!uid || !roomId || !deliveredId) return
+  try {
+    const current = getStoredDeliveredId(uid, roomId)
+    if (deliveredId > current) {
+      localStorage.setItem(`jdlx_chat_delivered_${uid}_${roomId}`, String(deliveredId))
+    }
+  } catch {
+    /* storage blocked */
+  }
+}
+
+const INITIAL_DELIVERED_ID = getStoredDeliveredId(INITIAL_USER_ID, INITIAL_ACTIVE_ROOM_ID)
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -746,7 +775,7 @@ export const useChatStore = create((set, get) => ({
   // presence is authoritative over the slower server heartbeat window.
   _peerPresenceKnown: false,
   peerLastReadId: 0,
-  peerLastDeliveredId: 0,
+  peerLastDeliveredId: INITIAL_DELIVERED_ID || 0,
   realtimeAbort: null,
   realtimeRoomId: null,
   eventsCursor: 0,
@@ -1538,7 +1567,14 @@ export const useChatStore = create((set, get) => ({
     if (!conv) return
     get().stopRealtime()
     const uid = get().chatUser?.id
-    const cachedMsgs = uid ? getCachedMessages(uid, conv.id) : []
+    const savedDelivered = getStoredDeliveredId(uid, conv.id)
+    const rawCachedMsgs = uid ? getCachedMessages(uid, conv.id) : []
+    const cachedMsgs = rawCachedMsgs.map((m) => {
+      if (savedDelivered > 0 && m && m.id <= savedDelivered) {
+        return { ...m, is_delivered: 1 }
+      }
+      return m
+    })
     if (uid) setCachedActiveRoomId(uid, conv.id)
     set((state) => ({
       activeConversation: { ...conv, unread_count: 0 },
@@ -1550,7 +1586,7 @@ export const useChatStore = create((set, get) => ({
       peerOnline: false,
       _peerPresenceKnown: false,
       peerLastReadId: 0,
-      peerLastDeliveredId: 0,
+      peerLastDeliveredId: savedDelivered,
       // Clear any previous room's pre-derived key
       derivedRoomKey: null,
       conversations: state.conversations.map((c) =>
@@ -1696,29 +1732,52 @@ export const useChatStore = create((set, get) => ({
         if (uid && merged.length > 0) {
           setCachedMessages(uid, targetRoomId, merged)
         }
+        const savedDelivered = uid ? getStoredDeliveredId(uid, targetRoomId) : 0
+        if (savedDelivered > (get().peerLastDeliveredId || 0)) {
+          set({ peerLastDeliveredId: savedDelivered })
+        }
         // Send instant delivery and read receipts over Supabase WebSocket to turn peer tick into double tick.
         // Skip while the tab/window is hidden: a desktop tab in the background is not
         // actually being read, so the sender should not get blue ticks yet.
         const isPageVisible = typeof document === 'undefined' || document.visibilityState === 'visible'
         const peerMsgs = merged.filter((m) => m && !sameId(m.user_id, uid))
+        const peerId = getConversationPeerId(activeConv, uid)
         if (peerMsgs.length > 0) {
           const maxPeerMsgId = Math.max(...peerMsgs.map((m) => m.id))
           const roomChannel = get().supabaseRoomChannel
-          if (roomChannel && maxPeerMsgId > 0) {
+          if (maxPeerMsgId > 0) {
             // Recipient client received the messages: send delivery_receipt
-            roomChannel.send({
-              type: 'broadcast',
-              event: 'delivery_receipt',
-              payload: { user_id: uid, last_delivered_id: maxPeerMsgId }
-            }).catch(() => {})
+            if (roomChannel) {
+              roomChannel.send({
+                type: 'broadcast',
+                event: 'delivery_receipt',
+                payload: { user_id: uid, last_delivered_id: maxPeerMsgId, room_id: targetRoomId }
+              }).catch(() => {})
+            }
+            if (peerId) {
+              sendSupabaseUserAlert(peerId, 'delivery_receipt', {
+                room_id: targetRoomId,
+                user_id: uid,
+                last_delivered_id: maxPeerMsgId
+              })
+            }
 
             // If page is currently visible, also send read_receipt
             if (isPageVisible) {
-              roomChannel.send({
-                type: 'broadcast',
-                event: 'read_receipt',
-                payload: { user_id: uid, last_read_id: maxPeerMsgId }
-              }).catch(() => {})
+              if (roomChannel) {
+                roomChannel.send({
+                  type: 'broadcast',
+                  event: 'read_receipt',
+                  payload: { user_id: uid, last_read_id: maxPeerMsgId, room_id: targetRoomId }
+                }).catch(() => {})
+              }
+              if (peerId) {
+                sendSupabaseUserAlert(peerId, 'read_receipt', {
+                  room_id: targetRoomId,
+                  user_id: uid,
+                  last_read_id: maxPeerMsgId
+                })
+              }
             }
           }
           if (isPageVisible && token && maxPeerMsgId > 0) {
@@ -1811,7 +1870,7 @@ export const useChatStore = create((set, get) => ({
       peerOnline: false,
       _peerPresenceKnown: false,
       peerLastReadId: 0,
-      peerLastDeliveredId: 0,
+      peerLastDeliveredId: getStoredDeliveredId(get().chatUser?.id, roomId),
       eventsCursor: 0
     })
 
@@ -1861,8 +1920,17 @@ export const useChatStore = create((set, get) => ({
               channel.send({
                 type: 'broadcast',
                 event: 'delivery_receipt',
-                payload: { user_id: currentMyId, last_delivered_id: maxPeerMsgId }
+                payload: { user_id: currentMyId, last_delivered_id: maxPeerMsgId, room_id: roomId }
               }).catch(() => {})
+
+              const peerId = getConversationPeerId(get().activeConversation, currentMyId)
+              if (peerId) {
+                sendSupabaseUserAlert(peerId, 'delivery_receipt', {
+                  room_id: roomId,
+                  user_id: currentMyId,
+                  last_delivered_id: maxPeerMsgId
+                })
+              }
             }
 
             // Read receipts are derived from fetched messages, never from a spoofable broadcast id
@@ -1871,19 +1939,31 @@ export const useChatStore = create((set, get) => ({
               channel.send({
                 type: 'broadcast',
                 event: 'read_receipt',
-                payload: { user_id: currentMyId, last_read_id: maxPeerMsgId }
+                payload: { user_id: currentMyId, last_read_id: maxPeerMsgId, room_id: roomId }
               }).catch(() => {})
+
+              const peerId = getConversationPeerId(get().activeConversation, currentMyId)
+              if (peerId) {
+                sendSupabaseUserAlert(peerId, 'read_receipt', {
+                  room_id: roomId,
+                  user_id: currentMyId,
+                  last_read_id: maxPeerMsgId
+                })
+              }
             }
             get().fetchConversations().catch(() => {})
             get().fetchUnreadCount().catch(() => {})
           })
           .on('broadcast', { event: 'delivery_receipt' }, ({ payload }) => {
             const currentMyId = get().chatUser?.id
-            const peerId = getConversationPeerId(get().activeConversation, currentMyId)
             const lastDeliveredId = Number(payload?.last_delivered_id)
-            if (!payload || !peerId) return
-            if (!sameId(payload.user_id, peerId)) return
-            if (!Number.isFinite(lastDeliveredId) || lastDeliveredId <= 0) return
+            if (!payload || !Number.isFinite(lastDeliveredId) || lastDeliveredId <= 0) return
+            if (currentMyId && sameId(payload.user_id, currentMyId)) return
+
+            if (currentMyId && roomId) {
+              setStoredDeliveredId(currentMyId, roomId, lastDeliveredId)
+            }
+
             set((state) => ({
               peerLastDeliveredId: Math.max(state.peerLastDeliveredId || 0, lastDeliveredId),
               messages: state.messages.map((m) =>
@@ -1905,17 +1985,20 @@ export const useChatStore = create((set, get) => ({
           })
           .on('broadcast', { event: 'read_receipt' }, ({ payload }) => {
             const currentMyId = get().chatUser?.id
-            const peerId = getConversationPeerId(get().activeConversation, currentMyId)
             const lastReadId = Number(payload?.last_read_id)
-            if (!payload || !peerId) return
-            if (!sameId(payload.user_id, peerId)) return
-            if (!Number.isFinite(lastReadId) || lastReadId <= 0) return
-            // Never trust an id beyond messages this device actually has.
+            if (!payload || !Number.isFinite(lastReadId) || lastReadId <= 0) return
+            if (currentMyId && sameId(payload.user_id, currentMyId)) return
+
             const knownIds = get().messages
               .map((m) => Number(m.id))
               .filter((id) => Number.isFinite(id) && id > 0)
             const maxKnownId = knownIds.length ? Math.max(...knownIds) : 0
             if (!maxKnownId || lastReadId > maxKnownId) return
+
+            if (currentMyId && roomId) {
+              setStoredDeliveredId(currentMyId, roomId, lastReadId)
+            }
+
             set((state) => ({
               peerLastReadId: Math.max(state.peerLastReadId || 0, lastReadId),
               peerLastDeliveredId: Math.max(state.peerLastDeliveredId || 0, lastReadId),
@@ -1995,6 +2078,29 @@ export const useChatStore = create((set, get) => ({
               realtimePrivateFailures = 0
               if (typeof document === 'undefined' || document.visibilityState === 'visible') {
                 channel.track({ user_id: myId, online_at: Date.now() }).catch(() => {})
+              }
+              // Immediately announce delivery receipt for any existing peer messages
+              const peerMsgs = get().messages.filter(
+                (m) => m && m.id > 0 && !sameId(m.user_id, myId)
+              )
+              const maxPeerMsgId = peerMsgs.length
+                ? Math.max(...peerMsgs.map((m) => Number(m.id) || 0))
+                : 0
+              if (maxPeerMsgId > 0) {
+                channel.send({
+                  type: 'broadcast',
+                  event: 'delivery_receipt',
+                  payload: { user_id: myId, last_delivered_id: maxPeerMsgId, room_id: roomId }
+                }).catch(() => {})
+
+                const isPageVisible = typeof document === 'undefined' || document.visibilityState === 'visible'
+                if (isPageVisible) {
+                  channel.send({
+                    type: 'broadcast',
+                    event: 'read_receipt',
+                    payload: { user_id: myId, last_read_id: maxPeerMsgId, room_id: roomId }
+                  }).catch(() => {})
+                }
               }
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
               // A 'CLOSED' status is also reported for our own teardown (room
@@ -2823,9 +2929,64 @@ export const useChatStore = create((set, get) => ({
           .on('broadcast', { event: 'incoming_chat' }, (ev) => {
             get().fetchConversations()
             get().fetchUnreadCount()
-            if (ev.payload?.room_id && String(get().activeRoomId) === String(ev.payload.room_id)) {
-              get().fetchRoomMessages(ev.payload.room_id)
+            const senderId = ev.payload?.sender_id
+            const msgId = Number(ev.payload?.message_id) || 0
+            const roomId = ev.payload?.room_id
+            if (senderId && msgId > 0) {
+              sendSupabaseUserAlert(senderId, 'delivery_receipt', {
+                room_id: roomId,
+                user_id: myId,
+                last_delivered_id: msgId
+              })
             }
+            if (roomId && String(get().activeRoomId) === String(roomId)) {
+              get().fetchRoomMessages(roomId)
+            }
+          })
+          .on('broadcast', { event: 'delivery_receipt' }, ({ payload }) => {
+            const lastDeliveredId = Number(payload?.last_delivered_id)
+            const roomId = payload?.room_id
+            if (!payload || !lastDeliveredId) return
+            const uid = get().chatUser?.id
+            if (uid && roomId) {
+              setStoredDeliveredId(uid, roomId, lastDeliveredId)
+            }
+            set((state) => {
+              const patch = {}
+              if (sameId(state.activeRoomId, roomId)) {
+                patch.peerLastDeliveredId = Math.max(state.peerLastDeliveredId || 0, lastDeliveredId)
+                patch.messages = state.messages.map((m) =>
+                  m.id <= lastDeliveredId ? { ...m, is_delivered: 1 } : m
+                )
+              }
+              patch.conversations = state.conversations.map((c) =>
+                sameId(c.id, roomId) ? { ...c, last_msg_is_delivered: 1 } : c
+              )
+              return patch
+            })
+          })
+          .on('broadcast', { event: 'read_receipt' }, ({ payload }) => {
+            const lastReadId = Number(payload?.last_read_id)
+            const roomId = payload?.room_id
+            if (!payload || !lastReadId) return
+            const uid = get().chatUser?.id
+            if (uid && roomId) {
+              setStoredDeliveredId(uid, roomId, lastReadId)
+            }
+            set((state) => {
+              const patch = {}
+              if (sameId(state.activeRoomId, roomId)) {
+                patch.peerLastReadId = Math.max(state.peerLastReadId || 0, lastReadId)
+                patch.peerLastDeliveredId = Math.max(state.peerLastDeliveredId || 0, lastReadId)
+                patch.messages = state.messages.map((m) =>
+                  m.id <= lastReadId ? { ...m, is_read: 1, is_delivered: 1 } : m
+                )
+              }
+              patch.conversations = state.conversations.map((c) =>
+                sameId(c.id, roomId) ? { ...c, last_msg_is_read: 1, last_message_is_read: true } : c
+              )
+              return patch
+            })
           })
           .on('broadcast', { event: 'friend_event' }, () => {
             get().fetchFriendsAndRequests()

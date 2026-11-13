@@ -1511,11 +1511,16 @@ export default function ChatConversation() {
       (peerLastReadId && peerLastReadId >= msgId) || 
       targetMsg.is_read
     )
+    const isPeerOnline = Boolean(
+      peerOnline || 
+      activeConversation?.contact_online || 
+      activeConversation?.other_user?.is_online
+    )
     const isDelivered = Boolean(
       isRead || 
       (peerLastDeliveredId && peerLastDeliveredId >= msgId) || 
       targetMsg.is_delivered || 
-      peerOnline
+      isPeerOnline
     )
 
     // A) Seen / Read -> Double tick highlighted (Vivid Sky Blue / Cyan)
@@ -1563,7 +1568,7 @@ export default function ChatConversation() {
         )}
       </span>
     )
-  }, [peerLastReadId, peerLastDeliveredId, peerOnline])
+  }, [peerLastReadId, peerLastDeliveredId, peerOnline, activeConversation?.contact_online, activeConversation?.other_user?.is_online])
 
   // ── MUTE NOTIFICATIONS STATE & DURATION ENGINE (Item 2.6) ──
   const [showMuteModal, setShowMuteModal] = useState(false)
@@ -5454,10 +5459,10 @@ export default function ChatConversation() {
                               <div className="flex items-center gap-1.5 min-w-0 flex-1">
                                 {/* Sent by me delivery / read receipts */}
                                 {isSentByMe && (
-                                  <span className="shrink-0 inline-flex items-center" title={conv.last_message_is_read ? 'Seen' : (conv.peer_online ? 'Delivered' : 'Sent')}>
+                                  <span className="shrink-0 inline-flex items-center" title={conv.last_message_is_read ? 'Seen' : ((conv.peer_online || conv.contact_online || conv.last_msg_is_delivered) ? 'Delivered' : 'Sent')}>
                                     {conv.last_message_is_read ? (
                                       <CheckCheck className="w-3.5 h-3.5 text-sky-500 stroke-[2.3]" />
-                                    ) : conv.peer_online ? (
+                                    ) : (conv.peer_online || conv.contact_online || conv.last_msg_is_delivered) ? (
                                       <CheckCheck className={`w-3.5 h-3.5 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`} />
                                     ) : (
                                       <Check className={`w-3.5 h-3.5 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`} />
