@@ -7056,7 +7056,7 @@ export default function ChatConversation() {
                     }}
                     disabled={uploadingImage || isRecording || Boolean(voiceReview) || isBlockedConversation}
                     title={isBlockedConversation ? 'Unblock this user to attach files' : 'Attach photo, video, document or audio'}
-                    className={`p-2.5 sm:p-3 rounded-2xl sm:rounded-3xl border active:scale-95 transition-all shrink-0 cursor-pointer ${
+                    className={`p-2.5 sm:p-3 rounded-full border active:scale-95 transition-all shrink-0 cursor-pointer ${
                       showAttachmentTray
                         ? 'bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] border-[#facc15] shadow-md shadow-yellow-500/20'
                         : isLight
@@ -7075,7 +7075,7 @@ export default function ChatConversation() {
 
                   {/* Center Composer: Voice Review Mode OR Live Recording Bar OR Luxury Input Capsule */}
                   {voiceReview ? (
-                    <div className={`flex-1 flex items-center justify-between px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl sm:rounded-3xl border transition-all animate-in fade-in duration-200 ${
+                    <div className={`flex-1 flex items-center justify-between px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-[24px] sm:rounded-full border transition-all animate-in fade-in duration-200 ${
                       isLight ? 'bg-amber-50/90 border-amber-300 shadow-xs' : 'bg-[#18181b] border-yellow-500/30 shadow-inner'
                     }`}>
                       {/* Hidden audio element for preview */}
@@ -7154,7 +7154,7 @@ export default function ChatConversation() {
                       </button>
                     </div>
                   ) : isRecording ? (
-                    <div className={`flex-1 flex items-center justify-between px-3 sm:px-4 py-2.5 rounded-2xl sm:rounded-3xl border transition-all animate-in fade-in duration-200 ${
+                    <div className={`flex-1 flex items-center justify-between px-3 sm:px-4 py-2.5 rounded-[24px] sm:rounded-full border transition-all animate-in fade-in duration-200 ${
                       isLight ? 'bg-rose-50/95 border-rose-200 shadow-xs' : 'bg-rose-500/10 border-rose-500/30 shadow-inner'
                     }`}>
                       {/* Left: Pulsing Red Recording Indicator & Duration */}
@@ -7215,10 +7215,10 @@ export default function ChatConversation() {
                       </div>
                     </div>
                   ) : (
-                    <div className={`flex-1 flex items-end rounded-2xl sm:rounded-3xl border transition-colors px-2 py-1 sm:px-3 sm:py-1.5 ${
+                    <div className={`flex-1 flex items-end rounded-[24px] sm:rounded-full border transition-all pl-2 pr-3.5 sm:pl-2.5 sm:pr-4 py-1 sm:py-1.5 ${
                       isLight
-                        ? 'bg-slate-50/90 border-slate-200 hover:border-slate-300 focus-within:border-amber-500 focus-within:ring-2 focus-within:ring-amber-500/15 focus-within:bg-white shadow-xs'
-                        : 'bg-[#18181b]/90 border-white/10 hover:border-white/15 focus-within:border-[#facc15]/70 focus-within:ring-2 focus-within:ring-[#facc15]/15 focus-within:bg-[#1c1c20] shadow-xs'
+                        ? 'bg-slate-50/90 border-slate-200 hover:border-slate-300 focus-within:border-amber-500/40 focus-within:ring-1 focus-within:ring-amber-500/15 focus-within:bg-white shadow-xs'
+                        : 'bg-[#18181b]/90 border-white/10 hover:border-white/15 focus-within:border-yellow-500/35 focus-within:ring-1 focus-within:ring-yellow-500/15 focus-within:bg-[#1a1a1d] shadow-xs'
                     }`}>
                       {/* Emoji Smile Button */}
                       <button
@@ -7228,7 +7228,7 @@ export default function ChatConversation() {
                           setShowAttachmentTray(false)
                         }}
                         title="Choose emoji"
-                        className={`p-2 rounded-xl transition-all cursor-pointer shrink-0 self-end mb-0.5 active:scale-95 ${
+                        className={`p-2 rounded-full transition-all cursor-pointer shrink-0 self-end mb-0.5 active:scale-95 ${
                           showEmojiPicker
                             ? 'text-[#facc15] bg-yellow-500/15'
                             : isLight
@@ -7276,7 +7276,7 @@ export default function ChatConversation() {
                           }
                         }}
                         disabled={isBlockedConversation}
-                        className={`flex-1 min-w-0 px-2 py-1.5 sm:py-2 bg-transparent border-0 focus:outline-none focus:ring-0 text-base sm:text-sm font-medium resize-none overflow-y-auto max-h-[120px] leading-relaxed ${
+                        className={`flex-1 min-w-0 px-2 py-1.5 sm:py-2 bg-transparent border-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 no-focus-outline text-base sm:text-sm font-medium resize-none overflow-y-auto max-h-[120px] leading-relaxed ${
                           isLight ? 'text-slate-900 placeholder:text-slate-400' : 'text-white placeholder:text-zinc-400'
                         }`}
                       />
@@ -7290,8 +7290,8 @@ export default function ChatConversation() {
                             updateDraft(activeRoomId, '')
                             adjustTextareaHeight()
                           }}
-                          className={`p-1.5 rounded-lg opacity-40 hover:opacity-100 transition-opacity shrink-0 self-end mb-1 ${
-                            isLight ? 'text-slate-500' : 'text-zinc-400'
+                          className={`p-1.5 rounded-full opacity-40 hover:opacity-100 transition-opacity shrink-0 self-end mb-1 cursor-pointer ${
+                            isLight ? 'text-slate-500 hover:bg-slate-200/50' : 'text-zinc-400 hover:bg-white/10'
                           }`}
                           title="Clear text"
                         >
@@ -9272,11 +9272,11 @@ export default function ChatConversation() {
 
               {/* Caption Input Capsule + Send Button */}
               <div className="w-full max-w-2xl mx-auto px-4 flex items-center gap-2.5">
-                <div className="flex-1 flex items-center gap-2 bg-[#18181b]/95 border border-white/15 rounded-3xl px-3.5 py-2 shadow-2xl focus-within:border-[#facc15]/80 focus-within:ring-2 focus-within:ring-yellow-500/20 transition-all">
+                <div className="flex-1 flex items-center gap-2 bg-[#18181b]/95 border border-white/15 rounded-full px-3.5 py-2 shadow-2xl focus-within:border-yellow-500/40 focus-within:ring-1 focus-within:ring-yellow-500/15 transition-all">
                   <button
                     type="button"
                     onClick={() => setImageSendModal((prev) => ({ ...prev, showEmoji: !prev.showEmoji }))}
-                    className={`p-1 rounded-xl transition shrink-0 cursor-pointer ${
+                    className={`p-1 rounded-full transition shrink-0 cursor-pointer ${
                       imageSendModal.showEmoji ? 'text-[#facc15]' : 'text-zinc-400 hover:text-white'
                     }`}
                     title="Add emojis"
@@ -9296,7 +9296,7 @@ export default function ChatConversation() {
                     }}
                     autoFocus
                     maxLength={1000}
-                    className="flex-1 bg-transparent text-sm text-white placeholder:text-zinc-500 focus:outline-none"
+                    className="flex-1 bg-transparent text-sm text-white placeholder:text-zinc-500 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 no-focus-outline"
                   />
                   {activeItem.caption && (
                     <button

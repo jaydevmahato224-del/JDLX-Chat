@@ -1795,9 +1795,17 @@ html, body {
 /* Visible keyboard focus ring. Tailwind's `outline-none` on clickable rows
    removed the only focus indicator, leaving keyboard users lost. Mouse clicks
    are unaffected because this only targets :focus-visible. */
-:where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus-visible {
+:where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus-visible:not(.no-focus-outline) {
   outline: 2px solid #facc15;
   outline-offset: 2px;
+}
+
+.no-focus-outline,
+.no-focus-outline:focus,
+.no-focus-outline:focus-visible {
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
 }
 
 /* Keep long conversations cheap to paint: rows outside the viewport skip
