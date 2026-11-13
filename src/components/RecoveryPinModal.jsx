@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ShieldCheck, KeyRound, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
 
 const SETUP_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000
@@ -25,7 +26,7 @@ export default function RecoveryPinModal() {
     saveRecoveryPin,
     unlockWithRecoveryPin,
     startFreshIdentity
-  } = useChatStore()
+  } = useChatStore(useShallow((state) => state))
 
   const uid = chatUser?.id
   const isLight = resolvedChatTheme === 'light'
@@ -35,7 +36,36 @@ export default function RecoveryPinModal() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmFresh, setConfirmFresh] = useState(false)
+  const [lockUntil, setLockUntil] = useState(0)
+  const [nowTick, setNowTick] = useState(() => Date.now())
   const handledNonceRef = useRef(0)
+
+  // A short client-side cooldown after repeated wrong PINs. It does not replace
+  // the real KDF work, but it stops a scripted UI from spraying guesses and
+  // makes casual retry attacks impractical. Persisted per-account so a reload
+  // does not clear it.
+  useEffect(() => {
+    if (!uid) return
+    try {
+      const until = Number(localStorage.getItem(`jdlx_chat_recovery_lock_${uid}`) || 0)
+      if (Number.isFinite(until) && until > Date.now()) setLockUntil(until)
+    } catch {
+      /* ignore */
+    }
+  }, [uid])
+
+  useEffect(() => {
+    if (!lockUntil || lockUntil <= Date.now()) return undefined
+    const id = setInterval(() => {
+      const now = Date.now()
+      setNowTick(now)
+      if (now >= lockUntil) setLockUntil(0)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [lockUntil])
+
+  const lockSecondsLeft = lockUntil > nowTick ? Math.max(0, Math.ceil((lockUntil - nowTick) / 1000)) : 0
+  const isLocked = lockSecondsLeft > 0
 
   useEffect(() => {
     if (!uid || !chatToken) {
@@ -126,13 +156,46 @@ export default function RecoveryPinModal() {
       setError('Enter your recovery PIN.')
       return
     }
+    if (isLocked) {
+      setError(`Too many attempts. Try again in ${lockSecondsLeft}s.`)
+      return
+    }
     setBusy(true)
     const result = await unlockWithRecoveryPin(cleanPin)
     setBusy(false)
     if (!result?.success) {
+      const attemptsKey = `jdlx_chat_recovery_attempts_${uid}`
+      const lockKey = `jdlx_chat_recovery_lock_${uid}`
+      let attempts = 1
+      try {
+        attempts = Number(localStorage.getItem(attemptsKey) || 0) + 1
+        localStorage.setItem(attemptsKey, String(attempts))
+      } catch {
+        /* ignore */
+      }
+      const delayMs = attempts >= 5 ? 300000 : attempts >= 4 ? 120000 : attempts >= 3 ? 30000 : 0
+      if (delayMs) {
+        const until = Date.now() + delayMs
+        try {
+          localStorage.setItem(lockKey, String(until))
+        } catch {
+          /* ignore */
+        }
+        setLockUntil(until)
+        setNowTick(Date.now())
+        setError(`Incorrect PIN. Too many attempts — try again in ${Math.ceil(delayMs / 1000)}s.`)
+        return
+      }
       setError(result?.error || 'Could not unlock your chats.')
       return
     }
+    try {
+      localStorage.removeItem(`jdlx_chat_recovery_attempts_${uid}`)
+      localStorage.removeItem(`jdlx_chat_recovery_lock_${uid}`)
+    } catch {
+      /* ignore */
+    }
+    setLockUntil(0)
     resetInputs()
     setMode(null)
     toast.success('Chats unlocked on this device.')
@@ -240,17 +303,20 @@ export default function RecoveryPinModal() {
               placeholder="Recovery PIN"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
-              disabled={busy}
+              disabled={busy || isLocked}
               autoFocus
             />
             {error && <p className="text-xs font-semibold text-red-500">{error}</p>}
+            {isLocked && !error && (
+              <p className="text-xs font-semibold text-red-500">Too many attempts. Try again in {lockSecondsLeft}s.</p>
+            )}
             <button
               type="submit"
-              disabled={busy}
+              disabled={busy || isLocked}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-yellow-500 px-3 py-2.5 text-sm font-bold text-black disabled:opacity-60"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              Unlock chats
+              {isLocked ? `Try again in ${lockSecondsLeft}s` : 'Unlock chats'}
             </button>
 
             {confirmFresh ? (

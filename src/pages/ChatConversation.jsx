@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { useShallow } from 'zustand/react/shallow'
 import { 
   ArrowLeft, 
   Send, 
@@ -10,6 +11,7 @@ import {
   Bell, 
   X, 
   AlertCircle, 
+  RefreshCw,
   MoreVertical, 
   RotateCcw, 
   LogOut, 
@@ -66,15 +68,46 @@ import {
   Sliders,
   Database,
   Upload,
-  Plus
+  Plus,
+  QrCode,
+  Timer,
+  Zap,
+  Tag,
+  StickyNote
 } from 'lucide-react'
+import QRCode from 'qrcode'
 import { useChatStore } from '../store/useChatStore'
 import { apiFetch, refreshChatAccessToken } from '../utils/apiFetch'
 import { compressImageForChat, compressAvatarImage } from '../utils/imageCompression'
 import { resolveMediaUrl, API_BASE_URL, isCapacitorNative } from '../config'
 import { sameId } from '../utils/ids'
 import { triggerHaptic } from '../utils/haptics'
+import { copyTextToClipboard } from '../utils/clipboard'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 import toast from 'react-hot-toast'
+
+// Intl formatters are expensive to construct. Reuse one per format instead of
+// building a new formatter for every timestamp on every render.
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: true
+})
+const shortDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  day: 'numeric'
+})
+const dividerDateFormatter = new Intl.DateTimeFormat(undefined, {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric'
+})
+const dividerDateWithYearFormatter = new Intl.DateTimeFormat(undefined, {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric'
+})
 
 // ── CUSTOM VOICE NOTE WAVEFORM PLAYER (WhatsApp / Telegram Caliber) ──
 function VoiceNotePlayer({ audioUrl, isUser, isLight, seedId }) {
@@ -351,7 +384,7 @@ function SheetGrabHandle({ onDismiss }) {
     <div
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      className="w-full pt-2.5 pb-2 flex items-center justify-center cursor-grab active:cursor-grabbing sm:hidden shrink-0 touch-none select-none"
+      className="w-full pt-2.5 pb-2 flex items-center justify-center cursor-grab active:cursor-grabbing sm:hidden [@media(hover:hover)]:hidden shrink-0 touch-none select-none"
       title="Swipe down to dismiss"
     >
       <div className="w-12 h-1.5 rounded-full bg-zinc-500/40 dark:bg-zinc-400/40" />
@@ -889,6 +922,64 @@ function formatSafetyFingerprint(roomId, publicKey) {
   return `${p1}  ${p2}  ${p3}  ${p4}`
 }
 
+// ── ATTACHMENT TYPE HELPERS ──────────────────────────────────────────────────
+// media_url is a URL, so `?token=…` / `#fragment` used to defeat the old
+// endsWith('.mp4') checks: a video with a signed query string rendered as a
+// photo, a PDF with ?sig= counted as media, and office documents landed in the
+// photo grid as broken thumbnails. message_type is authoritative; the
+// extension is only a fallback for legacy rows that predate it.
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'avi', 'mkv', '3gp', 'ogv'])
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'flac'])
+const DOCUMENT_EXTENSIONS = new Set([
+  'pdf', 'doc', 'docx', 'txt', 'rtf', 'zip', 'rar', '7z',
+  'xls', 'xlsx', 'csv', 'ppt', 'pptx', 'odt', 'ods', 'odp'
+])
+
+function getMediaPath(value) {
+  if (!value || typeof value !== 'string') return ''
+  return value.split('#')[0].split('?')[0]
+}
+
+function getMediaExtension(value) {
+  const path = getMediaPath(value)
+  if (/^(blob|data):/i.test(path)) return ''
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  return dot > -1 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
+function getMediaFileName(value, fallback = '') {
+  const path = getMediaPath(value)
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  return name || fallback
+}
+
+function getChatAttachmentKind(m) {
+  if (!m || !m.media_url) return 'text'
+  const declared = String(m.message_type || '').toLowerCase()
+  if (declared === 'deleted') return 'deleted'
+  if (declared === 'audio' || declared === 'voice') return 'audio'
+  if (declared === 'video') return 'video'
+  if (declared === 'document' || declared === 'file') return 'document'
+  if (declared === 'image' || declared === 'photo' || declared === 'sticker') return 'image'
+  const ext = getMediaExtension(m.media_url)
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video'
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio'
+  if (DOCUMENT_EXTENSIONS.has(ext)) return 'document'
+  return 'image'
+}
+
+// ── DISAPPEARING MESSAGES DURATIONS & AUTO-DELETE CONFIGURATION ──
+const DISAPPEARING_OPTIONS = [
+  { id: 'seen', label: 'Auto-delete after seen', subtitle: 'Messages vanish a few seconds after being read (View Once)', icon: 'zap' },
+  { id: '5m', label: '5 Minutes', subtitle: 'Disappears 5 minutes after sending (great for testing)', icon: 'timer', ms: 5 * 60 * 1000 },
+  { id: '1h', label: '1 Hour', subtitle: 'Disappears 1 hour after sending', icon: 'timer', ms: 60 * 60 * 1000 },
+  { id: '24h', label: '24 Hours', subtitle: 'Disappears 24 hours after sending', icon: 'timer', ms: 24 * 60 * 60 * 1000 },
+  { id: '7d', label: '7 Days', subtitle: 'Disappears 7 days after sending', icon: 'timer', ms: 7 * 24 * 60 * 60 * 1000 },
+  { id: '90d', label: '90 Days', subtitle: 'Disappears 90 days after sending', icon: 'timer', ms: 90 * 24 * 60 * 60 * 1000 },
+  { id: 'off', label: 'Off', subtitle: 'Messages do not automatically disappear', icon: 'off' },
+]
+
 export default function ChatConversation() {
   const navigate = useNavigate()
   const { 
@@ -900,6 +991,7 @@ export default function ChatConversation() {
     officialChatName,
     conversationsLoaded,
     conversationsLoading,
+    conversationsError,
     setChatTheme,
     toggleChatTheme,
     conversations,
@@ -924,6 +1016,7 @@ export default function ChatConversation() {
     searchUsers,
     messages, 
     messagesLoading,
+    messagesError,
     messagesHasMore,
     loadingOlderMessages,
     loadOlderMessages,
@@ -957,7 +1050,10 @@ export default function ChatConversation() {
     addOptimisticMediaMessage,
     updateMessageUploadState,
     removeOptimisticMessage
-  } = useChatStore()
+  // Shallow selector: the 3s realtime long-poll writes to the store even when
+  // nothing changed, and subscribing without an equality check re-rendered
+  // this whole screen (and every bubble) on each cycle.
+  } = useChatStore(useShallow((state) => state))
 
   const isLight = resolvedChatTheme === 'light'
   const chatBrandName = officialChatName || 'JDLX Chat'
@@ -988,6 +1084,249 @@ export default function ChatConversation() {
   const [showProfileDrawer, setShowProfileDrawer] = useState(false)
   const [showNotificationsDrawer, setShowNotificationsDrawer] = useState(false)
   const [showContactInfoModal, setShowContactInfoModal] = useState(false)
+  const [contactMediaTab, setContactMediaTab] = useState('media') // 'media' | 'docs' | 'links'
+  const [isSearchingChat, setIsSearchingChat] = useState(false)
+  const [chatSearchQuery, setChatSearchQuery] = useState('')
+  const [chatSearchMatchIndex, setChatSearchMatchIndex] = useState(0)
+  const chatSearchInputRef = useRef(null)
+
+  // ── CUSTOM CONTACT NICKNAME & PRIVATE NOTES (Item 2.5) ──
+  const [contactCustomData, setContactCustomData] = useState(() => {
+    try {
+      const saved = localStorage.getItem('jdlx_chat_contact_custom_data')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const [isEditingNickname, setIsEditingNickname] = useState(false)
+  const [nicknameDraft, setNicknameDraft] = useState('')
+  const [isEditingNote, setIsEditingNote] = useState(false)
+  const [noteDraft, setNoteDraft] = useState('')
+
+  const getContactKey = useCallback((conv) => {
+    if (!conv) return ''
+    return String(conv.other_user?.id || conv.other_user_id || conv.contact_id || conv.id || '')
+  }, [])
+
+  const getContactCustomNickname = useCallback((conv) => {
+    if (!conv) return ''
+    const key = getContactKey(conv)
+    return contactCustomData[key]?.nickname?.trim() || ''
+  }, [contactCustomData, getContactKey])
+
+  const getContactDisplayName = useCallback((conv) => {
+    if (!conv) return ''
+    const custom = getContactCustomNickname(conv)
+    if (custom) return custom
+    return conv.contact_name || conv.name || (conv.contact_username ? `@${conv.contact_username}` : 'Contact')
+  }, [getContactCustomNickname])
+
+  const getContactPrivateNote = useCallback((conv) => {
+    if (!conv) return ''
+    const key = getContactKey(conv)
+    return contactCustomData[key]?.note || ''
+  }, [contactCustomData, getContactKey])
+
+  const saveContactCustomData = useCallback((conv, updates) => {
+    const key = getContactKey(conv)
+    if (!key) return
+    setContactCustomData((prev) => {
+      const current = prev[key] || {}
+      const nextForContact = { ...current, ...updates, updatedAt: new Date().toISOString() }
+      if (!nextForContact.nickname?.trim() && !nextForContact.note?.trim()) {
+        const next = { ...prev }
+        delete next[key]
+        try { localStorage.setItem('jdlx_chat_contact_custom_data', JSON.stringify(next)) } catch {}
+        return next
+      }
+      const next = { ...prev, [key]: nextForContact }
+      try { localStorage.setItem('jdlx_chat_contact_custom_data', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }, [getContactKey])
+
+  useEffect(() => {
+    if (showContactInfoModal && activeConversation) {
+      setNicknameDraft(getContactCustomNickname(activeConversation))
+      setNoteDraft(getContactPrivateNote(activeConversation))
+      setIsEditingNickname(false)
+      setIsEditingNote(false)
+    }
+  }, [showContactInfoModal, activeConversation, getContactCustomNickname, getContactPrivateNote])
+
+  // Interactive E2EE Safety Verification
+  const [showSafetyVerificationModal, setShowSafetyVerificationModal] = useState(false)
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
+  const [safetyNumberBlocks, setSafetyNumberBlocks] = useState([])
+  const [verifiedContacts, setVerifiedContacts] = useState(() => {
+    try {
+      const saved = localStorage.getItem('jdlx_chat_verified_contacts')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+
+  const toggleContactVerification = useCallback((contactId) => {
+    if (!contactId) return
+    triggerHaptic('medium')
+    setVerifiedContacts((prev) => {
+      const isVerified = Boolean(prev[contactId])
+      const next = { ...prev }
+      if (isVerified) {
+        delete next[contactId]
+        toast('Verification unpinned', { icon: 'ℹ️' })
+      } else {
+        next[contactId] = new Date().toISOString()
+        toast.success('Security code verified & saved! 🛡️')
+      }
+      try {
+        localStorage.setItem('jdlx_chat_verified_contacts', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }, [])
+
+  // Generate scannable QR Code & 60-digit deterministic safety numbers (Signal/WhatsApp Standard)
+  useEffect(() => {
+    if (!showSafetyVerificationModal || !activeConversation) return
+    let cancelled = false
+
+    const verifyPayload = JSON.stringify({
+      app: 'JDLX Chat',
+      room: activeConversation.id,
+      p1: (chatUser?.public_key || chatUser?.id || '').slice(0, 32),
+      p2: (activeConversation.contact_public_key || '').slice(0, 32),
+    })
+    QRCode.toDataURL(verifyPayload, {
+      width: 320,
+      margin: 1.5,
+      color: { dark: '#000000', light: '#ffffff' },
+    })
+      .then((url) => { if (!cancelled) setQrCodeDataUrl(url) })
+      .catch((err) => console.error('Failed to generate verification QR code:', err))
+
+    async function computeSafetyDigits() {
+      try {
+        const k1 = String(chatUser?.public_key || chatUser?.id || 'key-a')
+        const k2 = String(activeConversation.contact_public_key || activeConversation.id || 'key-b')
+        const sorted = [k1, k2].sort().join('::') + `::${activeConversation.id || 'room'}`
+        const encoder = new TextEncoder()
+        const data = encoder.encode(sorted)
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+        const hashArray = Array.from(new Uint8Array(hashBuffer))
+        const blocks = []
+        for (let i = 0; i < 12; i++) {
+          const b1 = hashArray[(i * 2) % hashArray.length]
+          const b2 = hashArray[(i * 2 + 1) % hashArray.length]
+          const num = (((b1 << 8) | b2) % 90000) + 10000
+          blocks.push(String(num))
+        }
+        if (!cancelled) setSafetyNumberBlocks(blocks)
+      } catch {
+        const seed = `${activeConversation.id}-${activeConversation.contact_public_key || 'key'}`
+        let h = 0
+        for (let i = 0; i < seed.length; i++) h = (h << 5) - h + seed.charCodeAt(i)
+        const pos = Math.abs(h)
+        const blocks = Array.from({ length: 12 }, (_, idx) => String(((pos * (idx + 3)) % 90000) + 10000))
+        if (!cancelled) setSafetyNumberBlocks(blocks)
+      }
+    }
+
+    computeSafetyDigits()
+    return () => { cancelled = true }
+  }, [showSafetyVerificationModal, activeConversation, chatUser?.public_key, chatUser?.id])
+
+  // Disappearing Messages & Auto-Delete After Seen State
+  const [showDisappearingModal, setShowDisappearingModal] = useState(false)
+  const [disappearingSettings, setDisappearingSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('jdlx_chat_disappearing_settings')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+
+  const currentDisappearingMode = activeRoomId ? (disappearingSettings[activeRoomId] || 'off') : 'off'
+
+  const setRoomDisappearingMode = useCallback((roomId, mode) => {
+    if (!roomId) return
+    triggerHaptic('medium')
+    setDisappearingSettings((prev) => {
+      const next = { ...prev, [roomId]: mode }
+      try {
+        localStorage.setItem('jdlx_chat_disappearing_settings', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+    const opt = DISAPPEARING_OPTIONS.find((o) => o.id === mode)
+    toast.success(`Disappearing messages: ${opt ? opt.label : mode}`, {
+      icon: mode === 'seen' ? '⚡' : mode === 'off' ? '⭕' : '⏱️',
+    })
+  }, [])
+
+  // Auto-Delete & "Auto-Delete After Seen" Engine
+  const seenTimestampRef = useRef({})
+
+  useEffect(() => {
+    if (!activeRoomId || !currentDisappearingMode || currentDisappearingMode === 'off') return
+
+    const interval = setInterval(() => {
+      const now = Date.now()
+      const currentMessages = messages || []
+
+      // 1. "Auto-delete after seen" (View Once) mode
+      if (currentDisappearingMode === 'seen') {
+        currentMessages.forEach((m) => {
+          if (!m || m.deleted || m.message_type === 'deleted') return
+          const isUser = sameId(m.user_id, chatUser?.id) || (m.sender_type === 'user' && m.username === chatUser?.username)
+
+          if (isUser) {
+            // Sender side: seen when peer read it (peerLastReadId >= m.id or m.is_read)
+            const isSeen = Boolean(peerLastReadId >= m.id || m.is_read)
+            if (isSeen) {
+              if (!seenTimestampRef.current[m.id]) {
+                seenTimestampRef.current[m.id] = now
+              } else if (now - seenTimestampRef.current[m.id] >= 4000) {
+                // 4 seconds grace period after peer reads it -> auto-delete for everyone
+                deleteMessage(m.id, 'everyone')
+                delete seenTimestampRef.current[m.id]
+              }
+            }
+          } else {
+            // Receiver side: seen when viewing chat
+            if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+              if (!seenTimestampRef.current[m.id]) {
+                seenTimestampRef.current[m.id] = now
+              } else if (now - seenTimestampRef.current[m.id] >= 5000) {
+                // 5 seconds grace period after reading -> auto-delete
+                deleteMessage(m.id, 'me')
+                delete seenTimestampRef.current[m.id]
+              }
+            }
+          }
+        })
+        return
+      }
+
+      // 2. Time-based expiration (5m, 1h, 24h, 7d, 90d)
+      const opt = DISAPPEARING_OPTIONS.find((o) => o.id === currentDisappearingMode)
+      if (!opt || !opt.ms) return
+
+      currentMessages.forEach((m) => {
+        if (!m || m.deleted || m.message_type === 'deleted' || !m.created_at) return
+        const createdMs = new Date(m.created_at).getTime()
+        if (createdMs && now - createdMs >= opt.ms) {
+          const isUser = sameId(m.user_id, chatUser?.id) || (m.sender_type === 'user' && m.username === chatUser?.username)
+          deleteMessage(m.id, isUser ? 'everyone' : 'me')
+        }
+      })
+    }, 1500)
+
+    return () => clearInterval(interval)
+  }, [activeRoomId, currentDisappearingMode, messages, peerLastReadId, chatUser?.id, chatUser?.username, deleteMessage])
   const [mutedRooms, setMutedRooms] = useState(() => {
     try {
       const saved = localStorage.getItem('jdlx_chat_muted_rooms')
@@ -1195,10 +1534,11 @@ export default function ChatConversation() {
     }
   }
 
-  const handleCopyPublicKey = () => {
+  const handleCopyPublicKey = async () => {
     const key = chatUser?.public_key || 'No ECDH public key found'
-    navigator.clipboard?.writeText?.(key)
-    toast.success('Device fingerprint copied to clipboard!')
+    const copied = await copyTextToClipboard(key)
+    if (copied) toast.success('Device fingerprint copied to clipboard!')
+    else toast.error('Could not copy to clipboard')
   }
 
   const handleClearCache = async () => {
@@ -1264,47 +1604,40 @@ export default function ChatConversation() {
     }, 200)
   }, [])
 
-  const handleNextPreview = useCallback(() => {
-    setPreviewImages((list) => {
-      if (!list || list.length <= 1) return list
-      setPreviewIndex((idx) => {
-        const next = (idx + 1) % list.length
-        setSelectedPreviewImage(list[next]?.url)
-        return next
-      })
-      setPreviewZoom(1)
-      setPreviewRotation(0)
-      setPanOffset({ x: 0, y: 0 })
-      return list
-    })
+  // Mirror the lightbox state in refs so navigation never has to call a setter
+  // from inside another setter's updater (React may run those twice in
+  // StrictMode and the nested update can point at a stale list/index).
+  const previewImagesRef = useRef(previewImages)
+  const previewIndexRef = useRef(previewIndex)
+  useEffect(() => { previewImagesRef.current = previewImages }, [previewImages])
+  useEffect(() => { previewIndexRef.current = previewIndex }, [previewIndex])
+
+  const showPreviewAt = useCallback((nextIndex) => {
+    const list = previewImagesRef.current
+    if (!list || nextIndex < 0 || nextIndex >= list.length) return
+    previewIndexRef.current = nextIndex
+    setPreviewIndex(nextIndex)
+    setSelectedPreviewImage(list[nextIndex]?.url)
+    setPreviewZoom(1)
+    setPreviewRotation(0)
+    setPanOffset({ x: 0, y: 0 })
   }, [])
+
+  const handleNextPreview = useCallback(() => {
+    const list = previewImagesRef.current
+    if (!list || list.length <= 1) return
+    showPreviewAt((previewIndexRef.current + 1) % list.length)
+  }, [showPreviewAt])
 
   const handlePrevPreview = useCallback(() => {
-    setPreviewImages((list) => {
-      if (!list || list.length <= 1) return list
-      setPreviewIndex((idx) => {
-        const prev = (idx - 1 + list.length) % list.length
-        setSelectedPreviewImage(list[prev]?.url)
-        return prev
-      })
-      setPreviewZoom(1)
-      setPreviewRotation(0)
-      setPanOffset({ x: 0, y: 0 })
-      return list
-    })
-  }, [])
+    const list = previewImagesRef.current
+    if (!list || list.length <= 1) return
+    showPreviewAt((previewIndexRef.current - 1 + list.length) % list.length)
+  }, [showPreviewAt])
 
   const handleJumpToPreview = useCallback((idx) => {
-    setPreviewImages((list) => {
-      if (!list || idx < 0 || idx >= list.length) return list
-      setPreviewIndex(idx)
-      setSelectedPreviewImage(list[idx]?.url)
-      setPreviewZoom(1)
-      setPreviewRotation(0)
-      setPanOffset({ x: 0, y: 0 })
-      return list
-    })
-  }, [])
+    showPreviewAt(idx)
+  }, [showPreviewAt])
 
   const handleDownloadMedia = useCallback(async (url, customName) => {
     if (!url) return
@@ -1346,15 +1679,13 @@ export default function ChatConversation() {
         toast.success('Image copied to clipboard!')
         return
       }
-      await navigator.clipboard.writeText(url)
-      toast.success('Image link copied!')
+      const copied = await copyTextToClipboard(url)
+      if (copied) toast.success('Image link copied!')
+      else toast.error('Could not copy image')
     } catch (err) {
-      try {
-        await navigator.clipboard.writeText(url)
-        toast.success('Image link copied!')
-      } catch {
-        toast.error('Could not copy image')
-      }
+      const copied = await copyTextToClipboard(url)
+      if (copied) toast.success('Image link copied!')
+      else toast.error('Could not copy image')
     }
   }, [])
 
@@ -1461,19 +1792,46 @@ export default function ChatConversation() {
   // Thumb filter tabs for sidebar ('all' | 'unread' | 'pinned')
   const [conversationTabFilter, setConversationTabFilter] = useState('all')
 
-  const handleSwipeClear = useCallback(async (conv) => {
+  // In-app confirmation sheet. window.confirm() blocks the JS thread, looks
+  // broken in the installed PWA/TWA, and ignores dark mode + safe areas.
+  const [confirmDialog, setConfirmDialog] = useState(null)
+  const requestConfirm = useCallback((options) => setConfirmDialog(options), [])
+
+  // Every modal gets initial focus, a Tab trap, Escape-to-close and focus
+  // restoration. The hook only closes the top-most sheet, so Cancel in the
+  // confirm sheet does not also dismiss the profile underneath it.
+  const contactDialogRef = useDialogA11y(showContactInfoModal, () => setShowContactInfoModal(false))
+  const confirmDialogRef = useDialogA11y(Boolean(confirmDialog), () => setConfirmDialog(null))
+  const addFriendDialogRef = useDialogA11y(showAddFriendModal, () => {
+    setShowAddFriendModal(false)
+    setGlobalSearchQuery('')
+    setGlobalSearchResults([])
+  })
+  const profileDialogRef = useDialogA11y(showProfileDrawer, () => setShowProfileDrawer(false))
+  const notificationsDialogRef = useDialogA11y(showNotificationsDrawer, () => setShowNotificationsDrawer(false))
+  const reportDialogRef = useDialogA11y(showReportModal, () => setShowReportModal(false))
+  const imageSendDialogRef = useDialogA11y(Boolean(imageSendModal?.items?.length), () => handleCloseImageSendModal())
+  const lightboxDialogRef = useDialogA11y(Boolean(selectedPreviewImage), () => handleClosePreview())
+  const safetyDialogRef = useDialogA11y(showSafetyVerificationModal, () => setShowSafetyVerificationModal(false))
+  const disappearingDialogRef = useDialogA11y(showDisappearingModal, () => setShowDisappearingModal(false))
+  const pwaDialogRef = useDialogA11y(showPwaInstallModal, () => setShowPwaInstallModal(false))
+
+  const handleSwipeClear = useCallback((conv) => {
     if (!conv) return
     triggerHaptic('medium')
-    const displayName = conv.contact_name || (conv.contact_username ? `@${conv.contact_username}` : 'this user')
-    if (window.confirm(`Clear all messages in chat with ${displayName}?`)) {
-      const ok = await clearChatHistory(conv.id)
-      if (ok) {
-        toast.success('Conversation cleared')
-      } else {
-        toast.error('Could not clear conversation')
-      }
-    }
-  }, [clearChatHistory])
+    const displayName = getContactDisplayName(conv) || (conv.contact_username ? `@${conv.contact_username}` : 'this user')
+    requestConfirm({
+      title: 'Clear conversation?',
+      message: `Clear all messages in chat with ${displayName}? This cannot be undone.`,
+      confirmLabel: 'Clear',
+      destructive: true,
+      onConfirm: async () => {
+        const ok = await clearChatHistory(conv.id)
+        if (ok) toast.success('Conversation cleared')
+        else toast.error('Could not clear conversation')
+      },
+    })
+  }, [clearChatHistory, getContactDisplayName, requestConfirm])
 
   // Pull-to-Refresh on Conversation List (Mobile touch)
   const [pullY, setPullY] = useState(0)
@@ -2491,6 +2849,15 @@ export default function ChatConversation() {
       const xhr = new XMLHttpRequest()
       activeUploadsRef.current[tempId] = xhr
 
+      // Hard deadline per upload attempt. Without it a stalled connection left
+      // the bubble "uploading" forever (the only way out was manual cancel).
+      // Size-aware budget assumes at least ~64 KB/s on a working mobile link.
+      const uploadTimeoutMs = Math.min(
+        10 * 60 * 1000,
+        Math.max(60 * 1000, Math.ceil((file.size || 0) / (64 * 1024)) * 1000 + 30000)
+      )
+      xhr.timeout = uploadTimeoutMs
+
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
           const percent = Math.min(98, Math.round((event.loaded / event.total) * 100))
@@ -2569,6 +2936,11 @@ export default function ChatConversation() {
       xhr.onerror = () => {
         delete activeUploadsRef.current[tempId]
         markFailed('Network error during upload. Tap Retry on photo.')
+      }
+
+      xhr.ontimeout = () => {
+        delete activeUploadsRef.current[tempId]
+        markFailed('Upload timed out. Tap Retry to send again.')
       }
 
       xhr.onabort = () => {
@@ -3528,16 +3900,17 @@ export default function ChatConversation() {
   }
 
   // 13. Copy Invite Link & Share
-  const handleCopyInviteLink = () => {
+  const handleCopyInviteLink = async () => {
     const link = inviteInfo?.invite_url || `${window.location.origin}/chat/login?ref=@${chatUser?.username || 'member'}`
-    navigator.clipboard.writeText(link)
-    toast.success('Invite link copied to clipboard!', { icon: '📋' })
+    const copied = await copyTextToClipboard(link)
+    if (copied) toast.success('Invite link copied to clipboard!', { icon: '📋' })
+    else toast.error('Could not copy invite link')
   }
 
   const handleShareInviteWhatsapp = () => {
     const inviteUrl = inviteInfo?.invite_url || `${window.location.origin}/chat/login?ref=@${chatUser?.username || 'member'}`
     const text = inviteInfo?.share_text || `Hey! Chat with me on ${chatBrandName} – secure, encrypted messaging. Connect with @${chatUser?.username || 'member'} here: ${inviteUrl}`
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank')
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer')
   }
 
   const handleEnablePush = async () => {
@@ -3576,7 +3949,7 @@ export default function ChatConversation() {
     const d = parseUtcDate(isoString)
     if (!d) return ''
     try {
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
+      return timeFormatter.format(d)
     } catch {
       return ''
     }
@@ -3590,14 +3963,14 @@ export default function ChatConversation() {
       const now = new Date()
       const isToday = d.toDateString() === now.toDateString()
       if (isToday) {
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
+        return timeFormatter.format(d)
       }
       const yesterday = new Date(now)
       yesterday.setDate(now.getDate() - 1)
       if (d.toDateString() === yesterday.toDateString()) {
         return 'Yesterday'
       }
-      return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+      return shortDateFormatter.format(d)
     } catch {
       return ''
     }
@@ -3618,12 +3991,7 @@ export default function ChatConversation() {
         return 'Yesterday'
       }
       const isSameYear = d.getFullYear() === now.getFullYear()
-      return d.toLocaleDateString([], {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        ...(isSameYear ? {} : { year: 'numeric' })
-      })
+      return (isSameYear ? dividerDateFormatter : dividerDateWithYearFormatter).format(d)
     } catch {
       return 'Today'
     }
@@ -3634,8 +4002,11 @@ export default function ChatConversation() {
     let list = (conversations || []).filter((c) => {
       if (!conversationFilter.trim()) return true
       const q = conversationFilter.toLowerCase()
+      const contactKey = getContactKey(c)
+      const customNick = contactCustomData[contactKey]?.nickname
       return (
         (c.contact_name && c.contact_name.toLowerCase().includes(q)) ||
+        (customNick && customNick.toLowerCase().includes(q)) ||
         (c.contact_username && c.contact_username.toLowerCase().includes(q)) ||
         (c.last_message && c.last_message.toLowerCase().includes(q))
       )
@@ -3654,7 +4025,7 @@ export default function ChatConversation() {
       if (!aPinned && bPinned) return 1
       return 0
     })
-  }, [conversations, conversationFilter, conversationTabFilter, pinnedRoomIds])
+  }, [conversations, conversationFilter, conversationTabFilter, pinnedRoomIds, contactCustomData, getContactKey])
 
   const unreadConversationsCount = useMemo(() => {
     return (conversations || []).filter((c) => (c.unread_count || 0) > 0).length
@@ -3669,19 +4040,7 @@ export default function ChatConversation() {
     if (!m || !m.media_url) return false
     if (m.deleted || m.message_type === 'deleted') return false
     if (m._locked || m.message === '🔒 [Encrypted Message]') return false
-    if (m.message_type === 'audio' || m.message_type === 'video' || m.message_type === 'document') return false
-    const lowerUrl = String(m.media_url).toLowerCase()
-    if (
-      lowerUrl.endsWith('.pdf') ||
-      lowerUrl.endsWith('.mp3') ||
-      lowerUrl.endsWith('.wav') ||
-      lowerUrl.endsWith('.ogg') ||
-      lowerUrl.endsWith('.mp4') ||
-      lowerUrl.endsWith('.webm')
-    ) {
-      return false
-    }
-    return true
+    return getChatAttachmentKind(m) === 'image'
   }, [])
 
   // Cluster consecutive image messages from same sender within 60s into Album / Collage clusters
@@ -3760,6 +4119,162 @@ export default function ChatConversation() {
         index: idx,
       }))
   }, [messages, isChatImageMessage])
+
+  // All media items (Photos, Videos, Audio) in conversation for Contact Profile Hub
+  const allChatMedia = useMemo(() => {
+    return (messages || [])
+      .filter((m) => {
+        if (!m || !m.media_url || m.deleted || m.message_type === 'deleted' || m._locked) return false
+        const kind = getChatAttachmentKind(m)
+        return kind !== 'document' && kind !== 'deleted'
+      })
+      .map((m, idx) => {
+        const kind = getChatAttachmentKind(m)
+        return {
+          url: resolveMediaUrl(m.media_url),
+          id: m.id,
+          type: kind === 'video' ? 'video' : kind === 'audio' ? 'audio' : 'image',
+          caption: (m.message && !['Sent an image attachment', 'Sent an audio attachment', 'Sent a video attachment', 'Sent a document attachment'].includes(m.message)) ? m.message : '',
+          sender_name: m.sender_name,
+          created_at: m.created_at,
+          index: idx,
+        }
+      })
+  }, [messages])
+
+  // All documents / PDFs in conversation
+  const allChatDocs = useMemo(() => {
+    return (messages || [])
+      .filter((m) => {
+        if (!m || !m.media_url || m.deleted || m.message_type === 'deleted' || m._locked) return false
+        return getChatAttachmentKind(m) === 'document'
+      })
+      .map((m) => {
+        const fileName = getMediaFileName(m.media_url, 'Document.pdf').replace(/^chat_[a-f0-9]+_/, '')
+        return {
+          url: resolveMediaUrl(m.media_url),
+          id: m.id,
+          name: fileName,
+          created_at: m.created_at,
+          sender_name: m.sender_name,
+        }
+      })
+  }, [messages])
+
+  // All web links shared in conversation
+  const allChatLinks = useMemo(() => {
+    const urlRegex = /(https?:\/\/[^\s]+)/gi
+    const links = []
+    ;(messages || []).forEach((m) => {
+      if (!m || !m.message || m.deleted || m.message_type === 'deleted' || m._locked) return
+      const matches = m.message.match(urlRegex)
+      if (matches && matches.length > 0) {
+        matches.forEach((rawUrl, uIdx) => {
+          let domain = ''
+          try {
+            domain = new URL(rawUrl).hostname.replace(/^www\./, '')
+          } catch {
+            domain = rawUrl.slice(0, 25)
+          }
+          links.push({
+            id: `${m.id}-${uIdx}`,
+            url: rawUrl,
+            domain,
+            messageSnippet: m.message.replace(rawUrl, '').trim(),
+            sender_name: m.sender_name,
+            created_at: m.created_at,
+          })
+        })
+      }
+    })
+    return links
+  }, [messages])
+
+  // ── IN-CHAT MESSAGE SEARCH SYSTEM (WhatsApp / Telegram Standard) ──
+  const chatSearchMatches = useMemo(() => {
+    const q = chatSearchQuery.trim().toLowerCase()
+    if (!q) return []
+    return (messages || [])
+      .filter((m) => {
+        if (!m || m.deleted || m.message_type === 'deleted' || m._locked) return false
+        const text = (m.message || '').toLowerCase()
+        return text.includes(q)
+      })
+      .map((m) => m.id)
+  }, [messages, chatSearchQuery])
+
+  const scrollToMessageId = useCallback((msgId) => {
+    if (!msgId) return
+    const el = document.getElementById(`chat-msg-${msgId}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [])
+
+  const handleNextSearchMatch = useCallback(() => {
+    if (chatSearchMatches.length === 0) return
+    triggerHaptic('light')
+    setChatSearchMatchIndex((prev) => {
+      const next = (prev + 1) % chatSearchMatches.length
+      scrollToMessageId(chatSearchMatches[next])
+      return next
+    })
+  }, [chatSearchMatches, scrollToMessageId])
+
+  const handlePrevSearchMatch = useCallback(() => {
+    if (chatSearchMatches.length === 0) return
+    triggerHaptic('light')
+    setChatSearchMatchIndex((prev) => {
+      const next = (prev - 1 + chatSearchMatches.length) % chatSearchMatches.length
+      scrollToMessageId(chatSearchMatches[next])
+      return next
+    })
+  }, [chatSearchMatches, scrollToMessageId])
+
+  useEffect(() => {
+    if (isSearchingChat && chatSearchMatches.length > 0) {
+      scrollToMessageId(chatSearchMatches[0])
+    }
+  }, [chatSearchQuery]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setIsSearchingChat(false)
+    setChatSearchQuery('')
+    setChatSearchMatchIndex(0)
+  }, [activeRoomId])
+
+  const renderHighlightedMessageText = useCallback((text, query, isCurrentMatch) => {
+    if (!query || !query.trim() || !text) {
+      return <span className="whitespace-pre-line">{text}</span>
+    }
+    const trimmed = query.trim()
+    try {
+      const regex = new RegExp(`(${trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+      const parts = text.split(regex)
+      return (
+        <span className="whitespace-pre-line">
+          {parts.map((part, idx) =>
+            regex.test(part) ? (
+              <mark
+                key={idx}
+                className={`rounded px-1 py-0.2 font-bold transition-all ${
+                  isCurrentMatch
+                    ? 'bg-amber-400 text-black shadow-xs ring-2 ring-amber-400'
+                    : 'bg-yellow-300/40 text-inherit dark:bg-yellow-400/35'
+                }`}
+              >
+                {part}
+              </mark>
+            ) : (
+              part
+            )
+          )}
+        </span>
+      )
+    } catch {
+      return <span className="whitespace-pre-line">{text}</span>
+    }
+  }, [])
 
   return (
     <div
@@ -3978,9 +4493,9 @@ export default function ChatConversation() {
                       const wasBlocked = Boolean(activeConversation.blocked_by_me)
                       setShowMenu(false)
                       triggerHaptic('medium')
-                      toast.success(wasBlocked ? 'User unblocked' : 'User blocked')
                       const ok = wasBlocked ? await unblockUser(targetId) : await blockUser(targetId)
-                      if (!ok) toast.error(wasBlocked ? 'Could not unblock user' : 'Could not block user')
+                      if (ok) toast.success(wasBlocked ? 'User unblocked' : 'User blocked')
+                      else toast.error(wasBlocked ? 'Could not unblock user' : 'Could not block user')
                     }}
                     className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors ${
                       isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
@@ -4023,13 +4538,19 @@ export default function ChatConversation() {
 
                 {/* Clear Active Chat */}
                 <button
-                  onClick={async () => {
-                    if (window.confirm('Clear messages in this conversation?')) {
-                      const cleared = await clearChatHistory()
-                      setShowMenu(false)
-                      if (cleared) toast.success('Conversation cleared')
-                      else toast.error('Could not clear this conversation')
-                    }
+                  onClick={() => {
+                    requestConfirm({
+                      title: 'Clear conversation?',
+                      message: 'Clear all messages in this conversation? This cannot be undone.',
+                      confirmLabel: 'Clear',
+                      destructive: true,
+                      onConfirm: async () => {
+                        const cleared = await clearChatHistory()
+                        setShowMenu(false)
+                        if (cleared) toast.success('Conversation cleared')
+                        else toast.error('Could not clear this conversation')
+                      },
+                    })
                   }}
                   className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors ${
                     isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
@@ -4274,7 +4795,7 @@ export default function ChatConversation() {
                         isLight ? 'bg-amber-100 text-amber-700' : 'bg-yellow-500/20 text-[#facc15]'
                       }`}>
                         {fr.profile_image ? (
-                          <img src={resolveMediaUrl(fr.profile_image)} alt="" className="w-full h-full object-cover" />
+                          <img src={resolveMediaUrl(fr.profile_image)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                         ) : (
                           (fr.name?.[0] || fr.username?.[0] || 'U').toUpperCase()
                         )}
@@ -4346,9 +4867,13 @@ export default function ChatConversation() {
             ) : filteredConversations.length === 0 ? (
               <div className="p-8 text-center space-y-3">
                 <div className={`w-12 h-12 mx-auto rounded-2xl flex items-center justify-center ${
-                  isLight ? 'bg-slate-100 text-slate-400' : 'bg-[#18181b] text-zinc-400'
+                  conversationsError && conversations.length === 0
+                    ? 'bg-rose-500/10 text-rose-400'
+                    : isLight ? 'bg-slate-100 text-slate-400' : 'bg-[#18181b] text-zinc-400'
                 }`}>
-                  {conversationTabFilter === 'pinned' ? (
+                  {conversationsError ? (
+                    <AlertCircle className="w-6 h-6" />
+                  ) : conversationTabFilter === 'pinned' ? (
                     <Pin className="w-6 h-6 text-amber-500" />
                   ) : (
                     <MessageCircle className="w-6 h-6" />
@@ -4356,25 +4881,46 @@ export default function ChatConversation() {
                 </div>
                 <div className="space-y-1">
                   <h4 className={`text-sm font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>
-                    {conversationFilter.trim() && conversations.length > 0
-                      ? `No chats matching "${conversationFilter.trim()}"`
-                      : conversationTabFilter === 'unread'
-                        ? 'No unread messages'
-                        : conversationTabFilter === 'pinned'
-                          ? 'No pinned chats'
-                          : 'No chats yet'}
+                    {conversationsError && conversations.length === 0
+                      ? 'Could not load chats'
+                      : conversationFilter.trim() && conversations.length > 0
+                        ? `No chats matching "${conversationFilter.trim()}"`
+                        : conversationTabFilter === 'unread'
+                          ? 'No unread messages'
+                          : conversationTabFilter === 'pinned'
+                            ? 'No pinned chats'
+                            : 'No chats yet'}
                   </h4>
                   <p className={`text-xs ${isLight ? 'text-slate-600' : 'text-zinc-300'}`}>
-                    {conversationFilter.trim() && conversations.length > 0
-                      ? 'You can search across all JDLX Chat users to start a new chat.'
-                      : conversationTabFilter === 'unread'
-                        ? 'You are all caught up on all your conversations!'
-                        : conversationTabFilter === 'pinned'
-                          ? 'Swipe left on any conversation or tap the pin icon to keep it at the top.'
-                          : 'Add a friend by @username or email, then start chatting!'}
+                    {conversationsError && conversations.length === 0
+                      ? conversationsError
+                      : conversationFilter.trim() && conversations.length > 0
+                        ? 'You can search across all JDLX Chat users to start a new chat.'
+                        : conversationTabFilter === 'unread'
+                          ? 'You are all caught up on all your conversations!'
+                          : conversationTabFilter === 'pinned'
+                            ? 'Swipe left on any conversation or tap the pin icon to keep it at the top.'
+                            : 'Add a friend by @username or email, then start chatting!'}
                   </p>
                 </div>
-                {conversationTabFilter !== 'all' && !conversationFilter.trim() ? (
+                {conversationsError && conversations.length === 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      fetchConversations()
+                    }}
+                    disabled={conversationsLoading}
+                    className={`mt-2 px-4 py-2 rounded-xl text-xs font-black inline-flex items-center gap-1.5 cursor-pointer transition-transform active:scale-95 disabled:opacity-60 ${
+                      isLight
+                        ? 'bg-amber-500 text-white hover:bg-amber-600'
+                        : 'bg-[#facc15] text-[#09090b] hover:bg-[#eab308]'
+                    }`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${conversationsLoading ? 'animate-spin' : ''}`} />
+                    <span>{conversationsLoading ? 'Retrying…' : 'Retry'}</span>
+                  </button>
+                ) : conversationTabFilter !== 'all' && !conversationFilter.trim() ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -4469,9 +5015,9 @@ export default function ChatConversation() {
                                 : 'bg-[#18181b] text-zinc-300 border-[#27272a]'
                           }`}>
                             {conv.contact_avatar ? (
-                              <img src={resolveMediaUrl(conv.contact_avatar)} alt="" className="w-full h-full object-cover" />
+                              <img src={resolveMediaUrl(conv.contact_avatar)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                             ) : (
-                              conv.contact_name?.[0]?.toUpperCase() || 'U'
+                              getContactDisplayName(conv)?.[0]?.toUpperCase() || 'U'
                             )}
                           </div>
                           {isOnline && (
@@ -4485,7 +5031,7 @@ export default function ChatConversation() {
                         {/* Chat Details */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
-                            <h4 className={`text-xs sm:text-sm font-bold truncate transition-colors ${
+                            <h4 className={`text-xs sm:text-sm font-bold truncate transition-colors flex items-center gap-1.5 ${
                               isSelected
                                 ? isLight
                                   ? 'text-amber-900 font-black'
@@ -4494,7 +5040,10 @@ export default function ChatConversation() {
                                   ? 'text-slate-900'
                                   : 'text-white'
                             }`}>
-                              {conv.contact_name}
+                              <span className="truncate">{getContactDisplayName(conv)}</span>
+                              {getContactCustomNickname(conv) && (
+                                <Tag className="w-2.5 h-2.5 text-amber-500 shrink-0 opacity-70" title={`Alias (Original: ${conv.contact_name})`} />
+                              )}
                             </h4>
 
                             <div className="flex items-center gap-1.5 shrink-0 ml-2">
@@ -4738,9 +5287,9 @@ export default function ChatConversation() {
                           : 'bg-[#facc15]/20 text-[#facc15] border-yellow-500/30'
                       }`}>
                         {activeConversation.contact_avatar ? (
-                          <img src={resolveMediaUrl(activeConversation.contact_avatar)} alt="" className="w-full h-full object-cover" />
+                          <img src={resolveMediaUrl(activeConversation.contact_avatar)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                         ) : (
-                          activeConversation.contact_name?.[0]?.toUpperCase() || 'U'
+                          getContactDisplayName(activeConversation)?.[0]?.toUpperCase() || 'U'
                         )}
                       </div>
                       {peerOnline && (
@@ -4753,14 +5302,38 @@ export default function ChatConversation() {
 
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <h3 className={`text-sm font-black truncate group-hover:underline ${
+                        <h3 className={`text-sm font-black truncate group-hover:underline flex items-center gap-1.5 ${
                           isLight ? 'text-slate-900' : 'text-white'
                         }`}>
-                          {activeConversation.contact_name}
+                          <span>{getContactDisplayName(activeConversation)}</span>
+                          {getContactCustomNickname(activeConversation) && (
+                            <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-amber-500/15 text-amber-500 dark:text-[#facc15] font-bold shrink-0 border border-amber-500/25" title={`Alias (Original: ${activeConversation.contact_name})`}>
+                              alias
+                            </span>
+                          )}
                         </h3>
                         <ShieldCheck className={`w-4 h-4 shrink-0 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                         {mutedRooms.includes(activeRoomId) && (
                           <VolumeX className="w-3.5 h-3.5 text-zinc-400 shrink-0" title="Notifications muted" />
+                        )}
+                        {currentDisappearingMode !== 'off' && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              triggerHaptic('light')
+                              setShowDisappearingModal(true)
+                            }}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-amber-500/15 text-amber-500 dark:text-[#facc15] border border-amber-500/30 hover:bg-amber-500/25 transition-all cursor-pointer"
+                            title={`Disappearing messages: ${currentDisappearingMode === 'seen' ? 'Auto-delete after seen' : currentDisappearingMode}`}
+                          >
+                            {currentDisappearingMode === 'seen' ? (
+                              <Zap className="w-2.5 h-2.5 fill-current" />
+                            ) : (
+                              <Timer className="w-2.5 h-2.5" />
+                            )}
+                            <span>{currentDisappearingMode === 'seen' ? 'Seen ⚡' : currentDisappearingMode}</span>
+                          </button>
                         )}
                       </div>
                       <p className="text-[11px] font-mono flex items-center gap-1.5">
@@ -4779,7 +5352,156 @@ export default function ChatConversation() {
                     </div>
                   </div>
                 </div>
+
+                {/* Header Action Buttons (Search & Contact Profile) */}
+                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setIsSearchingChat((prev) => !prev)
+                      if (!isSearchingChat) {
+                        setTimeout(() => chatSearchInputRef.current?.focus(), 100)
+                      } else {
+                        setChatSearchQuery('')
+                      }
+                    }}
+                    className={`p-2 rounded-xl border transition-all cursor-pointer ${
+                      isSearchingChat
+                        ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/40 shadow-xs'
+                        : isLight
+                          ? 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'
+                          : 'bg-[#18181b] hover:bg-[#222228] border-[#27272a] text-zinc-300'
+                    }`}
+                    title={isSearchingChat ? "Close search (Esc)" : "Search in conversation"}
+                  >
+                    <Search className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setShowContactInfoModal(true)
+                    }}
+                    className={`p-2 rounded-xl border transition-all cursor-pointer ${
+                      isLight
+                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'
+                        : 'bg-[#18181b] hover:bg-[#222228] border-[#27272a] text-zinc-300'
+                    }`}
+                    title="View Contact Profile"
+                  >
+                    <User className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
+
+              {/* ── IN-CHAT MESSAGE SEARCH BAR (WhatsApp / Telegram Standard) ── */}
+              {isSearchingChat && (
+                <div className={`px-3 sm:px-6 py-2.5 border-b flex items-center gap-2 z-20 animate-in slide-in-from-top-2 duration-150 ${
+                  isLight ? 'bg-amber-50/95 border-amber-200 text-slate-900 backdrop-blur-md shadow-xs' : 'bg-[#16161b] border-yellow-500/20 text-white backdrop-blur-md shadow-md'
+                }`}>
+                  <div className="relative flex-1 flex items-center">
+                    <Search className="w-4 h-4 text-amber-500 absolute left-3 pointer-events-none" />
+                    <input
+                      ref={chatSearchInputRef}
+                      type="text"
+                      value={chatSearchQuery}
+                      onChange={(e) => {
+                        setChatSearchQuery(e.target.value)
+                        setChatSearchMatchIndex(0)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setIsSearchingChat(false)
+                          setChatSearchQuery('')
+                        } else if (e.key === 'Enter') {
+                          if (e.shiftKey) handlePrevSearchMatch()
+                          else handleNextSearchMatch()
+                        }
+                      }}
+                      placeholder={`Search messages with ${getContactDisplayName(activeConversation)}…`}
+                      className={`w-full pl-9 pr-8 py-2 rounded-xl text-xs sm:text-sm font-medium border outline-none transition-all ${
+                        isLight
+                          ? 'bg-white border-slate-300 focus:border-amber-500 text-slate-900 shadow-xs'
+                          : 'bg-[#0f0f13] border-[#2b2b34] focus:border-yellow-500/60 text-white shadow-inner'
+                      }`}
+                    />
+                    {chatSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setChatSearchQuery('')
+                          setChatSearchMatchIndex(0)
+                          chatSearchInputRef.current?.focus()
+                        }}
+                        className="absolute right-2.5 p-1 rounded-full text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                        title="Clear search query"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Results Count & Up/Down Match Navigation */}
+                  {chatSearchQuery.trim() && (
+                    <div className="flex items-center gap-1 shrink-0 font-mono text-xs">
+                      <span className={`px-2 py-1 rounded-lg text-[11px] font-bold ${
+                        chatSearchMatches.length > 0
+                          ? isLight ? 'bg-amber-100 text-amber-900' : 'bg-yellow-500/15 text-[#facc15]'
+                          : 'bg-rose-500/10 text-rose-500'
+                      }`}>
+                        {chatSearchMatches.length > 0 
+                          ? `${chatSearchMatchIndex + 1} of ${chatSearchMatches.length}` 
+                          : 'No matches'}
+                      </span>
+
+                      {chatSearchMatches.length > 1 && (
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            type="button"
+                            onClick={handlePrevSearchMatch}
+                            className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                              isLight ? 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700' : 'bg-[#1e1e24] hover:bg-[#282832] border-[#2c2c34] text-zinc-300'
+                            }`}
+                            title="Previous match (Shift+Enter)"
+                          >
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleNextSearchMatch}
+                            className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                              isLight ? 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700' : 'bg-[#1e1e24] hover:bg-[#282832] border-[#2c2c34] text-zinc-300'
+                            }`}
+                            title="Next match (Enter)"
+                          >
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Close Search Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setIsSearchingChat(false)
+                      setChatSearchQuery('')
+                    }}
+                    className={`p-2 rounded-xl border transition-all cursor-pointer shrink-0 ${
+                      isLight
+                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'
+                        : 'bg-[#1e1e24] hover:bg-[#282832] border-[#2c2c34] text-zinc-300'
+                    }`}
+                    title="Close search (Esc)"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
 
               {/* Messages Scroll Area with Luxury Starlight Wallpaper */}
               <div 
@@ -4922,10 +5644,27 @@ export default function ChatConversation() {
                     </div>
                   </div>
                 ) : (!messages || messages.length === 0) ? (
-                  <div className="py-16 text-center space-y-2">
+                  <div className="py-16 text-center space-y-3">
                     <p className={`text-xs ${isLight ? 'text-slate-600' : 'text-zinc-300'}`}>
-                      No messages here yet. Send a greeting to start chatting!
+                      {messagesError || 'No messages here yet. Send a greeting to start chatting!'}
                     </p>
+                    {messagesError && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerHaptic('light')
+                          fetchRoomMessages(activeRoomId)
+                        }}
+                        className={`px-4 py-2 rounded-xl text-xs font-black inline-flex items-center gap-1.5 cursor-pointer transition-transform active:scale-95 ${
+                          isLight
+                            ? 'bg-amber-500 text-white hover:bg-amber-600'
+                            : 'bg-[#facc15] text-[#09090b] hover:bg-[#eab308]'
+                        }`}
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Retry</span>
+                      </button>
+                    )}
                   </div>
                 ) : (
                   (groupedMessages || []).map((item, idx) => {
@@ -5101,7 +5840,17 @@ export default function ChatConversation() {
                     }
 
                     return (
-                      <div key={item.id} className="w-full flex flex-col">
+                      <div
+                        key={item.id}
+                        id={`chat-msg-${m.id}`}
+                        className={`chat-message-row w-full flex flex-col transition-all duration-300 rounded-2xl ${
+                          isSearchingChat && chatSearchQuery.trim() && sameId(m.id, chatSearchMatches[chatSearchMatchIndex])
+                            ? 'ring-2 ring-amber-400 bg-amber-400/15 p-1 -m-1 shadow-[0_0_24px_rgba(250,204,21,0.35)]'
+                            : isSearchingChat && chatSearchQuery.trim() && chatSearchMatches.some((mid) => sameId(mid, m.id))
+                              ? 'ring-1 ring-amber-400/40 bg-amber-400/5'
+                              : ''
+                        }`}
+                      >
                         {/* Floating Glassmorphic Date Separator (WhatsApp / Telegram style) */}
                         {showDateDivider && (
                           <div className="flex justify-center my-3 select-none pointer-events-none">
@@ -5224,6 +5973,8 @@ export default function ChatConversation() {
                                             <img
                                               src={resolveMediaUrl(pm.media_url)}
                                               alt={`Photo ${pIdx + 1}`}
+                                              loading="lazy"
+                                              decoding="async"
                                               onClick={() => {
                                                 if (pm._uploading || pm._uploadFailed) return
                                                 openLightbox(resolveMediaUrl(pm.media_url), albumImages, pIdx)
@@ -5245,6 +5996,8 @@ export default function ChatConversation() {
                                           <img
                                             src={resolveMediaUrl(album[0].media_url)}
                                             alt="Photo 1"
+                                            loading="lazy"
+                                            decoding="async"
                                             onClick={() => {
                                               if (album[0]._uploading || album[0]._uploadFailed) return
                                               openLightbox(resolveMediaUrl(album[0].media_url), albumImages, 0)
@@ -5262,6 +6015,8 @@ export default function ChatConversation() {
                                               <img
                                                 src={resolveMediaUrl(pm.media_url)}
                                                 alt={`Photo ${pIdx + 1}`}
+                                              loading="lazy"
+                                              decoding="async"
                                                 onClick={() => {
                                                   if (pm._uploading || pm._uploadFailed) return
                                                   openLightbox(resolveMediaUrl(pm.media_url), albumImages, pIdx)
@@ -5285,6 +6040,8 @@ export default function ChatConversation() {
                                             <img
                                               src={resolveMediaUrl(pm.media_url)}
                                               alt={`Photo ${pIdx + 1}`}
+                                              loading="lazy"
+                                              decoding="async"
                                               onClick={() => {
                                                 if (pm._uploading || pm._uploadFailed) return
                                                 openLightbox(resolveMediaUrl(pm.media_url), albumImages, pIdx)
@@ -5307,6 +6064,8 @@ export default function ChatConversation() {
                                             <img
                                               src={resolveMediaUrl(pm.media_url)}
                                               alt={`Photo ${pIdx + 1}`}
+                                              loading="lazy"
+                                              decoding="async"
                                               onClick={() => {
                                                 if (pm._uploading || pm._uploadFailed) return
                                                 openLightbox(resolveMediaUrl(pm.media_url), albumImages, pIdx)
@@ -5329,6 +6088,8 @@ export default function ChatConversation() {
                                           <img
                                             src={resolveMediaUrl(album[3].media_url)}
                                             alt="Photo 4"
+                                            loading="lazy"
+                                            decoding="async"
                                             className="w-full h-full object-cover filter brightness-[0.55] transition-transform duration-200 hover:scale-[1.03]"
                                           />
                                           <div className="absolute inset-0 bg-black/45 backdrop-blur-[2px] flex flex-col items-center justify-center text-white pointer-events-none">
@@ -5373,8 +6134,12 @@ export default function ChatConversation() {
                                   {hasAlbumCaptions && (
                                     <div className="px-2 pt-2 pb-0.5 space-y-1">
                                       {albumCaptions.map((cap, cIdx) => (
-                                        <p key={cIdx} className="text-[13px] sm:text-[14px] leading-relaxed select-none md:select-text whitespace-pre-line break-words">
-                                          {cap}
+                                        <p key={cIdx} className="text-[13px] sm:text-[14px] leading-relaxed select-none md:select-text break-words">
+                                          {renderHighlightedMessageText(
+                                            cap,
+                                            isSearchingChat ? chatSearchQuery : '',
+                                            sameId(m.id, chatSearchMatches[chatSearchMatchIndex])
+                                          )}
                                         </p>
                                       ))}
                                     </div>
@@ -5449,7 +6214,7 @@ export default function ChatConversation() {
                                 /* ── SINGLE MESSAGE (Photo, Audio, Video, Document, or Text) ── */
                                 <>
                                   {/* Voice Note Player */}
-                                  {m.media_url && m.message_type === 'audio' && (
+                                  {m.media_url && getChatAttachmentKind(m) === 'audio' && (
                                     <VoiceNotePlayer
                                       audioUrl={resolveMediaUrl(m.media_url)}
                                       isUser={isUser}
@@ -5459,7 +6224,7 @@ export default function ChatConversation() {
                                   )}
 
                                   {/* Video Player */}
-                                  {m.media_url && m.message_type === 'video' && (
+                                  {m.media_url && getChatAttachmentKind(m) === 'video' && (
                                     <video
                                       controls
                                       playsInline
@@ -5469,7 +6234,7 @@ export default function ChatConversation() {
                                   )}
 
                                   {/* Document (PDF) Attachment */}
-                                  {m.media_url && (m.message_type === 'document' || m.media_url.toLowerCase().endsWith('.pdf')) && (
+                                  {m.media_url && getChatAttachmentKind(m) === 'document' && (
                                     <a
                                       href={resolveMediaUrl(m.media_url)}
                                       target="_blank"
@@ -5487,7 +6252,7 @@ export default function ChatConversation() {
                                       </div>
                                       <div className="min-w-0 flex-1">
                                         <p className="text-xs font-bold truncate">
-                                          {m.media_url.split('/').pop().replace(/^chat_[a-f0-9]+_/, '') || 'Document.pdf'}
+                                          {getMediaFileName(m.media_url, 'Document.pdf').replace(/^chat_[a-f0-9]+_/, '')}
                                         </p>
                                         <span className="text-[10px] opacity-75 font-semibold">PDF Document • Tap to open</span>
                                       </div>
@@ -5501,6 +6266,8 @@ export default function ChatConversation() {
                                       <img
                                         src={resolveMediaUrl(m.media_url)}
                                         alt="Attachment"
+                                        loading="lazy"
+                                        decoding="async"
                                         onClick={() => {
                                           if (m._uploading || m._uploadFailed) return
                                           openLightbox(resolveMediaUrl(m.media_url), allChatImages, singleImageIdx >= 0 ? singleImageIdx : 0)
@@ -5560,7 +6327,11 @@ export default function ChatConversation() {
                                         </div>
                                       ) : hasText ? (
                                         <div className="text-[13px] sm:text-[14px] leading-relaxed break-words select-none md:select-text">
-                                          <span className="whitespace-pre-line">{m.message}</span>
+                                          {renderHighlightedMessageText(
+                                            m.message,
+                                            isSearchingChat ? chatSearchQuery : '',
+                                            sameId(m.id, chatSearchMatches[chatSearchMatchIndex])
+                                          )}
                                         </div>
                                       ) : null}
 
@@ -5602,6 +6373,15 @@ export default function ChatConversation() {
                                           <Lock className="w-2.5 h-2.5" />
                                         </span>
                                         <span className="tracking-tight">{formatMessageTime(m.created_at)}</span>
+                                        {currentDisappearingMode !== 'off' && (
+                                          <span title={currentDisappearingMode === 'seen' ? "Auto-deletes after seen" : `Expires in ${currentDisappearingMode}`} className="inline-flex items-center ml-0.5">
+                                            {currentDisappearingMode === 'seen' ? (
+                                              <Zap className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
+                                            ) : (
+                                              <Timer className="w-2.5 h-2.5 text-amber-400" />
+                                            )}
+                                          </span>
+                                        )}
                                         {m.edited_at && <span className="opacity-60 text-[9px]">(edited)</span>}
                                         <button
                                           type="button"
@@ -5890,9 +6670,9 @@ export default function ChatConversation() {
                           const targetId = activeConversation?.other_user?.id
                           if (!targetId) return
                           triggerHaptic('medium')
-                          toast.success('User unblocked')
                           const ok = await unblockUser(targetId)
-                          if (!ok) toast.error('Could not unblock user')
+                          if (ok) toast.success('User unblocked')
+                          else toast.error('Could not unblock user')
                         }}
                         className="underline text-amber-500 hover:text-amber-400 font-black cursor-pointer ml-1"
                       >
@@ -6325,6 +7105,11 @@ export default function ChatConversation() {
         >
           <div 
             onClick={(e) => e.stopPropagation()}
+            ref={addFriendDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add friend"
+            tabIndex={-1}
             className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88vh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-[#f4f4f5]'
             }`}
@@ -6511,7 +7296,7 @@ export default function ChatConversation() {
                                 : 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
                             }`}>
                               {u.profile_image ? (
-                                <img src={resolveMediaUrl(u.profile_image)} alt="" className="w-full h-full object-cover rounded-xl" />
+                                <img src={resolveMediaUrl(u.profile_image)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover rounded-xl" />
                               ) : (
                                 u.name?.[0]?.toUpperCase() || 'U'
                               )}
@@ -6761,6 +7546,11 @@ export default function ChatConversation() {
         >
           <div 
             onClick={(e) => e.stopPropagation()}
+            ref={profileDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="My profile"
+            tabIndex={-1}
             className={`w-full max-w-lg rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90vh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
             }`}
@@ -7426,10 +8216,16 @@ export default function ChatConversation() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (window.confirm('Are you sure you want to log out of JDLX Chat?')) {
-                          chatLogout(true)
-                          setShowProfileDrawer(false)
-                        }
+                        requestConfirm({
+                          title: 'Log out?',
+                          message: 'Are you sure you want to log out of JDLX Chat?',
+                          confirmLabel: 'Log out',
+                          destructive: true,
+                          onConfirm: () => {
+                            chatLogout(true)
+                            setShowProfileDrawer(false)
+                          },
+                        })
                       }}
                       className="w-full py-2.5 rounded-2xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-xs font-black flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98"
                     >
@@ -7469,6 +8265,11 @@ export default function ChatConversation() {
         >
           <div 
             onClick={(e) => e.stopPropagation()}
+            ref={notificationsDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Notifications"
+            tabIndex={-1}
             className={`w-full sm:max-w-sm max-h-[85vh] sm:max-h-full rounded-t-[32px] sm:rounded-none border-t sm:border-t-0 sm:border-l flex flex-col shadow-2xl animate-in slide-in-from-bottom-8 sm:slide-in-from-right duration-200 sm:duration-250 transition-colors pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
             }`}
@@ -7772,12 +8573,11 @@ export default function ChatConversation() {
               {actionMessage.message && !actionMessage.deleted && actionMessage.message_type !== 'deleted' && (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     triggerHaptic('light')
-                    if (navigator?.clipboard?.writeText) {
-                      navigator.clipboard.writeText(actionMessage.message)
-                      toast.success('Text copied to clipboard')
-                    }
+                    const copied = await copyTextToClipboard(actionMessage.message)
+                    if (copied) toast.success('Text copied to clipboard')
+                    else toast.error('Could not copy text')
                     handleCloseActionMenu()
                   }}
                   className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between transition-colors cursor-pointer ${
@@ -7875,6 +8675,11 @@ export default function ChatConversation() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
+            ref={reportDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Report user"
+            tabIndex={-1}
             className={`w-full max-w-sm rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b p-5 sm:p-6 space-y-4 animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
               isLight ? 'bg-white border-slate-200' : 'bg-[#121214] border-[#27272a]'
             }`}
@@ -7946,6 +8751,9 @@ export default function ChatConversation() {
             className="fixed inset-0 z-[60] bg-black/95 flex flex-col justify-between text-white backdrop-blur-2xl select-none animate-viewer-backdrop overflow-hidden"
             role="dialog"
             aria-modal="true"
+            aria-label="Media preview and caption"
+            ref={imageSendDialogRef}
+            tabIndex={-1}
           >
             {/* Top Toolbar */}
             <div className="w-full flex items-center justify-between px-3 sm:px-6 py-3 border-b border-white/10 bg-black/40 backdrop-blur-md z-10 animate-viewer-header">
@@ -8150,6 +8958,9 @@ export default function ChatConversation() {
           }`}
           role="dialog"
           aria-modal="true"
+          aria-label="Photo viewer"
+          ref={lightboxDialogRef}
+          tabIndex={-1}
         >
           {/* Top Minimalist Header Bar */}
           <div
@@ -8471,8 +9282,13 @@ export default function ChatConversation() {
           className="fixed inset-0 bg-black/85 backdrop-blur-xl z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Contact profile"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-md rounded-t-[36px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 max-h-[92vh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
+            ref={contactDialogRef}
+            tabIndex={-1}
+            className={`w-full max-w-md rounded-t-[36px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 max-h-[92dvh] flex flex-col ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
             }`}
           >
@@ -8503,7 +9319,7 @@ export default function ChatConversation() {
             </div>
 
             {/* Scrollable Content */}
-            <div className="overflow-y-auto px-5 sm:px-6 py-2 space-y-4 custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 sm:px-6 py-2 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))] sm:pb-6 space-y-4 custom-scrollbar">
               {/* Avatar & Contact Details */}
               <div className="flex flex-col items-center text-center pt-1 pb-1">
                 <div 
@@ -8522,9 +9338,9 @@ export default function ChatConversation() {
                       : 'bg-gradient-to-tr from-yellow-500/20 to-amber-500/10 text-[#facc15] border-yellow-500/40 shadow-yellow-500/20'
                   }`}>
                     {activeConversation.contact_avatar ? (
-                      <img src={resolveMediaUrl(activeConversation.contact_avatar)} alt="" className="w-full h-full object-cover" />
+                      <img src={resolveMediaUrl(activeConversation.contact_avatar)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                     ) : (
-                      activeConversation.contact_name?.[0]?.toUpperCase() || 'U'
+                      getContactDisplayName(activeConversation)?.[0]?.toUpperCase() || 'U'
                     )}
                   </div>
 
@@ -8544,20 +9360,124 @@ export default function ChatConversation() {
                   )}
                 </div>
 
-                <div className="mt-3.5 space-y-1">
-                  <div className="flex items-center justify-center gap-1.5">
-                    <h3 className="text-lg sm:text-xl font-black tracking-tight">{activeConversation.contact_name}</h3>
-                    <ShieldCheck className={`w-5 h-5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} title="Verified JDLX Contact" />
-                  </div>
+                <div className="mt-3.5 space-y-1.5 w-full">
+                  {/* Custom Nickname Editor / Display (Item 2.5) */}
+                  {isEditingNickname ? (
+                    <div className="flex items-center justify-center gap-1.5 px-2 max-w-sm mx-auto">
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          value={nicknameDraft}
+                          onChange={(e) => setNicknameDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              triggerHaptic('light')
+                              saveContactCustomData(activeConversation, { nickname: nicknameDraft.trim() })
+                              setIsEditingNickname(false)
+                              toast.success(nicknameDraft.trim() ? 'Custom nickname saved!' : 'Nickname reset to default')
+                            } else if (e.key === 'Escape') {
+                              setIsEditingNickname(false)
+                              setNicknameDraft(getContactCustomNickname(activeConversation))
+                            }
+                          }}
+                          placeholder={`Nickname for ${activeConversation.contact_name}…`}
+                          autoFocus
+                          maxLength={32}
+                          className={`w-full px-3 py-1.5 text-xs sm:text-sm font-bold rounded-xl border focus:outline-hidden focus:ring-2 transition-all ${
+                            isLight
+                              ? 'bg-white border-amber-300 text-slate-900 focus:ring-amber-400'
+                              : 'bg-[#18181b] border-yellow-500/40 text-zinc-100 focus:ring-yellow-500/30'
+                          }`}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerHaptic('light')
+                          saveContactCustomData(activeConversation, { nickname: nicknameDraft.trim() })
+                          setIsEditingNickname(false)
+                          toast.success(nicknameDraft.trim() ? 'Custom nickname saved!' : 'Nickname reset to default')
+                        }}
+                        className="p-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-bold transition cursor-pointer shadow-xs shrink-0"
+                        title="Save nickname"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerHaptic('light')
+                          setIsEditingNickname(false)
+                          setNicknameDraft(getContactCustomNickname(activeConversation))
+                        }}
+                        className={`p-1.5 rounded-xl border transition cursor-pointer shrink-0 ${
+                          isLight ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700' : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-300'
+                        }`}
+                        title="Cancel"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <h3 className="text-lg sm:text-xl font-black tracking-tight">
+                          {getContactDisplayName(activeConversation)}
+                        </h3>
+                        {verifiedContacts[activeConversation.id] ? (
+                          <ShieldCheck className="w-5 h-5 text-emerald-500" title="Security Code Verified" />
+                        ) : (
+                          <ShieldCheck className={`w-5 h-5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} title="Verified JDLX Contact" />
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic('light')
+                            setNicknameDraft(getContactCustomNickname(activeConversation))
+                            setIsEditingNickname(true)
+                          }}
+                          className={`p-1 rounded-lg opacity-60 hover:opacity-100 transition cursor-pointer ${
+                            isLight ? 'hover:bg-amber-100 text-amber-800' : 'hover:bg-yellow-500/20 text-[#facc15]'
+                          }`}
+                          title={getContactCustomNickname(activeConversation) ? "Edit custom nickname" : "Set custom nickname"}
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* If custom nickname is set, show original contact name below */}
+                      {getContactCustomNickname(activeConversation) && (
+                        <div className="flex items-center gap-1 pt-0.5 text-[11px] font-semibold opacity-65">
+                          <Tag className="w-3 h-3 text-amber-500" />
+                          <span>Original: {activeConversation.contact_name}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              triggerHaptic('light')
+                              saveContactCustomData(activeConversation, { nickname: '' })
+                              setNicknameDraft('')
+                              toast.success('Nickname reset to original name')
+                            }}
+                            className="text-[10px] text-rose-500 hover:underline ml-1 cursor-pointer font-bold"
+                            title="Reset to original name"
+                          >
+                            (Reset)
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Copyable @username pill */}
                   <div>
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={async () => {
                         triggerHaptic('light')
-                        navigator.clipboard.writeText(`@${activeConversation.contact_username}`)
-                        toast.success('Username copied to clipboard!')
+                        const copied = await copyTextToClipboard(`@${activeConversation.contact_username}`)
+                        if (copied) toast.success('Username copied to clipboard!')
+                        else toast.error('Could not copy username')
                       }}
                       className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold border transition-all active:scale-95 cursor-pointer ${
                         isLight 
@@ -8584,22 +9504,24 @@ export default function ChatConversation() {
               {/* Quick Action Tiles (WhatsApp & Telegram 3-Tile Row) */}
               <div className="grid grid-cols-3 gap-2.5 pt-1">
                 {/* 1. Chat */}
+                {/* 1. Search in Conversation */}
                 <button
                   type="button"
                   onClick={() => {
                     triggerHaptic('light')
                     setShowContactInfoModal(false)
-                    if (textareaRef.current) textareaRef.current.focus()
+                    setIsSearchingChat(true)
+                    setTimeout(() => chatSearchInputRef.current?.focus(), 120)
                   }}
                   className={`p-2.5 sm:p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all active:scale-95 cursor-pointer ${
                     isLight 
                       ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800 shadow-xs' 
                       : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
                   }`}
-                  title="Direct Message"
+                  title="Search in conversation"
                 >
-                  <MessageSquare className="w-5 h-5 text-amber-500" />
-                  <span className="text-[11px] font-bold">Chat</span>
+                  <Search className="w-5 h-5 text-amber-500" />
+                  <span className="text-[11px] font-bold">Search</span>
                 </button>
 
                 {/* 2. Mute */}
@@ -8628,6 +9550,7 @@ export default function ChatConversation() {
                   type="button"
                   onClick={() => {
                     triggerHaptic('light')
+                    setContactMediaTab('media')
                     const el = document.getElementById('contact-shared-media-section')
                     if (el) el.scrollIntoView({ behavior: 'smooth' })
                   }}
@@ -8636,7 +9559,7 @@ export default function ChatConversation() {
                       ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800 shadow-xs' 
                       : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
                   }`}
-                  title="Shared Media"
+                  title="Shared Media & Docs"
                 >
                   <ImageIcon className="w-5 h-5 text-purple-500" />
                   <span className="text-[11px] font-bold">Media</span>
@@ -8655,47 +9578,504 @@ export default function ChatConversation() {
                 </p>
               </div>
 
-              {/* Shared Media Preview Section */}
+              {/* ── PRIVATE CONTACT NOTE CARD (Item 2.5: Only You Can See This) ── */}
+              <div className={`p-3.5 rounded-2xl border space-y-2 transition-all shadow-xs ${
+                isLight 
+                  ? 'bg-amber-50/50 border-amber-200 text-amber-950' 
+                  : 'bg-[#18181b] border-[#27272a] text-zinc-200'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <StickyNote className="w-3.5 h-3.5 text-amber-500" />
+                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-500">
+                      Private Note
+                    </span>
+                    <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border flex items-center gap-0.5 ${
+                      isLight ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-yellow-500/10 text-[#facc15] border-yellow-500/25'
+                    }`}>
+                      <Lock className="w-2.5 h-2.5" />
+                      Only you
+                    </span>
+                  </div>
+
+                  {!isEditingNote && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light')
+                        setNoteDraft(getContactPrivateNote(activeConversation))
+                        setIsEditingNote(true)
+                      }}
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 transition cursor-pointer ${
+                        isLight 
+                          ? 'hover:bg-amber-100 text-amber-800' 
+                          : 'hover:bg-yellow-500/20 text-[#facc15]'
+                      }`}
+                    >
+                      <Edit3 className="w-3 h-3" />
+                      <span>{getContactPrivateNote(activeConversation) ? 'Edit' : 'Add Note'}</span>
+                    </button>
+                  )}
+                </div>
+
+                {isEditingNote ? (
+                  <div className="space-y-2 pt-0.5">
+                    <textarea
+                      value={noteDraft}
+                      onChange={(e) => setNoteDraft(e.target.value)}
+                      placeholder="Add private notes (e.g. Senior dev, met at meetup, birthday Nov 20, prefers calls)..."
+                      rows={3}
+                      maxLength={500}
+                      autoFocus
+                      className={`w-full p-2.5 rounded-xl text-xs font-medium border resize-none focus:outline-hidden focus:ring-2 transition-all leading-relaxed ${
+                        isLight
+                          ? 'bg-white border-amber-300 text-slate-900 focus:ring-amber-400 placeholder:text-slate-400'
+                          : 'bg-[#121214] border-yellow-500/30 text-zinc-100 focus:ring-yellow-500/30 placeholder:text-zinc-500'
+                      }`}
+                    />
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono opacity-50">
+                        {noteDraft.length} / 500
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {getContactPrivateNote(activeConversation) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              triggerHaptic('medium')
+                              saveContactCustomData(activeConversation, { note: '' })
+                              setNoteDraft('')
+                              setIsEditingNote(false)
+                              toast.success('Private note deleted')
+                            }}
+                            className="px-2 py-1 rounded-lg text-xs font-bold text-rose-500 hover:bg-rose-500/10 transition cursor-pointer"
+                          >
+                            Delete
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic('light')
+                            setIsEditingNote(false)
+                            setNoteDraft(getContactPrivateNote(activeConversation))
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                            isLight ? 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700' : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-300'
+                          }`}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic('light')
+                            saveContactCustomData(activeConversation, { note: noteDraft.trim() })
+                            setIsEditingNote(false)
+                            toast.success(noteDraft.trim() ? 'Private note saved!' : 'Private note cleared')
+                          }}
+                          className="px-3 py-1 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-black transition cursor-pointer shadow-xs"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    {getContactPrivateNote(activeConversation) ? (
+                      <div className="space-y-1">
+                        <p className="text-xs leading-relaxed whitespace-pre-wrap font-medium">
+                          {getContactPrivateNote(activeConversation)}
+                        </p>
+                        {contactCustomData[getContactKey(activeConversation)]?.updatedAt && (
+                          <span className="text-[9.5px] font-mono opacity-40 block">
+                            Last edited {formatTime(contactCustomData[getContactKey(activeConversation)].updatedAt)}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <p 
+                        onClick={() => {
+                          triggerHaptic('light')
+                          setNoteDraft('')
+                          setIsEditingNote(true)
+                        }}
+                        className="text-xs italic opacity-50 cursor-pointer hover:opacity-80 transition py-0.5"
+                      >
+                        Tap to add a private note or reminder about this person…
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ── DISAPPEARING MESSAGES CARD (Item 2.4 + Auto-delete after seen) ── */}
+              <div 
+                onClick={() => {
+                  triggerHaptic('light')
+                  setShowDisappearingModal(true)
+                }}
+                className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xs ${
+                  currentDisappearingMode !== 'off'
+                    ? isLight 
+                      ? 'bg-amber-50/90 border-amber-300 text-amber-950 shadow-amber-500/10' 
+                      : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
+                    : isLight
+                      ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
+                      : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                }`}
+                title="Configure disappearing messages"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
+                    currentDisappearingMode === 'seen'
+                      ? 'bg-amber-500/25 text-amber-400 border-amber-500/50 shadow-xs'
+                      : currentDisappearingMode !== 'off'
+                        ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/40'
+                        : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
+                  }`}>
+                    {currentDisappearingMode === 'seen' ? (
+                      <Zap className="w-4.5 h-4.5 fill-amber-400" />
+                    ) : (
+                      <Timer className="w-4.5 h-4.5" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-xs font-bold block truncate">
+                      Disappearing Messages
+                    </span>
+                    <span className="text-[11px] opacity-70 block truncate">
+                      {currentDisappearingMode === 'seen'
+                        ? '⚡ Auto-delete after seen (View Once)'
+                        : currentDisappearingMode === 'off'
+                          ? 'Off'
+                          : `Expires in ${currentDisappearingMode}`}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                    currentDisappearingMode === 'seen'
+                      ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                      : currentDisappearingMode !== 'off'
+                        ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
+                        : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                  }`}>
+                    {currentDisappearingMode === 'seen' ? 'Seen ⚡' : currentDisappearingMode === 'off' ? 'Off' : currentDisappearingMode}
+                  </span>
+                  <ChevronRight className="w-4 h-4 opacity-50" />
+                </div>
+              </div>
+
+              {/* ── SHARED MEDIA, DOCS & LINKS TABBED HUB (Item 2.1) ── */}
               <div 
                 id="contact-shared-media-section"
-                className={`p-4 rounded-2xl border space-y-2.5 ${
+                className={`rounded-2xl border overflow-hidden transition-all shadow-xs ${
                   isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
-                    <ImageIcon className="w-3.5 h-3.5" />
+                {/* Header Title with Dynamic Total Count Badge */}
+                <div className={`px-4 py-3 flex items-center justify-between border-b ${
+                  isLight ? 'border-slate-200/80 bg-white/50' : 'border-[#27272a]/80 bg-[#141416]/50'
+                }`}>
+                  <span className="text-[10.5px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
                     Media, Links &amp; Docs
                   </span>
-                  <span className="text-[11px] font-bold opacity-60">
-                    {previewImages.length} {previewImages.length === 1 ? 'photo' : 'photos'}
+                  <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                    isLight ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-yellow-500/10 text-[#facc15] border border-yellow-500/25'
+                  }`}>
+                    {allChatMedia.length + allChatDocs.length + allChatLinks.length} items
                   </span>
                 </div>
 
-                {previewImages.length > 0 ? (
-                  <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 custom-scrollbar">
-                    {previewImages.slice(0, 8).map((pImg, pIdx) => (
-                      <div
-                        key={pImg.id || pIdx}
-                        onClick={() => {
-                          triggerHaptic('light')
-                          setShowContactInfoModal(false)
-                          openLightbox(pImg.url, previewImages, pIdx)
-                        }}
-                        className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl overflow-hidden shrink-0 border border-white/10 cursor-pointer group hover:scale-105 active:scale-95 transition-all shadow-sm"
-                        title="Click to view photo"
-                      >
-                        <img src={pImg.url} alt="" className="w-full h-full object-cover group-hover:brightness-110 transition-all" />
+                {/* 3 Segmented Pill Tabs */}
+                <div className={`p-1.5 grid grid-cols-3 gap-1 border-b ${
+                  isLight ? 'border-slate-200/80 bg-slate-100/60' : 'border-[#27272a]/80 bg-[#121214]'
+                }`}>
+                  {/* Media Tab */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setContactMediaTab('media')
+                    }}
+                    className={`py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer select-none ${
+                      contactMediaTab === 'media'
+                        ? isLight 
+                          ? 'bg-white text-amber-800 shadow-xs border border-slate-200' 
+                          : 'bg-yellow-500/15 text-[#facc15] border border-yellow-500/30 shadow-xs shadow-yellow-500/10'
+                        : isLight
+                          ? 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                          : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
+                    }`}
+                  >
+                    <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                    <span>Media</span>
+                    <span className="text-[10px] opacity-75 font-mono">({allChatMedia.length})</span>
+                  </button>
+
+                  {/* Docs Tab */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setContactMediaTab('docs')
+                    }}
+                    className={`py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer select-none ${
+                      contactMediaTab === 'docs'
+                        ? isLight 
+                          ? 'bg-white text-amber-800 shadow-xs border border-slate-200' 
+                          : 'bg-yellow-500/15 text-[#facc15] border border-yellow-500/30 shadow-xs shadow-yellow-500/10'
+                        : isLight
+                          ? 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                          : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5 shrink-0" />
+                    <span>Docs</span>
+                    <span className="text-[10px] opacity-75 font-mono">({allChatDocs.length})</span>
+                  </button>
+
+                  {/* Links Tab */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setContactMediaTab('links')
+                    }}
+                    className={`py-1.5 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer select-none ${
+                      contactMediaTab === 'links'
+                        ? isLight 
+                          ? 'bg-white text-amber-800 shadow-xs border border-slate-200' 
+                          : 'bg-yellow-500/15 text-[#facc15] border border-yellow-500/30 shadow-xs shadow-yellow-500/10'
+                        : isLight
+                          ? 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                          : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
+                    }`}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                    <span>Links</span>
+                    <span className="text-[10px] opacity-75 font-mono">({allChatLinks.length})</span>
+                  </button>
+                </div>
+
+                {/* ── Tab 1 Content: Media (Photos & Videos) ── */}
+                {contactMediaTab === 'media' && (
+                  <div className="p-3">
+                    {allChatMedia.length > 0 ? (
+                      <div className="grid grid-cols-4 gap-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+                        {allChatMedia.map((mItem, mIdx) => {
+                          const imgIdx = allChatImages.findIndex((img) => sameId(img.id, mItem.id))
+                          return (
+                            <div
+                              key={mItem.id || mIdx}
+                              onClick={() => {
+                                triggerHaptic('light')
+                                if (mItem.type === 'image' || imgIdx >= 0) {
+                                  setShowContactInfoModal(false)
+                                  openLightbox(mItem.url, allChatImages, imgIdx >= 0 ? imgIdx : 0)
+                                } else if (mItem.type === 'video') {
+                                  window.open(mItem.url, '_blank', 'noopener,noreferrer')
+                                }
+                              }}
+                              className="group/item relative aspect-square rounded-xl overflow-hidden border border-white/10 cursor-pointer hover:scale-105 active:scale-95 transition-all shadow-xs bg-black/20"
+                              title={mItem.caption || (mItem.type === 'video' ? 'Click to open video' : 'Click to view photo')}
+                            >
+                              {mItem.type === 'video' ? (
+                                <div className="w-full h-full flex items-center justify-center bg-zinc-900 text-white relative">
+                                  <Video className="w-6 h-6 text-amber-400 opacity-80" />
+                                  <span className="absolute bottom-1 right-1 p-0.5 rounded bg-black/70 text-[9px] font-bold text-white flex items-center gap-0.5">
+                                    <Play className="w-2.5 h-2.5 fill-white" />
+                                  </span>
+                                </div>
+                              ) : mItem.type === 'audio' ? (
+                                <div className="w-full h-full flex items-center justify-center bg-amber-500/15 text-amber-500">
+                                  <Music className="w-6 h-6" />
+                                </div>
+                              ) : (
+                                <img
+                                  src={mItem.url}
+                                  alt=""
+                                  className="w-full h-full object-cover group-hover/item:brightness-110 transition-all"
+                                  loading="lazy"
+                                />
+                              )}
+                              <div className="absolute inset-0 bg-black/30 opacity-0 group-hover/item:opacity-100 transition-opacity flex items-center justify-center">
+                                <Maximize2 className="w-4 h-4 text-white drop-shadow" />
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
-                    ))}
+                    ) : (
+                      <div className="py-6 flex flex-col items-center justify-center text-center gap-2">
+                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                          isLight ? 'bg-amber-100 text-amber-700' : 'bg-yellow-500/10 text-yellow-500'
+                        }`}>
+                          <ImageIcon className="w-5 h-5 opacity-80" />
+                        </div>
+                        <p className="text-xs font-semibold opacity-60">No photos or videos shared yet</p>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <p className="text-xs opacity-50 py-1">No photos or media shared yet</p>
+                )}
+
+                {/* ── Tab 2 Content: Docs (PDFs & Documents) ── */}
+                {contactMediaTab === 'docs' && (
+                  <div className="p-3">
+                    {allChatDocs.length > 0 ? (
+                      <div className="space-y-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+                        {allChatDocs.map((doc, dIdx) => (
+                          <div
+                            key={doc.id || dIdx}
+                            className={`p-2.5 rounded-xl border flex items-center justify-between gap-2.5 transition-all ${
+                              isLight 
+                                ? 'bg-white hover:bg-slate-100 border-slate-200' 
+                                : 'bg-[#141417] hover:bg-[#1c1c21] border-[#27272a]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                              <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-blue-500/15 text-blue-500 shrink-0 border border-blue-500/20">
+                                <FileText className="w-4.5 h-4.5" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-bold truncate leading-tight" title={doc.name}>
+                                  {doc.name}
+                                </p>
+                                <span className="text-[10px] opacity-60 font-mono">
+                                  {doc.created_at ? formatTime(doc.created_at) : 'Document'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  triggerHaptic('light')
+                                  const copied = await copyTextToClipboard(doc.url)
+                                  if (copied) toast.success('Document link copied!')
+                                  else toast.error('Could not copy document link')
+                                }}
+                                className="p-1.5 rounded-lg opacity-60 hover:opacity-100 hover:bg-white/10 transition cursor-pointer"
+                                title="Copy link"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                              </button>
+                              <a
+                                href={doc.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                download
+                                onClick={() => triggerHaptic('light')}
+                                className="p-1.5 rounded-lg bg-blue-500/15 text-blue-500 hover:bg-blue-500/25 transition cursor-pointer"
+                                title="Download / Open Document"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="py-6 flex flex-col items-center justify-center text-center gap-2">
+                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                          isLight ? 'bg-blue-100 text-blue-700' : 'bg-blue-500/10 text-blue-400'
+                        }`}>
+                          <FileText className="w-5 h-5 opacity-80" />
+                        </div>
+                        <p className="text-xs font-semibold opacity-60">No documents or files shared yet</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Tab 3 Content: Links (Web URLs) ── */}
+                {contactMediaTab === 'links' && (
+                  <div className="p-3">
+                    {allChatLinks.length > 0 ? (
+                      <div className="space-y-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+                        {allChatLinks.map((linkItem, lIdx) => (
+                          <div
+                            key={linkItem.id || lIdx}
+                            className={`p-2.5 rounded-xl border flex items-center justify-between gap-2.5 transition-all ${
+                              isLight 
+                                ? 'bg-white hover:bg-slate-100 border-slate-200' 
+                                : 'bg-[#141417] hover:bg-[#1c1c21] border-[#27272a]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                              <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-emerald-500/15 text-emerald-500 shrink-0 border border-emerald-500/20">
+                                <ExternalLink className="w-4 h-4" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={`text-[10px] font-black uppercase px-1.5 py-0.2 rounded font-mono ${
+                                    isLight ? 'bg-emerald-100 text-emerald-800' : 'bg-emerald-500/15 text-emerald-400'
+                                  }`}>
+                                    {linkItem.domain}
+                                  </span>
+                                  {linkItem.created_at && (
+                                    <span className="text-[10px] opacity-50 font-mono">
+                                      {formatTime(linkItem.created_at)}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-blue-400 truncate hover:underline pt-0.5" title={linkItem.url}>
+                                  {linkItem.url}
+                                </p>
+                                {linkItem.messageSnippet && (
+                                  <p className="text-[11px] opacity-70 truncate italic">
+                                    "{linkItem.messageSnippet}"
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  triggerHaptic('light')
+                                  const copied = await copyTextToClipboard(linkItem.url)
+                                  if (copied) toast.success('Link copied to clipboard!')
+                                  else toast.error('Could not copy link')
+                                }}
+                                className="p-1.5 rounded-lg opacity-60 hover:opacity-100 hover:bg-white/10 transition cursor-pointer"
+                                title="Copy URL"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                              </button>
+                              <a
+                                href={linkItem.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => triggerHaptic('light')}
+                                className="p-1.5 rounded-lg bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25 transition cursor-pointer"
+                                title="Open URL in new tab"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="py-6 flex flex-col items-center justify-center text-center gap-2">
+                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                          isLight ? 'bg-emerald-100 text-emerald-700' : 'bg-emerald-500/10 text-emerald-400'
+                        }`}>
+                          <ExternalLink className="w-5 h-5 opacity-80" />
+                        </div>
+                        <p className="text-xs font-semibold opacity-60">No links shared in this conversation</p>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 
               {/* Encryption & Security Verification Card */}
-              <div className={`p-4 rounded-2xl border space-y-2.5 ${
+              <div className={`p-4 rounded-2xl border space-y-3 ${
                 isLight 
                   ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950' 
                   : 'bg-emerald-950/20 border-emerald-500/30 text-emerald-100'
@@ -8705,23 +10085,34 @@ export default function ChatConversation() {
                     <Lock className="w-4 h-4 shrink-0" />
                     <span>End-to-End Encrypted (ECDH v2)</span>
                   </div>
-                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-500 border border-emerald-500/30">
-                    Verified
+                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${
+                    verifiedContacts[activeConversation.id]
+                      ? 'bg-emerald-500 text-white border-emerald-600 shadow-xs'
+                      : 'bg-emerald-500/20 text-emerald-500 border-emerald-500/30'
+                  }`}>
+                    {verifiedContacts[activeConversation.id] ? 'Verified ✓' : 'ECDH Active'}
                   </span>
                 </div>
                 <p className="text-[11px] leading-relaxed opacity-85">
                   Messages in this conversation are cryptographically secured with client-side ECDH keys. Nobody outside this chat, not even JDLX servers, can read your text messages.
                 </p>
 
-                {/* Safety Number Fingerprint (Signal/WhatsApp standard) */}
-                <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 font-mono text-[11px] ${
-                  isLight 
-                    ? 'bg-white/80 border-emerald-200 text-emerald-900' 
-                    : 'bg-[#101014]/80 border-emerald-500/20 text-emerald-300'
-                }`}>
+                {/* Safety Number Fingerprint (Signal/WhatsApp standard - Clickable) */}
+                <div 
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setShowSafetyVerificationModal(true)
+                  }}
+                  className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 font-mono text-[11px] cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all ${
+                    isLight 
+                      ? 'bg-white/80 hover:bg-white border-emerald-200 text-emerald-900 shadow-xs' 
+                      : 'bg-[#101014]/80 hover:bg-[#15151a] border-emerald-500/20 text-emerald-300'
+                  }`}
+                  title="Click to view full security code & QR"
+                >
                   <div className="min-w-0">
                     <span className="text-[9px] uppercase tracking-wider block font-bold text-emerald-600 dark:text-emerald-400">
-                      Safety Key Fingerprint
+                      Safety Key Fingerprint (Tap to verify)
                     </span>
                     <span className="tracking-widest font-black text-xs">
                       {formatSafetyFingerprint(activeConversation.id, activeConversation.contact_public_key)}
@@ -8729,6 +10120,30 @@ export default function ChatConversation() {
                   </div>
                   <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
                 </div>
+
+                {/* Direct Button to open QR & 60-digit Verification Modal */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setShowSafetyVerificationModal(true)
+                  }}
+                  className={`w-full py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-between transition-all active:scale-95 cursor-pointer shadow-xs ${
+                    verifiedContacts[activeConversation.id]
+                      ? 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600 shadow-emerald-500/20'
+                      : isLight
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-emerald-600/15'
+                        : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <QrCode className="w-4 h-4" />
+                    <span>
+                      {verifiedContacts[activeConversation.id] ? 'Security Code Verified (View QR)' : 'Verify Security Code & QR'}
+                    </span>
+                  </div>
+                  <ChevronRight className="w-3.5 h-3.5 opacity-70" />
+                </button>
               </div>
 
               {/* Chat Management & Safety (Destructive Actions) */}
@@ -8738,17 +10153,23 @@ export default function ChatConversation() {
                 {/* Clear Conversation */}
                 <button
                   type="button"
-                  onClick={async () => {
+                  onClick={() => {
                     triggerHaptic('medium')
-                    if (window.confirm(`Clear all messages in chat with ${activeConversation.contact_name}?`)) {
-                      const ok = await clearChatHistory(activeRoomId)
-                      if (ok) {
-                        setShowContactInfoModal(false)
-                        toast.success('Conversation cleared')
-                      } else {
-                        toast.error('Could not clear conversation')
-                      }
-                    }
+                    requestConfirm({
+                      title: 'Clear conversation?',
+                      message: `Clear all messages in chat with ${getContactDisplayName(activeConversation)}? This cannot be undone.`,
+                      confirmLabel: 'Clear',
+                      destructive: true,
+                      onConfirm: async () => {
+                        const ok = await clearChatHistory(activeRoomId)
+                        if (ok) {
+                          setShowContactInfoModal(false)
+                          toast.success('Conversation cleared')
+                        } else {
+                          toast.error('Could not clear conversation')
+                        }
+                      },
+                    })
                   }}
                   className={`w-full px-4 py-3 text-left text-xs font-bold flex items-center justify-between transition-colors cursor-pointer ${
                     isLight ? 'hover:bg-slate-100 text-slate-800' : 'hover:bg-[#202026] text-zinc-200'
@@ -8814,6 +10235,288 @@ export default function ChatConversation() {
         </div>
       )}
 
+      {/* ── INTERACTIVE E2EE SAFETY CODE & QR VERIFICATION MODAL (Item 2.3) ── */}
+      {showSafetyVerificationModal && activeConversation && (
+        <div
+          onClick={() => setShowSafetyVerificationModal(false)}
+          className="fixed inset-0 bg-black/85 backdrop-blur-xl z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            ref={safetyDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Safety number verification"
+            tabIndex={-1}
+            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 max-h-[92dvh] flex flex-col ${
+              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+            }`}
+          >
+            {/* Top Sheet Grab Handle & Header */}
+            <div className="relative pt-3 pb-2 px-5 sm:px-6 bg-gradient-to-b from-emerald-500/15 via-emerald-500/5 to-transparent shrink-0">
+              <SheetGrabHandle onDismiss={() => setShowSafetyVerificationModal(false)} />
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-[11px] font-black uppercase tracking-wider text-emerald-500 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4" />
+                  Verify Security Code
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setShowSafetyVerificationModal(false)
+                  }}
+                  className={`p-1.5 rounded-full border transition-all cursor-pointer ${
+                    isLight 
+                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200' 
+                      : 'bg-[#1a1a20] hover:bg-[#25252c] text-zinc-300 border-[#2f2f38]'
+                  }`}
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Content */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-4 space-y-4 custom-scrollbar text-center">
+              <div className="space-y-1">
+                <h3 className="text-base sm:text-lg font-black tracking-tight flex items-center justify-center gap-1.5">
+                  <span>{getContactDisplayName(activeConversation)}</span>
+                  <ShieldCheck className={`w-4.5 h-4.5 ${verifiedContacts[activeConversation.id] ? 'text-emerald-500' : 'text-zinc-400'}`} />
+                </h3>
+                <p className="text-xs text-zinc-400 max-w-xs mx-auto leading-relaxed">
+                  Messages and files with @{activeConversation.contact_username} are cryptographically secured with client-side ECDH keys.
+                </p>
+              </div>
+
+              {/* QR Code Container */}
+              <div className="flex flex-col items-center justify-center py-1">
+                <div className="relative p-3 rounded-2xl bg-white border-2 border-emerald-500/40 shadow-xl shadow-emerald-500/10 flex items-center justify-center">
+                  {qrCodeDataUrl ? (
+                    <img
+                      src={qrCodeDataUrl}
+                      alt="E2EE Verification QR Code"
+                      className="w-44 h-44 sm:w-48 sm:h-48 object-contain"
+                    />
+                  ) : (
+                    <div className="w-44 h-44 sm:w-48 sm:h-48 flex items-center justify-center">
+                      <RotateCw className="w-8 h-8 animate-spin text-emerald-500" />
+                    </div>
+                  )}
+                  {/* Center Lock Badge */}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="w-9 h-9 rounded-xl bg-white shadow-lg border-2 border-emerald-500 flex items-center justify-center text-emerald-600">
+                      <Lock className="w-4.5 h-4.5 fill-emerald-500/20" />
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10.5px] text-zinc-400 font-mono mt-2">
+                  Scan code with another device to verify
+                </span>
+              </div>
+
+              {/* 60-Digit Safety Number Grid */}
+              <div className={`p-3.5 rounded-2xl border space-y-2 text-left ${
+                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181c] border-[#27272a]'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-500 font-mono">
+                    60-Digit Safety Number
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      triggerHaptic('light')
+                      const copied = await copyTextToClipboard(safetyNumberBlocks.join('  '))
+                      if (copied) toast.success('60-digit safety number copied!')
+                      else toast.error('Could not copy safety number')
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-500 hover:text-amber-400 cursor-pointer"
+                    title="Copy all digits"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>Copy All</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 font-mono text-center">
+                  {safetyNumberBlocks.length > 0 ? (
+                    safetyNumberBlocks.map((block, bIdx) => (
+                      <div
+                        key={bIdx}
+                        className={`py-1.5 px-1 rounded-lg text-xs sm:text-sm font-black tracking-widest border select-all ${
+                          isLight 
+                            ? 'bg-white border-slate-200 text-slate-800' 
+                            : 'bg-[#121215] border-[#292930] text-emerald-400'
+                        }`}
+                      >
+                        {block}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="col-span-3 py-2 text-center text-xs opacity-50">
+                      Generating safety key digits…
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Verification Status & Toggle Action */}
+              <div className="pt-1 pb-2 space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => toggleContactVerification(activeConversation.id)}
+                  className={`w-full py-3 px-4 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer shadow-md ${
+                    verifiedContacts[activeConversation.id]
+                      ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/25'
+                      : isLight
+                        ? 'bg-slate-900 hover:bg-slate-800 text-white'
+                        : 'bg-[#facc15] hover:bg-[#eab308] text-black shadow-yellow-500/20'
+                  }`}
+                >
+                  <ShieldCheck className="w-4.5 h-4.5" />
+                  <span>
+                    {verifiedContacts[activeConversation.id]
+                      ? 'Verified Contact ✓ (Tap to unmark)'
+                      : 'Mark as Verified'}
+                  </span>
+                </button>
+
+                <p className="text-[11px] text-zinc-400 leading-relaxed max-w-sm mx-auto">
+                  To verify that messages are protected from interception or impersonation, compare the 60-digit number above with {getContactDisplayName(activeConversation)}.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DISAPPEARING MESSAGES SELECTOR MODAL (Telegram / WhatsApp Standard) ── */}
+      {showDisappearingModal && activeConversation && (
+        <div
+          onClick={() => setShowDisappearingModal(false)}
+          className="fixed inset-0 bg-black/85 backdrop-blur-xl z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            ref={disappearingDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Disappearing messages"
+            tabIndex={-1}
+            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 max-h-[92dvh] flex flex-col ${
+              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+            }`}
+          >
+            {/* Modal Header */}
+            <div className="relative pt-3 pb-2 px-5 sm:px-6 bg-gradient-to-b from-amber-500/15 via-yellow-500/5 to-transparent shrink-0">
+              <SheetGrabHandle onDismiss={() => setShowDisappearingModal(false)} />
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-[11px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
+                  <Timer className="w-4 h-4" />
+                  Disappearing Messages
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setShowDisappearingModal(false)
+                  }}
+                  className={`p-1.5 rounded-full border transition-all cursor-pointer ${
+                    isLight 
+                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200' 
+                      : 'bg-[#1a1a20] hover:bg-[#25252c] text-zinc-300 border-[#2f2f38]'
+                  }`}
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Content & Options */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-4 space-y-4 custom-scrollbar">
+              {/* Hero explanation */}
+              <div className="space-y-1 text-center">
+                <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                  <Timer className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-black tracking-tight pt-1">
+                  Message Privacy &amp; Auto-Delete
+                </h3>
+                <p className="text-xs text-zinc-400 leading-relaxed max-w-xs mx-auto">
+                  Set messages in your chat with <span className="font-bold text-amber-400">{getContactDisplayName(activeConversation)}</span> to automatically vanish.
+                </p>
+              </div>
+
+              {/* Radio Options List */}
+              <div className="space-y-2">
+                {DISAPPEARING_OPTIONS.map((opt) => {
+                  const isSelected = currentDisappearingMode === opt.id
+                  return (
+                    <div
+                      key={opt.id}
+                      onClick={() => {
+                        setRoomDisappearingMode(activeRoomId, opt.id)
+                        setTimeout(() => setShowDisappearingModal(false), 200)
+                      }}
+                      className={`p-3 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer transition-all active:scale-[0.98] ${
+                        isSelected
+                          ? isLight 
+                            ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/40 text-amber-950 shadow-xs' 
+                            : 'bg-yellow-500/15 border-yellow-500/60 ring-2 ring-yellow-500/30 text-white shadow-xs'
+                          : isLight
+                            ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
+                            : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+                          isSelected
+                            ? 'bg-amber-500 text-black border-amber-400'
+                            : 'bg-black/10 dark:bg-white/10 text-zinc-400 border-transparent'
+                        }`}>
+                          {opt.id === 'seen' ? (
+                            <Zap className="w-4 h-4 fill-current" />
+                          ) : opt.id === 'off' ? (
+                            <X className="w-4 h-4" />
+                          ) : (
+                            <Timer className="w-4 h-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold leading-tight flex items-center gap-1.5">
+                            <span>{opt.label}</span>
+                            {opt.id === 'seen' && (
+                              <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                View Once
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-[11px] opacity-70 leading-tight pt-0.5">
+                            {opt.subtitle}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Radio Circle */}
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
+                        isSelected
+                          ? 'border-amber-400 bg-amber-400'
+                          : 'border-zinc-500/40 bg-transparent'
+                      }`}>
+                        {isSelected && <div className="w-2 h-2 rounded-full bg-black" />}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── DRAG & DROP LUXURY VIEWPORT DROPZONE OVERLAY (Item 4) ── */}
       {isDraggingOver && activeConversation && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-6 select-none animate-in fade-in duration-150 pointer-events-none">
@@ -8828,7 +10531,7 @@ export default function ChatConversation() {
               <p className="text-xs text-zinc-400 font-medium max-w-xs">
                 Drop your image here to preview, crop, add captions, and send to{' '}
                 <span className="text-[#facc15] font-bold">
-                  {activeConversation.contact_name || 'chat'}
+                  {getContactDisplayName(activeConversation) || 'chat'}
                 </span>
               </p>
             </div>
@@ -8848,6 +10551,11 @@ export default function ChatConversation() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
+            ref={pwaDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Install app"
+            tabIndex={-1}
             className={`w-full max-w-sm rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl p-5 sm:p-6 space-y-4 animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
             }`}
@@ -8929,6 +10637,67 @@ export default function ChatConversation() {
                 </p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* In-app confirm sheet (replaces blocking window.confirm) */}
+      {confirmDialog && (
+        <div
+          role="presentation"
+          onClick={() => setConfirmDialog(null)}
+          className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirm-dialog-title"
+            aria-describedby="confirm-dialog-message"
+            ref={confirmDialogRef}
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-sm rounded-3xl border p-5 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150 ${
+              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
+            }`}
+          >
+            <div className="space-y-1.5">
+              <h3 id="confirm-dialog-title" className="text-base font-black tracking-tight">
+                {confirmDialog.title || 'Are you sure?'}
+              </h3>
+              <p id="confirm-dialog-message" className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                {confirmDialog.message}
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setConfirmDialog(null)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold border transition active:scale-95 ${
+                  isLight ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50' : 'bg-[#1a1a20] border-[#2f2f38] text-zinc-300 hover:bg-[#25252c]'
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const action = confirmDialog.onConfirm
+                  setConfirmDialog(null)
+                  if (action) {
+                    Promise.resolve().then(action).catch((err) => {
+                      console.warn('Confirm action failed:', err)
+                      toast.error('Something went wrong. Please try again.')
+                    })
+                  }
+                }}
+                className={`px-4 py-2 rounded-xl text-xs font-black text-white transition active:scale-95 ${
+                  confirmDialog.destructive ? 'bg-rose-600 hover:bg-rose-700' : 'bg-amber-500 hover:bg-amber-600'
+                }`}
+              >
+                {confirmDialog.confirmLabel || 'Confirm'}
+              </button>
+            </div>
           </div>
         </div>
       )}

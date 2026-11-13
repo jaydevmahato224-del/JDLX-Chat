@@ -271,6 +271,39 @@ body::before {
   background: transparent !important; 
 }
 
+/* Alias used by horizontal filmstrips/carousels in the chat UI. */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Slim, theme-aware scrollbar for modal/drawer content. Without this the
+   browser paints its default chunky scrollbar over rounded corners. */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.65);
+}
+
 /* Horizontal carousels (category circles, product rows, banners) must never
    chain a swipe at their scroll edge into the PAGE or into browser
    back/forward navigation — on touch devices Chrome turns that edge-overscroll
@@ -1654,6 +1687,22 @@ html, body {
 .animate-message-entrance {
   animation: chatMessageEntrance 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
   will-change: transform, opacity;
+}
+
+/* Visible keyboard focus ring. Tailwind's `outline-none` on clickable rows
+   removed the only focus indicator, leaving keyboard users lost. Mouse clicks
+   are unaffected because this only targets :focus-visible. */
+:where(a, button, input, select, textarea, summary, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid #facc15;
+  outline-offset: 2px;
+}
+
+/* Keep long conversations cheap to paint: rows outside the viewport skip
+   layout/paint until scrolled near. `auto` remembers each row's real height
+   after its first render, so the scrollbar does not jump around. */
+.chat-message-row {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 72px;
 }
 
 

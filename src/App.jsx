@@ -1,12 +1,15 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from './store/useChatStore'
 import { initChatNativePush, syncChatPushToken } from './utils/nativePush'
 
-import ChatLogin from './pages/ChatLogin'
-import ChatConversation from './pages/ChatConversation'
-import RecoveryPinModal from './components/RecoveryPinModal'
+// Route-level code splitting: the login screen no longer downloads the ~10k-line
+// chat screen (and QRCode/emoji/lightbox code) before the user is authenticated.
+const ChatLogin = lazy(() => import('./pages/ChatLogin'))
+const ChatConversation = lazy(() => import('./pages/ChatConversation'))
+const RecoveryPinModal = lazy(() => import('./components/RecoveryPinModal'))
 
 // Standalone Official Chat — routes only exist for this app; the JDLX Store is
 // a separate frontend (external link back to the store opens a new tab).
@@ -18,7 +21,7 @@ function App() {
     setSystemPrefersDark,
     fetchChatBranding,
     initRealtimeAuth
-  } = useChatStore()
+  } = useChatStore(useShallow((state) => state))
 
   // Load the official room branding once (Fetch official chat name & logo)
   useEffect(() => {
@@ -75,6 +78,15 @@ function App() {
 
   const isChatAuthed = Boolean(chatToken && chatUser)
   const isDark = resolvedChatTheme === 'dark'
+  const routeFallback = (
+    <div
+      role="status"
+      aria-label="Loading"
+      className={`min-h-[100dvh] flex items-center justify-center ${isDark ? 'bg-[#09090b]' : 'bg-white'}`}
+    >
+      <div className="w-8 h-8 rounded-full border-2 border-zinc-500/30 border-t-[#facc15] animate-spin" />
+    </div>
+  )
 
   return (
     <Router>
@@ -97,6 +109,7 @@ function App() {
         }}
       />
 
+      <Suspense fallback={routeFallback}>
       <Routes>
         {/* Direct Root Route: instant landing on /chat when logged in, without flashing /login */}
         <Route
@@ -135,6 +148,7 @@ function App() {
 
       {/* PIN-encrypted E2EE key backup: setup on this device, unlock on a new one. */}
       <RecoveryPinModal />
+      </Suspense>
     </Router>
   )
 }

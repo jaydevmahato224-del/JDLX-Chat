@@ -1,5 +1,7 @@
 // JDLX Chat Standalone Service Worker
-const CACHE_NAME = 'jdlx-chat-cache-v23-20261112-viewport-keyboard-fix';
+// __BUILD_ID__ is replaced with a unique value on every production build, so a
+// deploy automatically invalidates the old app shell instead of serving stale JS.
+const CACHE_NAME = 'jdlx-chat-cache-v24-__BUILD_ID__';
 const CHAT_APP_SHELL = [
   '/',
   '/index.html',

@@ -7,9 +7,19 @@ import './index.css'
 // Standalone JDLX Official Chat app — completely separate from the storefront.
 // This document/app shares zero auth state with jdlxmobile.in.
 
-// Auto-heal dynamic chunk preload errors (prevents blank screen after new bundle builds)
+// Auto-heal dynamic chunk preload errors (prevents blank screen after new bundle builds).
+// Guard against a reload loop: if the freshly loaded bundle still references a
+// missing chunk (bad CDN/proxy cache), reloading forever would trap the user.
+const CHUNK_RELOAD_KEY = 'jdlx_chunk_reloaded'
 window.addEventListener('vite:preloadError', (event) => {
   event.preventDefault()
+  try {
+    const lastReload = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) || 0)
+    if (Date.now() - lastReload < 15000) return
+    sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()))
+  } catch {
+    // sessionStorage unavailable (private mode/quota): still attempt one reload.
+  }
   window.location.reload()
 })
 

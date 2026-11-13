@@ -26,6 +26,7 @@ import {
   ExternalLink,
   Download
 } from 'lucide-react'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
 import { API_BASE_URL, resolveMediaUrl, isCapacitorNative } from '../config'
 import { apiFetch } from '../utils/apiFetch'
@@ -145,6 +146,16 @@ const GoogleIcon = () => (
 export default function ChatLogin() {
   const navigate = useNavigate()
 
+  // Warm the chat bundle while the user is still on the login screen so the
+  // post-login transition does not wait on the lazy route download. Runs idle,
+  // fails silently, and the route's own import() stays the source of truth.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      import('./ChatConversation.jsx').catch(() => {})
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [])
+
   const {
     chatToken,
     chatUser,
@@ -160,7 +171,7 @@ export default function ChatLogin() {
     completeGoogleSignup,
     setChatAuth,
     loading
-  } = useChatStore()
+  } = useChatStore(useShallow((state) => state))
 
   useEffect(() => {
     fetchChatBranding()

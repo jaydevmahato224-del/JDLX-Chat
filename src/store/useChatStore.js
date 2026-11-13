@@ -182,6 +182,70 @@ export const sortChatMessages = (a, b) => {
   return a.id - b.id
 }
 
+// ── Optimistic message reconciliation ────────────────────────────────────────
+// The send API does not echo a client identifier, so an optimistic bubble and
+// its server row are paired on content plus a "server id floor" captured when
+// the bubble was created. The important part is pairing 1:1: the previous
+// text-only checks let one server row confirm every pending bubble with that
+// text (two identical messages → one silently disappeared) and let a fresh
+// send be mistaken for an older message with identical text.
+const isOptimisticMessage = (m) => Boolean(m) && typeof m.id === 'number' && m.id < 0
+
+const maxConfirmedMessageId = (messages) => (messages || []).reduce(
+  (max, m) => (m && typeof m.id === 'number' && m.id > max ? m.id : max),
+  0
+)
+
+const optimisticMatchesServer = (opt, server) => {
+  if (!isOptimisticMessage(opt) || !server) return false
+  if (typeof server.id !== 'number' || server.id <= 0) return false
+  if (!sameId(server.user_id, opt.user_id)) return false
+  const floor = Number(opt._baseMaxId)
+  // Without a baseline a server row cannot be told apart from an older message
+  // with identical text, so never drop the pending bubble in that case.
+  if (!Number.isFinite(floor) || server.id <= floor) return false
+  if (opt.media_url && server.media_url) return server.media_url === opt.media_url
+  if (opt.media_url || server.media_url) return false
+  return (server.message || '') === (opt.message || '')
+}
+
+// Remove only the optimistic bubbles that have their OWN server row. Each
+// confirmed row can confirm at most one bubble, so duplicate texts keep the
+// still-unconfirmed bubble (and its retry affordance) alive.
+const unreconciledOptimistic = (confirmed, optimistic) => {
+  const pool = (confirmed || []).filter((m) => m && typeof m.id === 'number' && m.id > 0)
+  const claimed = new Set()
+  const remaining = []
+  for (const opt of optimistic || []) {
+    const match = pool.find((server) => !claimed.has(server.id) && optimisticMatchesServer(opt, server))
+    if (match) claimed.add(match.id)
+    else remaining.push(opt)
+  }
+  return remaining
+}
+
+// Used by the failure path: only treat a send as confirmed when a matching
+// self-message arrived AFTER the bubble was created, and when that server row
+// is not already claimable by an earlier identical pending send.
+const hasFreshConfirmation = (messages, optimistic, text, mediaUrl, myId) => {
+  if (!optimistic) return false
+  const floor = Number(optimistic._baseMaxId)
+  if (!Number.isFinite(floor)) return false
+  const sameContent = (m) => (
+    mediaUrl ? m.media_url === mediaUrl : (m.message || '') === (text || '')
+  )
+  const confirmations = (messages || []).filter((m) => (
+    m && typeof m.id === 'number' && m.id > 0 && m.id > floor
+    && sameId(m.user_id, myId) && sameContent(m)
+  ))
+  if (!confirmations.length) return false
+  const olderPending = (messages || []).filter((m) => (
+    isOptimisticMessage(m) && m.id !== optimistic.id && sameContent(m)
+    && Number(m._sentAt || 0) < Number(optimistic._sentAt || 0)
+  ))
+  return confirmations.length > olderPending.length
+}
+
 // -----------------------------------------------------------------------------
 // INSTANT HYDRATION CACHE (Stale-While-Revalidate)
 // Ensures conversations, friends, and active chat load in 0ms on startup / refresh
@@ -699,6 +763,11 @@ export const useChatStore = create((set, get) => ({
   sending: false,
   conversationsLoading: Boolean(getStoredChatToken() && (!INITIAL_CONVERSATIONS || INITIAL_CONVERSATIONS.length === 0)),
   conversationsLoaded: INITIAL_CONVERSATIONS.length > 0,
+  // Distinguishes "inbox is empty" from "inbox request failed". The UI used to
+  // show "No chats yet" for both, so an expired token looked like a new account.
+  conversationsError: null,
+  messagesError: null,
+  _presenceVisibilityHandler: null,
   error: null,
 
   fetchChatBranding: async () => {
@@ -898,6 +967,7 @@ export const useChatStore = create((set, get) => ({
       pendingRequestsCount: 0,
       messages: [],
       messagesLoading: false,
+      messagesError: null,
       messagesHasMore: false,
       loadingOlderMessages: false,
       identityKeypair: null,
@@ -907,6 +977,7 @@ export const useChatStore = create((set, get) => ({
       identityNeedsPassphrase: false,
       conversationsLoading: false,
       conversationsLoaded: false,
+      conversationsError: null,
       peerTyping: false,
       peerOnline: false,
       _peerPresenceKnown: false,
@@ -1360,7 +1431,7 @@ export const useChatStore = create((set, get) => ({
     if (!token) return
 
     conversationsInFlight = (async () => {
-      set({ conversationsLoading: true })
+      set({ conversationsLoading: true, conversationsError: null })
       // Read the local E2EE key and fetch the inbox at the same time. The old
       // code waited for the key-publish POST first, so a cold open showed the
       // empty "No chats yet" screen for the whole round trip.
@@ -1372,7 +1443,11 @@ export const useChatStore = create((set, get) => ({
         })
         const json = await res.json()
         if (!res.ok || !json.success) {
-          set({ conversationsLoaded: true, conversationsLoading: false })
+          set({
+            conversationsLoaded: true,
+            conversationsLoading: false,
+            conversationsError: json?.error || 'Could not load your chats',
+          })
           return
         }
 
@@ -1406,7 +1481,7 @@ export const useChatStore = create((set, get) => ({
           })
         )
         if (get().chatToken !== token) return
-        set({ conversations: decryptedConvs, conversationsLoaded: true, conversationsLoading: false })
+        set({ conversations: decryptedConvs, conversationsLoaded: true, conversationsLoading: false, conversationsError: null })
 
         // Auto-unlock: If open room currently holds any locked messages, re-decrypt them now with the fresh contact keys
         if (get().activeRoomId && get().messages.some((m) => m._locked)) {
@@ -1434,7 +1509,11 @@ export const useChatStore = create((set, get) => ({
         }
       } catch (e) {
         if (get().chatToken === token) {
-          set({ conversationsLoaded: true, conversationsLoading: false })
+          set({
+            conversationsLoaded: true,
+            conversationsLoading: false,
+            conversationsError: 'Could not load your chats. Check your connection.',
+          })
         }
         console.warn('Fetch conversations error:', e)
       }
@@ -1524,7 +1603,9 @@ export const useChatStore = create((set, get) => ({
     const query = newestId ? `?after_id=${newestId}&limit=200` : '?limit=200'
 
     if (existing.length === 0) {
-      set({ messagesLoading: true })
+      set({ messagesLoading: true, messagesError: null })
+    } else {
+      set({ messagesError: null })
     }
 
     // Load the key alongside the request; do not block the messages on the
@@ -1564,10 +1645,10 @@ export const useChatStore = create((set, get) => ({
           const confirmed = [...byId.values()]
           merged = [
             ...confirmed,
-            ...optimistic.filter((o) => !confirmed.some((d) => d.message === o.message))
+            ...unreconciledOptimistic(confirmed, optimistic)
           ]
           merged.sort(sortChatMessages)
-          set({ messages: merged, messagesHasMore: rawMsgs.length >= 200, messagesLoading: false })
+          set({ messages: merged, messagesHasMore: rawMsgs.length >= 200, messagesLoading: false, messagesError: null })
         } else {
           // Re-decrypt any existing messages that were previously locked
           const redecryptedExisting = await Promise.all(
@@ -1579,25 +1660,35 @@ export const useChatStore = create((set, get) => ({
             })
           )
           const serverIds = new Set(decryptedMsgs.map((m) => m.id))
-          const serverTexts = new Set(decryptedMsgs.map((m) => m.message))
-          // Clean up any orphan optimistic bubbles that are now confirmed by the server
-          const cleanedExisting = redecryptedExisting.filter((m) => {
-            if (typeof m.id === 'number' && m.id < 0) {
-              return !serverTexts.has(m.message)
-            }
-            return !serverIds.has(m.id)
-          })
+          // Remove only optimistic bubbles that received their own server row.
+          // Existing confirmed rows are included too: a realtime delivery can
+          // land in state before this fetch, and then the incremental page no
+          // longer contains the row that confirms the bubble.
+          const existingConfirmed = redecryptedExisting.filter(
+            (m) => m && typeof m.id === 'number' && m.id > 0
+          )
+          const remainingOptimistic = unreconciledOptimistic(
+            [...existingConfirmed, ...decryptedMsgs],
+            redecryptedExisting.filter(isOptimisticMessage)
+          )
+          const remainingOptimisticIds = new Set(remainingOptimistic.map((m) => m.id))
+          const cleanedExisting = redecryptedExisting.filter((m) => (
+            isOptimisticMessage(m) ? remainingOptimisticIds.has(m.id) : !serverIds.has(m.id)
+          ))
           merged = [...cleanedExisting, ...decryptedMsgs]
           merged.sort(sortChatMessages)
-          set({ messages: merged, messagesLoading: false })
+          set({ messages: merged, messagesLoading: false, messagesError: null })
         }
         const uid = get().chatUser?.id
         if (uid && merged.length > 0) {
           setCachedMessages(uid, targetRoomId, merged)
         }
-        // Send instant read receipt over Supabase WebSocket to turn peer tick into double tick
+        // Send instant read receipt over Supabase WebSocket to turn peer tick into double tick.
+        // Skip while the tab/window is hidden: a desktop tab in the background is not
+        // actually being read, so the sender should not get blue ticks yet.
+        const isPageVisible = typeof document === 'undefined' || document.visibilityState === 'visible'
         const peerMsgs = merged.filter((m) => m && !sameId(m.user_id, uid))
-        if (peerMsgs.length > 0) {
+        if (isPageVisible && peerMsgs.length > 0) {
           const maxPeerMsgId = Math.max(...peerMsgs.map((m) => m.id))
           const roomChannel = get().supabaseRoomChannel
           if (roomChannel && maxPeerMsgId > 0) {
@@ -1622,7 +1713,11 @@ export const useChatStore = create((set, get) => ({
         set({ messagesLoading: false })
       }
     } catch (e) {
-      set({ messagesLoading: false })
+      const hasCached = get().messages.length > 0
+      set({
+        messagesLoading: false,
+        messagesError: hasCached ? null : 'Could not load messages. Check your connection.',
+      })
       console.warn('Fetch room messages error:', e)
     }
   },
@@ -1738,7 +1833,8 @@ export const useChatStore = create((set, get) => ({
               : 0
             // Read receipts are derived from fetched messages, never from a
             // spoofable broadcast id.
-            if (currentMyId && maxPeerMsgId > 0) {
+            const pageVisible = typeof document === 'undefined' || document.visibilityState === 'visible'
+            if (currentMyId && maxPeerMsgId > 0 && pageVisible) {
               channel.send({
                 type: 'broadcast',
                 event: 'read_receipt',
@@ -1849,7 +1945,9 @@ export const useChatStore = create((set, get) => ({
           .subscribe((status) => {
             if (status === 'SUBSCRIBED' && myId) {
               realtimePrivateFailures = 0
-              channel.track({ user_id: myId, online_at: Date.now() }).catch(() => {})
+              if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+                channel.track({ user_id: myId, online_at: Date.now() }).catch(() => {})
+              }
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
               // A 'CLOSED' status is also reported for our own teardown (room
               // switch, logout, or the fallback restart below). Reconnecting on
@@ -1868,7 +1966,26 @@ export const useChatStore = create((set, get) => ({
             }
           })
 
-        set({ supabaseRoomChannel: channel })
+        // Presence must mirror real availability. Without untracking, a hidden
+        // tab kept broadcasting "online" for as long as the socket stayed open.
+        const previousVisibilityHandler = get()._presenceVisibilityHandler
+        if (previousVisibilityHandler && typeof document !== 'undefined') {
+          document.removeEventListener('visibilitychange', previousVisibilityHandler)
+        }
+        const handlePresenceVisibility = () => {
+          if (!myId) return
+          try {
+            if (document.visibilityState === 'hidden') {
+              channel.untrack().catch(() => {})
+            } else {
+              channel.track({ user_id: myId, online_at: Date.now() }).catch(() => {})
+            }
+          } catch { /* ignore */ }
+        }
+        if (typeof document !== 'undefined') {
+          document.addEventListener('visibilitychange', handlePresenceVisibility)
+        }
+        set({ supabaseRoomChannel: channel, _presenceVisibilityHandler: handlePresenceVisibility })
         } catch (err) {
           console.warn('[SUPABASE REALTIME] Room channel init error:', err)
         }
@@ -1902,15 +2019,25 @@ export const useChatStore = create((set, get) => ({
 
           const data = json.data || {}
           const eventTs = Number(data.last_event_at) || 0
-          set({
-            peerTyping: Boolean(data.peer_typing),
-            // After a presence leave, the server's 90-second last_seen window
-            // can still report "online"; do not resurrect a false presence.
-            peerOnline: get()._peerPresenceKnown
-              ? get().peerOnline
-              : Boolean(data.peer_online),
-            peerLastReadId: Number(data.peer_last_read_id) || 0,
-            ...(eventTs ? { eventsCursor: eventTs } : {})
+          // This loop runs every ~3.3s for the whole session. Writing the same
+          // values back into the store still notified every subscriber (full
+          // chat screen + message list re-render). Only emit a patch when a
+          // value actually changed; returning the current state is a no-op in
+          // zustand and skips notifying listeners entirely.
+          const nextPeerTyping = Boolean(data.peer_typing)
+          // After a presence leave, the server's 90-second last_seen window
+          // can still report "online"; do not resurrect a false presence.
+          const nextPeerOnline = get()._peerPresenceKnown
+            ? get().peerOnline
+            : Boolean(data.peer_online)
+          const nextPeerLastReadId = Number(data.peer_last_read_id) || 0
+          set((state) => {
+            const patch = {}
+            if (state.peerTyping !== nextPeerTyping) patch.peerTyping = nextPeerTyping
+            if (state.peerOnline !== nextPeerOnline) patch.peerOnline = nextPeerOnline
+            if (state.peerLastReadId !== nextPeerLastReadId) patch.peerLastReadId = nextPeerLastReadId
+            if (eventTs && state.eventsCursor !== eventTs) patch.eventsCursor = eventTs
+            return Object.keys(patch).length > 0 ? patch : state
           })
 
           // Local auto-clear so "typing…" never sticks when the peer stops.
@@ -1968,6 +2095,10 @@ export const useChatStore = create((set, get) => ({
 
   stopRealtime: () => {
     clearTimeout(get()._typingTimer)
+    const presenceVisibilityHandler = get()._presenceVisibilityHandler
+    if (presenceVisibilityHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', presenceVisibilityHandler)
+    }
     const sbChannel = get().supabaseRoomChannel
     if (sbChannel && supabase) {
       try {
@@ -1990,7 +2121,8 @@ export const useChatStore = create((set, get) => ({
       realtimeRoomId: null,
       peerTyping: false,
       _peerPresenceKnown: false,
-      supabaseRoomChannel: null
+      supabaseRoomChannel: null,
+      _presenceVisibilityHandler: null
     })
   },
 
@@ -2302,11 +2434,17 @@ export const useChatStore = create((set, get) => ({
   },
 
   addOptimisticMediaMessage: (optimisticMsg) => {
-    set((state) => ({
-      messages: sameId(state.activeRoomId, optimisticMsg.room_id)
-        ? [...state.messages, optimisticMsg]
-        : state.messages
-    }))
+    set((state) => {
+      if (!sameId(state.activeRoomId, optimisticMsg.room_id)) return state
+      return {
+        messages: [...state.messages, {
+          _clientId: `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          _sentAt: Date.now(),
+          _baseMaxId: maxConfirmedMessageId(state.messages),
+          ...optimisticMsg
+        }]
+      }
+    })
   },
 
   updateMessageUploadState: (tempId, updates) => {
@@ -2335,6 +2473,9 @@ export const useChatStore = create((set, get) => ({
     if (!existingTempId) {
       const optimisticMessage = {
         id: tempId,
+        _clientId: `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        _sentAt: Date.now(),
+        _baseMaxId: maxConfirmedMessageId(get().messages),
         room_id: targetRoomId,
         user_id: get().chatUser?.id,
         sender_type: 'user',
@@ -2468,10 +2609,9 @@ export const useChatStore = create((set, get) => ({
 
       // Check if message was ALREADY confirmed via realtime broadcast or inbox sync while HTTP was in flight!
       const currentMsgs = get().messages
-      const alreadyConfirmed = currentMsgs.some(
-        (m) => m && m.id > 0 && sameId(m.user_id, get().chatUser?.id) && (
-          m.message === text || (mediaUrl && m.media_url === mediaUrl)
-        )
+      const pendingBubble = currentMsgs.find((m) => sameId(m.id, tempId))
+      const alreadyConfirmed = hasFreshConfirmation(
+        currentMsgs, pendingBubble, text, mediaUrl, get().chatUser?.id
       )
       if (alreadyConfirmed) {
         set((state) => ({

@@ -34,6 +34,14 @@ function writeStorage(key, value) {
   }
 }
 
+// Every request gets a hard deadline unless the caller opts out. Without this
+// a stalled mobile connection left cold loads spinning forever (the callers
+// only clear their loading flags when the promise settles). Callers that
+// already manage their own timeout (sendRoomMessage passes an AbortController)
+// keep full control; `timeoutMs: 0` disables the default explicitly.
+export const DEFAULT_API_TIMEOUT_MS = 20000
+const TOKEN_REFRESH_TIMEOUT_MS = 15000
+
 // Single-flight: concurrent 401s share ONE refresh call, otherwise a rotating
 // refresh token would race against itself and log the user out.
 let refreshInFlight = null
@@ -47,11 +55,15 @@ async function refreshChatToken() {
   }
 
   refreshInFlight = (async () => {
+    // A hung refresh used to block the original 401 request indefinitely.
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), TOKEN_REFRESH_TIMEOUT_MS)
     try {
       const res = await fetch(`${API_BASE_URL}/chat/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken })
+        body: JSON.stringify({ refresh_token: refreshToken }),
+        signal: controller.signal
       })
 
       if (res.status === 401) {
@@ -83,6 +95,7 @@ async function refreshChatToken() {
       console.warn('Chat token refresh connection error (session preserved):', networkError)
       return { token: null, isExplicitAuthFailure: false }
     } finally {
+      clearTimeout(timeoutId)
       refreshInFlight = null
     }
   })()
@@ -115,12 +128,18 @@ export async function apiFetch(endpoint, options = {}) {
 
   const chatToken = readStorage(TOKEN_KEY)
 
-  // Optional per-call timeout (opt-in via options.timeoutMs).
+  // Per-call timeout when supplied, otherwise a default deadline for requests
+  // that do not bring their own cancellation signal. `timeoutMs: 0` disables.
+  const explicitTimeout = typeof timeoutMs === 'number'
+  const effectiveTimeoutMs = explicitTimeout
+    ? timeoutMs
+    : (fetchOptions.signal ? 0 : DEFAULT_API_TIMEOUT_MS)
+
   let timeoutController = null
   let timeoutId = null
-  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+  if (Number.isFinite(effectiveTimeoutMs) && effectiveTimeoutMs > 0) {
     timeoutController = new AbortController()
-    timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs)
+    timeoutId = setTimeout(() => timeoutController.abort(), effectiveTimeoutMs)
   }
   const signals = [fetchOptions.signal, timeoutController?.signal].filter(Boolean)
   let combinedSignal = fetchOptions.signal
