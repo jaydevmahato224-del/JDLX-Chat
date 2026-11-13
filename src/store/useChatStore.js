@@ -1547,6 +1547,8 @@ export const useChatStore = create((set, get) => ({
       peerOnline: false,
       _peerPresenceKnown: false,
       peerLastReadId: 0,
+      // Clear any previous room's pre-derived key
+      derivedRoomKey: null,
       conversations: state.conversations.map((c) =>
         sameId(c.id, conv.id) ? { ...c, unread_count: 0 } : c
       )
@@ -1555,6 +1557,13 @@ export const useChatStore = create((set, get) => ({
     get().startRealtime()
     get().fetchRoomMessages(conv.id).catch(() => {})
     get().fetchUnreadCount().catch(() => {})
+
+    // PRE-DERIVE E2EE ROOM KEY in background so sends are instant
+    // Only for direct chats with peer key available
+    const peerKey = conv.contact_public_key
+    if (peerKey) {
+      get().preDeriveRoomKey(conv.id, peerKey).catch(() => {})
+    }
   },
 
   // 3. Fetch Messages for a Specific Room
@@ -2514,9 +2523,28 @@ export const useChatStore = create((set, get) => ({
         get().activeConversation
       )
       const e2eSecret = activeConv?.e2e_secret || activeConv?.room_key || null
-      let identity = get().identityKeypair || await ensureLocalIdentity(get, set)
+
+      // Do NOT block the send on a server backup fetch. Use the local identity
+      // if present; otherwise generate a fresh keypair locally (no network call).
+      // Publishing the public key to the server happens in the background below.
+      let identity = get().identityKeypair
+      if (!identity) {
+        const uid = get().chatUser?.id
+        identity = uid ? await getOrCreateIdentityKeypair(uid) : null
+        if (identity) {
+          set({
+            identityKeypair: identity,
+            identityPublicKey: identity.publicKeyB64,
+            identityUserId: String(uid),
+            identityNeedsPassphrase: false
+          })
+        }
+      }
       if (identity) get().initE2EE().catch(() => {})
       const peerKey = activeConv?.contact_public_key
+
+      // Mark sending while the network request is in flight so the UI reflects reality.
+      set({ sending: true })
 
       // True E2EE when the peer published a key: only the two devices can
       // derive this room key. Legacy/support rooms keep v1 (or stay plaintext).

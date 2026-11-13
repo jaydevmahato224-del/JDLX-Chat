@@ -282,26 +282,43 @@ body::before {
   height: 0 !important;
 }
 
-/* Slim, theme-aware scrollbar for modal/drawer content. Without this the
-   browser paints its default chunky scrollbar over rounded corners. */
+/* ------------------------------------------------------------------------------
+   SLEEK CUSTOM SCROLLBAR (Item 3.2: 4px Ultra-Thin Floating Pill Scrollbar)
+   ------------------------------------------------------------------------------ */
 .custom-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+  scrollbar-color: rgba(250, 204, 21, 0.3) transparent;
   -webkit-overflow-scrolling: touch;
 }
+:root:not(.dark) .custom-scrollbar,
+.light .custom-scrollbar {
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
 .custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
+  margin: 4px 0;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.4);
+  background: rgba(250, 204, 21, 0.28);
   border-radius: 9999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.2s ease;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.65);
+  background: rgba(250, 204, 21, 0.6);
+}
+:root:not(.dark) .custom-scrollbar::-webkit-scrollbar-thumb,
+.light .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+}
+:root:not(.dark) .custom-scrollbar::-webkit-scrollbar-thumb:hover,
+.light .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.7);
 }
 
 /* Horizontal carousels (category circles, product rows, banners) must never
@@ -1380,6 +1397,55 @@ button,
   background-size: 64px 64px;
 }
 
+/* Custom Contact Chat Wallpapers (Item 2.7) */
+.chat-wallpaper-midnight {
+  background: radial-gradient(circle at 50% 20%, #172554 0%, #030712 80%) !important;
+}
+:root:not(.dark) .chat-wallpaper-midnight,
+.light .chat-wallpaper-midnight {
+  background: radial-gradient(circle at 50% 20%, #dbeafe 0%, #eff6ff 80%) !important;
+}
+
+.chat-wallpaper-emerald {
+  background: radial-gradient(circle at 50% 20%, #064e3b 0%, #022c22 80%) !important;
+}
+:root:not(.dark) .chat-wallpaper-emerald,
+.light .chat-wallpaper-emerald {
+  background: radial-gradient(circle at 50% 20%, #d1fae5 0%, #ecfdf5 80%) !important;
+}
+
+.chat-wallpaper-cyber {
+  background: radial-gradient(circle at 50% 20%, #4c1d95 0%, #0f051d 80%) !important;
+}
+:root:not(.dark) .chat-wallpaper-cyber,
+.light .chat-wallpaper-cyber {
+  background: radial-gradient(circle at 50% 20%, #f3e8ff 0%, #faf5ff 80%) !important;
+}
+
+.chat-wallpaper-sunset {
+  background: radial-gradient(circle at 50% 20%, #78350f 0%, #1c0d02 80%) !important;
+}
+:root:not(.dark) .chat-wallpaper-sunset,
+.light .chat-wallpaper-sunset {
+  background: radial-gradient(circle at 50% 20%, #fef3c7 0%, #fffbeb 80%) !important;
+}
+
+.chat-wallpaper-crimson {
+  background: radial-gradient(circle at 50% 20%, #881337 0%, #1a030a 80%) !important;
+}
+:root:not(.dark) .chat-wallpaper-crimson,
+.light .chat-wallpaper-crimson {
+  background: radial-gradient(circle at 50% 20%, #ffe4e6 0%, #fff1f2 80%) !important;
+}
+
+.chat-wallpaper-oled {
+  background: #000000 !important;
+}
+:root:not(.dark) .chat-wallpaper-oled,
+.light .chat-wallpaper-oled {
+  background: #ffffff !important;
+}
+
 /* Floating heart burst on double-tap */
 @keyframes heartFloatUp {
   0% {
@@ -1402,6 +1468,43 @@ button,
 
 .animate-heart-float {
   animation: heartFloatUp 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ------------------------------------------------------------------------------
+   LUXURY AVATAR & AMBIENT GLOW (Item 3.3)
+   ------------------------------------------------------------------------------ */
+@keyframes ambientGlowPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.65;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.95;
+  }
+}
+
+.animate-ambient-glow {
+  animation: ambientGlowPulse 4s ease-in-out infinite;
+}
+
+@keyframes presenceRipple {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.65);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.presence-beacon {
+  animation: presenceRipple 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 /* iOS Safe Area & Header Clarity (Prevents Notch Clipping & Text Blur) */
