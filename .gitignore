@@ -26,3 +26,4 @@ keystore.properties
 local.properties
 .gradle/
 build/
+.env*
