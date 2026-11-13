@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090b" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="description" content="JDLX Chat — private, encrypted messaging. A standalone JDLX app, fully separate from the JDLX store." />
+    <title>JDLX Chat</title>
+
+    <!-- PWA & Mobile Web App Manifest -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- iOS Safari PWA / Add to Home Screen Support -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="JDLX Chat" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/logo192.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/logo192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/logo512.png" />
+    <meta name="format-detection" content="telephone=no" />
+  </head>
+  <body class="official-chat-dark">
+    <script>
+      // Apply the saved appearance before React paints, so System/Light does not
+      // flash the dark shell on first load.
+      (function () {
+        try {
+          var pref = localStorage.getItem('jdlx_chat_theme') || 'system';
+          var dark = pref === 'dark' || (pref !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', dark);
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+          if (!dark) {
+            document.body.classList.remove('official-chat-dark');
+            var splash = document.getElementById('pwa-splash-loader');
+            if (splash) splash.style.background = '#f8fafc';
+          }
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          metas.forEach(function (m) {
+            m.setAttribute('content', dark ? '#09090b' : '#ffffff');
+          });
+          var appleMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+          if (appleMeta) appleMeta.setAttribute('content', dark ? 'black' : 'default');
+        } catch (e) {}
+      })();
+    </script>
+    <div id="root">
+      <!-- Native PWA App Shell Loader (Eliminates Blank White Screen) -->
+      <div id="pwa-splash-loader" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#09090b;z-index:9999;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;user-select:none;-webkit-user-select:none;">
+        <div style="width:72px;height:72px;border-radius:22px;background:linear-gradient(135deg,#eab308,#facc15);padding:2px;box-shadow:0 12px 32px rgba(234,179,8,0.25);display:flex;align-items:center;justify-content:center;">
+          <div style="width:100%;height:100%;border-radius:20px;background:#09090b;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+            <img src="/logo192.png" alt="JDLX Chat" style="width:100%;height:100%;object-fit:contain;border-radius:20px;" />
+          </div>
+        </div>
+        <div style="margin-top:24px;display:flex;align-items:center;gap:7px;">
+          <span style="width:7px;height:7px;border-radius:50%;background:#facc15;opacity:0.8;"></span>
+          <span style="font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#71717a;">Connecting...</span>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "appId": "in.jdlxmobile.chat",
+  "appName": "JDLX Chat",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "hostname": "localhost"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false,
+    "backgroundColor": "#09090b"
+  }
+}

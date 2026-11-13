@@ -1,0 +1,142 @@
+import { useEffect } from 'react'
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
+import { Toaster } from 'react-hot-toast'
+import { useChatStore } from './store/useChatStore'
+import { initChatNativePush, syncChatPushToken } from './utils/nativePush'
+
+import ChatLogin from './pages/ChatLogin'
+import ChatConversation from './pages/ChatConversation'
+import RecoveryPinModal from './components/RecoveryPinModal'
+
+// Standalone Official Chat — routes only exist for this app; the JDLX Store is
+// a separate frontend (external link back to the store opens a new tab).
+function App() {
+  const {
+    chatToken,
+    chatUser,
+    resolvedChatTheme,
+    setSystemPrefersDark,
+    fetchChatBranding,
+    initRealtimeAuth
+  } = useChatStore()
+
+  // Load the official room branding once (Fetch official chat name & logo)
+  useEffect(() => {
+    fetchChatBranding()
+  }, [fetchChatBranding])
+
+  // Private Realtime channels: fetch the short-lived Supabase JWT once per
+  // session. No-op when VITE_SUPABASE_PRIVATE_CHANNELS is not enabled.
+  useEffect(() => {
+    if (!chatToken || !chatUser?.id) return undefined
+    initRealtimeAuth().catch(() => {})
+    return undefined
+  }, [chatToken, chatUser?.id, initRealtimeAuth])
+
+  // Native FCM registration (no-op on the web). The token is re-reported on
+  // every login/account switch so pushes always target the current chat user.
+  useEffect(() => {
+    if (!chatToken || !chatUser?.id) return undefined
+    let cancelled = false
+    initChatNativePush().then(() => {
+      if (!cancelled) syncChatPushToken()
+    })
+    return () => { cancelled = true }
+  }, [chatToken, chatUser?.id])
+
+  // Follow the OS appearance while the saved preference is "system".
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const sync = () => setSystemPrefersDark(media.matches)
+    sync()
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', sync)
+      return () => media.removeEventListener('change', sync)
+    }
+    media.addListener(sync)
+    return () => media.removeListener(sync)
+  }, [setSystemPrefersDark])
+
+  // Keep <html>/<body> in sync for Tailwind dark: variants and native chrome.
+  useEffect(() => {
+    const root = document.documentElement
+    const isDark = resolvedChatTheme === 'dark'
+    root.classList.toggle('dark', isDark)
+    root.style.colorScheme = isDark ? 'dark' : 'light'
+    document.body.classList.toggle('official-chat-dark', isDark)
+    const metas = document.querySelectorAll('meta[name="theme-color"]')
+    metas.forEach((m) => m.setAttribute('content', isDark ? '#09090b' : '#ffffff'))
+    const appleStatusMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')
+    if (appleStatusMeta) {
+      appleStatusMeta.setAttribute('content', isDark ? 'black' : 'default')
+    }
+  }, [resolvedChatTheme])
+
+  const isChatAuthed = Boolean(chatToken && chatUser)
+  const isDark = resolvedChatTheme === 'dark'
+
+  return (
+    <Router>
+      {/* Chat-styled toast notifications */}
+      <Toaster
+        position="top-center"
+        toastOptions={{
+          duration: 3500,
+          style: {
+            background: isDark ? '#18181b' : '#ffffff',
+            color: isDark ? '#ffffff' : '#0f172a',
+            border: `1px solid ${isDark ? '#27272a' : '#e2e8f0'}`,
+            borderRadius: '16px',
+            fontSize: '13px',
+            fontWeight: 600,
+            maxWidth: '420px'
+          },
+          success: { iconTheme: { primary: '#facc15', secondary: '#09090b' } },
+          error: { iconTheme: { primary: '#ef4444', secondary: '#ffffff' } }
+        }}
+      />
+
+      <Routes>
+        {/* Direct Root Route: instant landing on /chat when logged in, without flashing /login */}
+        <Route
+          path="/"
+          element={
+            isChatAuthed ? (
+              <Navigate to="/chat" replace />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        <Route path="/login" element={<ChatLogin />} />
+        {/* Alias kept for backend OAuth error redirects (/chat/login?error=...) */}
+        <Route path="/chat/login" element={<ChatLogin />} />
+
+        <Route
+          path="/chat"
+          element={
+            isChatAuthed ? (
+              <ChatConversation />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        {/* Invite entry (@username deep link lands here) — login page reads the
+            ?ref= param itself */}
+        <Route path="/chat/invite" element={<ChatLogin />} />
+
+        {/* Default → login */}
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+
+      {/* PIN-encrypted E2EE key backup: setup on this device, unlock on a new one. */}
+      <RecoveryPinModal />
+    </Router>
+  )
+}
+
+export default App

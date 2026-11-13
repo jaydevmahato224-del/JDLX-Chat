@@ -1,0 +1,8 @@
+node_modules
+android
+dist
+public/downloads
+.env
+.env.*
+!.env.example
+.git

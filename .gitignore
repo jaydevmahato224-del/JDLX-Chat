@@ -1,0 +1,28 @@
+# Node dependencies & builds
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Environment variables
+.env.local
+.env.*.local
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Vercel deployment cache
+.vercel
+
+# Android & Gradle builds
+android/.gradle/
+android/app/build/
+android/build/
+*.keystore
+keystore.properties
+local.properties
+.gradle/
+build/

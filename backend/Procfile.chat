@@ -1,0 +1,1 @@
+web: sh -c "python migrations_boot.py && exec gunicorn --bind 0.0.0.0:${PORT:-10000} --workers ${WEB_CONCURRENCY:-2} --timeout 120 --access-logfile - --error-logfile - chat_app:app"

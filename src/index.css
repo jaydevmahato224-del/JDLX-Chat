@@ -1,0 +1,1660 @@
+/* ==============================================================================
+   JDLX MOBILE — Premium Design System v2.2
+   Theme: Digital Concierge (Luxury & Precision)
+   ============================================================================== */
+
+@import "tailwindcss";
+
+/* The app toggles dark mode via a `.dark` wrapper class (see useChatStore theme +
+   App.jsx `dark` class) and overrides the CSS variables under `.dark {}`
+   below. Tailwind v4's `dark:` variant defaults to `@media (prefers-color-scheme)`,
+   which would make every `dark:` utility follow the OS instead of our in-app toggle.
+   This custom-variant re-points `dark:` at the `.dark` class so `dark:` utilities
+   track the app theme switch. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ------------------------------------------------------------------------------
+   1. DESIGN TOKENS & THEME
+   ------------------------------------------------------------------------------ */
+@theme {
+  /* 
+     JDLX Design System v3.1 
+     Theme: Digital Concierge (Luxury & Precision)
+     Critical Bug Fix: Hover States & Contrast
+  */
+
+  --color-primary: #f59e0b; 
+  --color-primary-dark: #d97706;
+  --color-on-primary: #0f172a; 
+  
+  --color-secondary: #0f172a;
+  --color-on-secondary: #ffffff;
+  
+  --color-surface: #ffffff;
+  --color-on-surface: #0f172a;
+  /* Muted text token: darkened from #64748b — the old value failed contrast on
+     bright surfaces and made descriptions/labels look washed out. */
+  --color-on-surface-variant: #3f4a5c;
+  
+  --color-surface-low: #f8fafc;
+  --color-surface-container: #f1f5f9;
+  --color-surface-card: #ffffff;
+  --color-surface-white: var(--color-surface-card);
+  --color-surface-high: #e2e8f0;
+  --color-surface-highest: #cbd5e1;
+  
+  --color-error: #ef4444;
+  --color-on-error: #ffffff;
+  
+  /* Navigation State */
+  --color-nav-inactive: #94a3b8;
+  --color-nav-active: #0f172a;
+}
+
+:root {
+  color-scheme: light;
+  
+  /* Layout Constants */
+  --app-header-height: 64px;
+  --app-ticker-height: 0px;
+  --app-header-offset: calc(var(--app-ticker-height) + var(--app-header-height));
+  --app-bottom-nav-height: 72px;
+
+  /* Glassmorphism System */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-stroke: rgba(255, 255, 255, 0.5);
+  --glass-shadow: 0 8px 32px 0 rgba(15, 23, 42, 0.05);
+  --glass-blur-std: 12px;
+  --glass-blur-heavy: 30px;
+
+  /* Animation Tokens */
+  --transition-speed: 0.5s;
+  --transition-cubic: cubic-bezier(0.16, 1, 0.3, 1);
+  --luxury-shadow: 0 40px 100px -20px rgba(15, 23, 42, 0.1);
+}
+
+.dark {
+  color-scheme: dark;
+  
+  /* Brand Adjustments */
+  --color-on-primary: #0f172a;
+  
+  /* Dark Surfaces (Midnight Neutral) */
+  --color-surface: #0a0a0a;
+  --color-surface-low: #121212;
+  --color-surface-container: #171717;
+  --color-surface-card: #171717;
+  --color-surface-white: var(--color-surface-card);
+  --color-surface-high: #262626;
+  
+  /* Dark Typography (variant lightened from #a3a3a3 for readable contrast
+     on dark surfaces) */
+  --color-on-surface: #f5f5f5;
+  --color-on-surface-variant: #c9cdd4;
+  
+  /* Dark Glassmorphism */
+  --glass-bg: rgba(23, 23, 23, 0.8);
+  --glass-stroke: rgba(255, 255, 255, 0.05);
+  --glass-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+  
+  /* Dark Navigation */
+  --color-nav-inactive: #525252;
+  --color-nav-active: #ffffff;
+}
+
+.official-chat-dark {
+  color-scheme: dark;
+  --color-on-surface: #ffffff;
+  --color-on-surface-variant: #e4e4e7;
+  color: #ffffff;
+}
+
+.official-chat-dark h1,
+.official-chat-dark h2,
+.official-chat-dark h3,
+.official-chat-dark h4,
+.official-chat-dark h5,
+.official-chat-dark h6 {
+  color: #ffffff;
+}
+
+/* Typography Refinements
+   IMPORTANT: These element-level defaults MUST live in @layer base. Tailwind v4
+   uses native cascade layers (@layer theme, base, components, utilities), and any
+   rule written OUTSIDE a layer always beats layered utilities — which silently
+   disabled text-white / text-4xl / etc. on every heading (dark headings on dark
+   heroes rendered invisible). Inside @layer base, utilities win as intended. */
+@layer base {
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-black tracking-tight text-[var(--color-on-surface)];
+    font-family: 'Manrope', sans-serif;
+  }
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--color-primary) 0%, #d97706 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Premium Animations */
+@keyframes soft-glow {
+  0%, 100% { filter: drop-shadow(0 0 5px rgba(245, 158, 11, 0.2)); }
+  50% { filter: drop-shadow(0 0 15px rgba(245, 158, 11, 0.5)); }
+}
+
+.animate-soft-glow {
+  animation: soft-glow 3s infinite ease-in-out;
+}
+
+@keyframes slide-up-reveal {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.reveal-staggered > * {
+  animation: slide-up-reveal 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.reveal-staggered > *:nth-child(1) { animation-delay: 0.1s; }
+.reveal-staggered > *:nth-child(2) { animation-delay: 0.2s; }
+.reveal-staggered > *:nth-child(3) { animation-delay: 0.3s; }
+.reveal-staggered > *:nth-child(4) { animation-delay: 0.4s; }
+
+/* ------------------------------------------------------------------------------
+   2. GLOBAL STYLES & RESET
+   ------------------------------------------------------------------------------ */
+html { 
+  height: 100%; 
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* App-like: stop mobile Safari from auto-inflating text on orientation
+     change / after zoom, which is what makes text jump to the side. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* App-like: kill the blue tap flash on every element (native apps don't
+     flash their chrome). */
+  -webkit-tap-highlight-color: transparent;
+  tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0; 
+  padding: 0;
+  height: 100%; 
+  height: 100dvh;
+  width: 100%;
+  background-color: var(--color-surface);
+  color: var(--color-on-surface); 
+  font-family: 'Inter', system-ui, sans-serif;
+  overflow: hidden !important;
+  position: fixed;
+  inset: 0;
+  -webkit-overflow-scrolling: touch;
+  transition: background-color var(--transition-speed) var(--transition-cubic);
+  overscroll-behavior: none !important;
+  -webkit-touch-callout: none;
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* App-like: chrome (nav, buttons, badges, labels, interactive cards) should never be
+   selectable — tapping/long-pressing shouldn't produce browser text selection handles.
+   Body copy (descriptions, addresses, order IDs, inputs) stays selectable/copyable. */
+.app-shell button,
+.app-shell [role="button"],
+.app-shell nav,
+.app-shell header,
+.app-shell .category-chip,
+.app-shell .concierge-badge,
+.app-shell .concierge-nav-wrapper,
+.app-shell .concierge-nav-label,
+.app-shell .concierge-nav-item,
+.app-shell [data-tap-target],
+.app-shell img,
+.app-shell .glass-card,
+.app-shell article {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Performance Layer Promotion */
+.gpu-accelerated {
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* Optimization for off-screen rendering */
+.content-visibility-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 500px; /* Default height hint */
+}
+
+/* Optimization for heavy glass effects during scroll */
+.glass-card, .card-glass, .glass-luxury, .concierge-nav-container {
+  will-change: transform;
+}
+
+/* Reduce paint cost for cards */
+.card-standard, .ui-card-standard, .ProductCard {
+  contain: content;
+}
+
+/* Ambient Background Effect — disabled to eliminate blur bleed & keep text/header hard & sharp */
+body::before {
+  display: none !important;
+}
+
+.container-standard { @apply mx-auto w-full max-w-[1400px] px-3.5 sm:px-6 md:px-8; }
+.no-scrollbar { 
+  -ms-overflow-style: none; 
+  scrollbar-width: none; 
+  -webkit-overflow-scrolling: touch;
+}
+.no-scrollbar::-webkit-scrollbar { 
+  display: none !important; 
+  width: 0 !important; 
+  height: 0 !important; 
+  background: transparent !important; 
+}
+
+/* Horizontal carousels (category circles, product rows, banners) must never
+   chain a swipe at their scroll edge into the PAGE or into browser
+   back/forward navigation — on touch devices Chrome turns that edge-overscroll
+   into a history swipe and the user loses their place mid-browse. 'contain'
+   keeps the gesture inside the strip while normal scrolling stays intact. */
+.overflow-x-auto { overscroll-behavior-x: contain; }
+
+/* ------------------------------------------------------------------------------
+   3. TYPOGRAPHY
+   ------------------------------------------------------------------------------ */
+@layer base {
+  :where(h1, h2, h3, h4) { 
+    font-family: 'Manrope', sans-serif; 
+    font-weight: 800; 
+    color: var(--color-on-surface); 
+    letter-spacing: -0.02em;
+  }
+  :where(h1) { font-size: clamp(28px, 5vw, 40px); }
+  /* GLOBAL TEXT VISIBILITY RULE: paragraphs follow the theme's primary text
+     color — near-black on bright backgrounds, near-white on dark ones — instead
+     of a hard-coded gray (the old rule was the root cause of washed-out body
+     text). :where() has zero specificity, so explicit color utilities
+     (text-white, text-primary, text-slate-500 …) still override it freely and
+     no existing flow/layout changes. */
+  :where(p) { line-height: 1.6; color: inherit; }
+}
+
+.ui-h1 { @apply text-3xl font-black tracking-tighter sm:text-4xl md:text-5xl; }
+.ui-label { @apply text-[10px] font-black uppercase tracking-[0.25em] text-[var(--color-on-surface-variant)]; }
+
+/* ------------------------------------------------------------------------------
+   4. COMPONENT ARCHITECTURE
+   ------------------------------------------------------------------------------ */
+
+/* Card System */
+.ui-card-premium { 
+  @apply rounded-[32px] border transition-all duration-500 backdrop-blur-xl shadow-xl;
+  background: var(--glass-bg);
+  border-color: var(--glass-stroke);
+}
+
+@media (hover: hover) {
+  .card-standard:hover, .ui-card-standard:hover { 
+    transform: translateY(-8px) scale(1.02); 
+    border-color: var(--color-primary); 
+  }
+}
+
+.glass-card, .card-glass { 
+  background: var(--glass-bg); 
+  backdrop-filter: blur(var(--glass-blur-std)); 
+  border: 1px solid var(--glass-stroke); 
+  @apply rounded-3xl p-5 shadow-lg; 
+}
+
+.glass-luxury { 
+  background: var(--glass-bg); 
+  backdrop-filter: blur(var(--glass-blur-heavy)); 
+  border-color: var(--glass-stroke); 
+  @apply shadow-2xl; 
+}
+
+/* Button & Controls */
+.btn-primary {
+  @apply inline-flex items-center justify-center rounded-full font-black transition-all px-6 uppercase tracking-widest text-[10px] shadow-lg active:scale-95;
+  background-color: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+@media (hover: hover) {
+  .btn-primary:hover {
+    background-color: var(--color-primary-dark);
+    color: var(--color-on-primary);
+    transform: translateY(-2px);
+  }
+}
+
+.category-chip { 
+  @apply inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition-all border border-[var(--color-surface-high)] bg-[var(--color-surface-card)]; 
+  color: var(--color-on-surface);
+}
+.category-chip.active { 
+  background: var(--color-primary); 
+  color: var(--color-on-primary); 
+  border-color: var(--color-primary); 
+}
+
+/* Concierge Bottom Navigation */
+.concierge-nav-wrapper {
+  @apply fixed bottom-0 left-0 right-0 z-50 flex justify-center px-4 pt-2 pointer-events-none;
+  /* Keep the 1.5rem baseline on non-notched devices; add the home-indicator
+     inset on notched iPhones (iPhone X/XR and newer) in standalone PWA mode. */
+  padding-bottom: max(1.5rem, constant(safe-area-inset-bottom));
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+}
+
+@media (min-width: 768px) {
+  .concierge-nav-wrapper {
+    display: none !important;
+  }
+}
+
+/* ------------------------------------------------------------------------------
+   SAFE AREA (iOS notch / status bar / home indicator)
+   The app runs as a standalone PWA (viewport-fit=cover), so fixed/sticky chrome
+   must respect the notched-device insets. constant() is the iOS 11.0-11.1
+   fallback; env() is supported everywhere else.
+   ------------------------------------------------------------------------------ */
+.safe-area-top {
+  padding-top: constant(safe-area-inset-top);
+  padding-top: env(safe-area-inset-top);
+}
+.concierge-nav-container {
+  @apply w-full max-w-[480px] h-[72px] rounded-[36px] flex items-center relative pointer-events-auto shadow-2xl transition-all duration-500;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur-heavy));
+  border: 1px solid var(--glass-stroke);
+  overflow: hidden;
+}
+.concierge-nav-indicator {
+  @apply absolute top-[6px] h-14 rounded-[28px] transition-all duration-300;
+  background: var(--color-primary);
+  z-index: 1;
+}
+.concierge-nav-item {
+  @apply flex flex-col items-center justify-center h-full flex-1 relative z-20 no-underline transition-colors;
+  color: var(--color-nav-inactive);
+}
+.concierge-nav-item.active { color: var(--color-on-primary); font-weight: 900; }
+.concierge-nav-label { @apply text-[10px] font-black uppercase tracking-[0.1em] mt-0.5; }
+.concierge-badge {
+  @apply absolute -top-1.5 -right-2 min-w-[16px] h-4 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center px-1;
+}
+
+/* Collapsed state: the dock slides FULLY down out of view while scrolling
+   down — no leftover circle, nothing remains on screen. A small upward
+   scroll animates it back up (same transition, reverse direction). */
+.concierge-nav-wrapper.nav-collapsed .concierge-nav-container {
+  /* calc(100% + 120px) = the dock's own height plus a fixed offset — always
+     clears the viewport bottom regardless of dock height. */
+  transform: translateY(calc(100% + 120px));
+  opacity: 0;
+  transition-duration: 450ms;
+}
+.concierge-nav-wrapper.nav-collapsed .concierge-nav-indicator,
+.concierge-nav-wrapper.nav-collapsed .concierge-nav-item {
+  opacity: 0;
+  visibility: hidden; /* also removes the hidden links from keyboard tab order */
+  pointer-events: none;
+}
+
+/* Specialty UI Elements */
+.hero-banner { 
+  @apply rounded-3xl overflow-hidden relative; 
+  background: linear-gradient(135deg, #121212 0%, #1a1a1a 100%); 
+}
+.product-card-stitch { 
+  @apply rounded-2xl overflow-hidden shadow-sm transition-all; 
+  background: var(--color-surface-card);
+}
+
+@media (hover: hover) {
+  .product-card-stitch:hover {
+    @apply -translate-y-1 shadow-md;
+  }
+}
+
+/* ------------------------------------------------------------------------------
+   5. RESPONSIVE HOVER SYSTEM
+   ------------------------------------------------------------------------------ */
+/* Prevent "sticky hover" on touch devices by only allowing hover effects 
+   when a primary pointing device (like a mouse) is present. */
+@media (hover: none) {
+  /* Only suppress hover-triggered visual changes, preserve active tap states */
+  [class*="hover:"]:hover {
+    --tw-translate-y: 0 !important;
+  }
+  
+  /* Preserve active/tap states specifically */
+  [class*="active:"]:active {
+    transition: transform 0.1s ease-out !important;
+  }
+}
+
+/* App-like touch handling on ALL screen sizes (not just mobile):
+   - touch-action: manipulation  -> removes the 300ms double-tap-zoom delay
+     and stops double-tap zoom on interactive elements.
+   - Selectable text (inputs, textareas) keeps pan/zoom-free native feel. */
+button, 
+ a, 
+ [role="button"],
+ .concierge-nav-item,
+ .category-chip,
+ input,
+ select,
+ textarea {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* App-like: prevent double-tap-zoom on the whole shell and stop pinch-zoom
+   even if a browser ignores the viewport meta (belt-and-suspenders).
+   touch-action is not inherited, but the browser intersects the touched
+   element's value with all ancestors — so this on <body class="app-shell">
+   covers everything inside (portals included). */
+.app-shell {
+  touch-action: pan-x pan-y;
+}
+
+/* ------------------------------------------------------------------------------
+   6. ANIMATIONS & EFFECTS
+   ------------------------------------------------------------------------------ */
+@keyframes float-slow { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+@keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+@keyframes reveal-in { to { opacity: 1; transform: translateY(0); } }
+
+/* ------------------------------------------------------------------------------
+   6b. GLOBAL PAGE-CHANGE ANIMATION (PageTransition.jsx)
+   Smooth, theme-aware page entrance for every storefront route change.
+   OPACITY-ONLY by design: a transform on this wrapper would create a CSS
+   containing block and silently break every position:fixed child (sticky
+   mobile bars, modals, map picker). Opacity composites on the GPU and
+   fixes nothing. Duration is short (260ms) so navigation stays snappy.
+   ------------------------------------------------------------------------------ */
+/* Deliberately NO `will-change: opacity` on this wrapper.
+
+   `will-change: opacity` does not just hint the compositor — it makes the
+   element a PERMANENT stacking context. Every `position: fixed; z-index: N`
+   overlay rendered INSIDE a page was therefore scoped to this wrapper and got
+   painted BELOW the layout chrome that lives outside it (floating install
+   banner z-60, bottom dock z-100), no matter how high its own z-index was.
+   That is exactly how the first-run login sheet (z-10050) ended up with its
+   "Continue with Google" / "Skip for now" buttons hidden behind the install
+   banner + dock — and the same trap hits any in-page modal or onboarding step.
+
+   The 260ms fade is opacity-only and short, so it composites fine without the
+   hint (the browser promotes an animating opacity layer on its own).
+   Do not re-add a persistent will-change/opacity/transform/filter here. */
+
+.page-transition-root {
+  width: 100%;
+  min-height: calc(100vh - var(--app-header-offset, 64px) - 96px);
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+}
+
+.page-enter {
+  animation: page-enter 240ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+  will-change: opacity, transform;
+}
+
+@keyframes page-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Full accessibility: users who prefer reduced motion get an instant,
+   animation-free page change. */
+@media (prefers-reduced-motion: reduce) {
+  .page-enter {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+}
+
+/* ------------------------------------------------------------------------------
+   6c. SPLASH-TO-HOME SEAMLESS TRANSITION
+   Provides a native-app-grade cross-dissolve when transitioning from the
+   splash screen into the home screen.
+   ------------------------------------------------------------------------------ */
+@keyframes splash-screen-exit {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.04);
+    filter: blur(3px);
+    visibility: hidden;
+  }
+}
+
+.splash-screen-exit {
+  animation: splash-screen-exit 700ms cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  pointer-events: none !important;
+}
+
+@keyframes home-smooth-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.home-smooth-reveal {
+  animation: home-smooth-reveal 750ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-screen-exit {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+  .home-smooth-reveal {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+.animate-float-slow { animation: float-slow 6s ease-in-out infinite; }
+.animate-marquee { display: flex; width: max-content; animation: marquee 30s linear infinite; }
+
+/* Storefront home: gentle vertical float used by hero decorations and
+   category/promo accents. GPU-only (transform) and disabled for users who
+   prefer reduced motion. */
+@keyframes float-soft { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+.animate-float-soft { animation: float-soft 6s ease-in-out infinite; will-change: transform; }
+
+/* Soft sweeping highlight for premium badges / promo ribbons. */
+@keyframes shine-sweep { 0% { background-position: -150% 0; } 100% { background-position: 250% 0; } }
+.animate-shine {
+  background-image: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.55) 50%, transparent 70%);
+  background-size: 220% 100%;
+  animation: shine-sweep 2.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-float-soft,
+  .animate-shine,
+  .festive-pulse,
+  .festive-twinkle { animation: none !important; }
+}
+
+/* Festive Event Styling & Shimmer Effects */
+@keyframes festive-pulse-soft {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.35);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 14px 2px rgba(245, 158, 11, 0.2);
+  }
+}
+
+@keyframes festive-twinkle {
+  0%, 100% { opacity: 0.85; transform: scale(0.95); }
+  50% { opacity: 1; transform: scale(1.15) rotate(6deg); }
+}
+
+.festive-pulse {
+  animation: festive-pulse-soft 3.2s ease-in-out infinite;
+}
+
+.festive-twinkle {
+  animation: festive-twinkle 2.2s ease-in-out infinite;
+}
+
+.festive-glow-card {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.festive-glow-card:hover {
+  border-color: rgba(245, 158, 11, 0.45) !important;
+  box-shadow: 0 12px 28px -6px rgba(245, 158, 11, 0.16) !important;
+}
+
+/* ------------------------------------------------------------------------------
+   6. RESPONSIVE & MOBILE FIXES
+   ------------------------------------------------------------------------------ */
+@media (max-width: 640px) {
+  .ui-h1 { font-size: 1.75rem; }
+  .container-standard { @apply px-3.5; }
+  .reveal-staggered > * { opacity: 1; transform: none; animation: none; }
+}
+
+@media (max-width: 768px) {
+  input, select, textarea { font-size: 16px !important; }
+}
+
+/* ------------------------------------------------------------------------------
+   7. PREMIUM GLASSMORPHIC SELECT DROPDOWNS
+   ------------------------------------------------------------------------------ */
+.glass-dropdown {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b' stroke-width='3'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1.25rem center;
+  background-size: 0.85em;
+  background-color: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur-std));
+  border: 1px solid var(--glass-stroke);
+  border-radius: 1rem;
+  color: var(--color-on-surface);
+  font-size: 0.75rem !important;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding-right: 3rem !important;
+  box-shadow: var(--glass-shadow);
+  transition: all 0.3s var(--transition-cubic);
+  cursor: pointer;
+}
+
+.glass-dropdown:hover {
+  background-color: rgba(255, 255, 255, 0.95);
+  border-color: var(--color-primary);
+  box-shadow: 0 10px 25px -5px rgba(245, 158, 11, 0.08);
+  transform: translateY(-1px);
+}
+
+/* Dark mode: keep the dropdown surface dark on hover so var(--color-on-surface)
+   (near-white text) stays visible — the light hover bg above would wash it out. */
+.dark .glass-dropdown:hover {
+  background-color: rgba(23, 23, 23, 0.95);
+  border-color: var(--color-primary);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+  transform: translateY(-1px);
+}
+
+.glass-dropdown:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.1);
+}
+
+.dark .glass-dropdown {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a3a3a3' stroke-width='3'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+  background-color: rgba(23, 23, 23, 0.85);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ------------------------------------------------------------------------------
+   8. PWA INSTALL BANNER — bottom-left card that jelly-hides into the left wall
+   ------------------------------------------------------------------------------ */
+.pwa-install-banner {
+  position: fixed;
+  left: 16px;
+  bottom: calc(var(--app-bottom-nav-height) + max(24px, env(safe-area-inset-bottom)));
+  z-index: 60;
+  width: min(360px, calc(100vw - 32px));
+}
+
+/* Only transform/opacity animate (GPU-composited). The glass visuals live on
+   an inner wrapper so backdrop-filter never sits on the animated layer. */
+.pwa-install-card {
+  transform-origin: left center;
+  will-change: transform, opacity;
+}
+
+.pwa-install-banner.is-showing .pwa-install-card {
+  animation: pwa-jelly-in 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.pwa-install-banner.is-hiding .pwa-install-card {
+  animation: pwa-jelly-out 0.55s cubic-bezier(0.5, 0, 0.4, 1) forwards;
+  pointer-events: none;
+}
+
+/* Jelly entrance: bounces in from the left edge of the screen. */
+@keyframes pwa-jelly-in {
+  0% { opacity: 0; transform: translateX(-130%) scale(0.72, 0.7); }
+  55% { opacity: 1; transform: translateX(9%) scale(1.06, 0.9); }
+  75% { transform: translateX(-4%) scale(0.96, 1.04); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+/* Jelly exit: gives a little wobble, then slides fully behind the left wall
+   so it feels like the banner hides into the edge of the screen. */
+@keyframes pwa-jelly-out {
+  0% { opacity: 1; transform: translateX(0) scale(1); }
+  35% { opacity: 1; transform: translateX(14%) scale(1.09, 0.85); }
+  100% { opacity: 0; transform: translateX(-145%) scale(0.68, 0.78); }
+}
+
+/* ------------------------------------------------------------------------------
+   Cute install-doll mascot (2D CSS/SVG animations)
+   ------------------------------------------------------------------------------ */
+.doll-wrap {
+  transform-origin: 50% 100%;
+  animation: doll-float 3.2s ease-in-out infinite;
+}
+.doll-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: doll-wink 4.2s ease-in-out infinite;
+}
+.doll-wave-hand {
+  transform-box: fill-box;
+  transform-origin: 50% 80%;
+  animation: doll-wave 2.4s ease-in-out infinite;
+}
+.doll-heart {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: doll-heartbeat 1.7s ease-in-out infinite;
+}
+.doll-sparkle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: doll-sparkle 2.4s ease-in-out infinite;
+}
+.doll-sparkle-2 {
+  animation-delay: 1.2s;
+}
+
+@keyframes doll-float {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-5px) rotate(2deg); }
+}
+
+@keyframes doll-wink {
+  0%, 90%, 100% { transform: scaleY(1); }
+  93%, 96% { transform: scaleY(0.12); }
+}
+
+@keyframes doll-wave {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(18deg); }
+  35% { transform: rotate(-10deg); }
+  50% { transform: rotate(14deg); }
+  65% { transform: rotate(-6deg); }
+  80% { transform: rotate(8deg); }
+}
+
+@keyframes doll-heartbeat {
+  0%, 100% { transform: scale(1); }
+  12% { transform: scale(1.3); }
+  24% { transform: scale(1); }
+}
+
+@keyframes doll-sparkle {
+  0%, 100% { opacity: 0; transform: scale(0.3) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1) rotate(50deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pwa-install-banner .pwa-install-card {
+    animation-duration: 0.01s !important;
+  }
+  .doll-wrap,
+  .doll-eye,
+  .doll-wave-hand,
+  .doll-heart,
+  .doll-sparkle {
+    animation: none !important;
+  }
+}
+
+/* --- Referral success popup animations (cute 2D celebration) --- */
+/* Confetti falls from the top of the modal and fades out. */
+.pop-confetti {
+  position: absolute;
+  top: -12px;
+  border-radius: 2px;
+  opacity: 0;
+  animation-name: pop-confetti-fall;
+  animation-timing-function: ease-in;
+  animation-iteration-count: infinite;
+  pointer-events: none;
+}
+
+@keyframes pop-confetti-fall {
+  0% { transform: translateY(0) rotate(0deg); opacity: 0; }
+  8% { opacity: 1; }
+  100% { transform: translateY(430px) rotate(320deg); opacity: 0; }
+}
+
+/* Doll bounces with joy (squash & stretch). */
+.pop-doll-wrap {
+  transform-origin: 50% 100%;
+  animation: pop-doll-bounce 1.5s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
+@keyframes pop-doll-bounce {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  25% { transform: translateY(-8px) scale(1.02, 0.96); }
+  45% { transform: translateY(0) scale(0.98, 1.04); }
+  60% { transform: translateY(-4px) scale(1.01, 0.98); }
+  75% { transform: translateY(0) scale(1, 1); }
+}
+
+/* Arms raised in celebration (rotate out & in). */
+.pop-arms {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pop-arms-wave 1.5s ease-in-out infinite;
+}
+
+@keyframes pop-arms-wave {
+  0%, 100% { transform: rotate(0deg); }
+  35% { transform: rotate(-7deg); }
+  65% { transform: rotate(7deg); }
+}
+
+/* Antenna heart beats with joy. */
+.pop-heart {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pop-heart-beat 1.1s ease-in-out infinite;
+}
+
+@keyframes pop-heart-beat {
+  0%, 100% { transform: scale(1); }
+  18% { transform: scale(1.35); }
+  36% { transform: scale(1); }
+}
+
+/* Sparkles twinkle around the doll. */
+.pop-sparkle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pop-sparkle 1.8s ease-in-out infinite;
+}
+.pop-sparkle-2 {
+  animation-delay: 0.9s;
+}
+
+@keyframes pop-sparkle {
+  0%, 100% { opacity: 0; transform: scale(0.4) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1) rotate(45deg); }
+}
+
+/* ₹ coin pops in and wobbles. */
+.pop-coin {
+  animation: pop-coin 1.8s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
+@keyframes pop-coin {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  30% { transform: translateY(-7px) rotate(-8deg) scale(1.12); }
+  55% { transform: translateY(0) rotate(4deg) scale(1); }
+  75% { transform: translateY(-3px) rotate(-4deg) scale(1.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pop-confetti,
+  .pop-doll-wrap,
+  .pop-arms,
+  .pop-heart,
+  .pop-sparkle,
+  .pop-coin,
+  .animate-product-toss,
+  .animate-cart-impact,
+  .animate-added-glow,
+  .animate-badge-bump,
+  .animate-seal-pop,
+  .animate-check-draw,
+  .animate-circle-draw,
+  .animate-sparkle-orbit-1,
+  .animate-sparkle-orbit-2,
+  .animate-sparkle-orbit-3,
+  .animate-luxury-shimmer,
+  .animate-road-dashes,
+  .animate-vehicle-bounce,
+  .animate-wheel-spin,
+  .animate-radar-ring,
+  .animate-connector-flow,
+  .animate-parcel-wobble,
+  .animate-classic-float,
+  .animate-shadow-pulse,
+  .animate-aperture-breathe,
+  .animate-precision-sweep,
+  .animate-contour-sheen,
+  .animate-classic-heartbeat {
+    animation: none !important;
+  }
+  .pop-confetti {
+    opacity: 0 !important;
+  }
+}
+
+/* ==========================================================================
+   Add-to-Cart Product Toss & Basket Catch Animation
+   ========================================================================== */
+
+/* Thrown miniature product projectile */
+.animate-product-toss {
+  animation: productTossArc 450ms cubic-bezier(0.2, 0.8, 0.25, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes productTossArc {
+  0% {
+    opacity: 0;
+    transform: translate3d(-32px, -36px, 0) scale(0.6) rotate(-35deg);
+  }
+  15% {
+    opacity: 1;
+    transform: translate3d(-22px, -44px, 0) scale(1) rotate(-15deg);
+  }
+  50% {
+    opacity: 1;
+    transform: translate3d(-8px, -24px, 0) scale(0.85) rotate(10deg);
+  }
+  80% {
+    opacity: 1;
+    transform: translate3d(0px, 0px, 0) scale(0.4) rotate(28deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0px, 6px, 0) scale(0.1) rotate(40deg);
+  }
+}
+
+/* Cart basket absorbs the thrown item with spring impact */
+.animate-cart-impact {
+  animation: cartCatchImpact 550ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  will-change: transform;
+}
+
+@keyframes cartCatchImpact {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg);
+  }
+  25% {
+    /* squash & dip on catch */
+    transform: translate3d(0, 4px, 0) scale(1.24, 0.76) rotate(4deg);
+  }
+  55% {
+    /* spring rebound stretch */
+    transform: translate3d(0, -3px, 0) scale(0.9, 1.1) rotate(-2deg);
+  }
+  78% {
+    /* micro settle bounce */
+    transform: translate3d(0, 1px, 0) scale(1.04, 0.96) rotate(1deg);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1, 1) rotate(0deg);
+  }
+}
+
+/* Luxury button gold glow upon successful toss */
+.animate-added-glow {
+  animation: addedGlowPulse 600ms ease-out forwards;
+}
+
+@keyframes addedGlowPulse {
+  0% {
+    box-shadow: 0 0 0 rgba(245, 158, 11, 0);
+  }
+  35% {
+    box-shadow: 0 0 22px rgba(245, 158, 11, 0.6), inset 0 0 12px rgba(245, 158, 11, 0.2);
+  }
+  100% {
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
+  }
+}
+
+/* Cart badge celebration bump */
+.animate-badge-bump {
+  animation: badgeBump 350ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes badgeBump {
+  0% { transform: scale(0.7); }
+  50% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+/* ==========================================================================
+   Order Success Post-Purchase Celebration Animations
+   ========================================================================== */
+
+/* Luxury seal spring entrance */
+.animate-seal-pop {
+  animation: sealPop 700ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes sealPop {
+  0% { transform: scale(0.25); opacity: 0; }
+  60% { transform: scale(1.12); opacity: 1; }
+  85% { transform: scale(0.96); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Checkmark dynamic SVG path draw */
+.animate-check-draw {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: checkDraw 650ms cubic-bezier(0.2, 0.8, 0.25, 1) 200ms forwards;
+}
+
+@keyframes checkDraw {
+  0% { stroke-dashoffset: 100; opacity: 0; }
+  30% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 1; }
+}
+
+/* Circle perimeter stroke draw */
+.animate-circle-draw {
+  stroke-dasharray: 283;
+  stroke-dashoffset: 283;
+  animation: circleDraw 800ms cubic-bezier(0.2, 0.8, 0.25, 1) 50ms forwards;
+}
+
+@keyframes circleDraw {
+  0% { stroke-dashoffset: 283; opacity: 0; }
+  10% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 1; }
+}
+
+/* Orbiting sparkle star entrance */
+.animate-sparkle-orbit-1 {
+  animation: orbitSparklePop 600ms cubic-bezier(0.34, 1.56, 0.64, 1) 350ms both;
+}
+.animate-sparkle-orbit-2 {
+  animation: orbitSparklePop 600ms cubic-bezier(0.34, 1.56, 0.64, 1) 480ms both;
+}
+.animate-sparkle-orbit-3 {
+  animation: orbitSparklePop 600ms cubic-bezier(0.34, 1.56, 0.64, 1) 600ms both;
+}
+
+@keyframes orbitSparklePop {
+  0% { transform: scale(0) rotate(-45deg); opacity: 0; }
+  70% { transform: scale(1.25) rotate(15deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+/* Luxury gold shimmer sweep */
+.animate-luxury-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(245, 158, 11, 0.08) 0%,
+    rgba(251, 191, 36, 0.4) 50%,
+    rgba(245, 158, 11, 0.08) 100%
+  );
+  background-size: 200% 100%;
+  animation: luxuryShimmer 2.5s infinite linear;
+}
+
+@keyframes luxuryShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ==========================================================================
+   Order Tracking Live Delivery Motion & Stepper Animations
+   ========================================================================== */
+
+/* Road dashes scrolling effect */
+.animate-road-dashes {
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.7) 0px,
+    rgba(255, 255, 255, 0.7) 6px,
+    transparent 6px,
+    transparent 14px
+  );
+  background-size: 20px 2px;
+  background-repeat: repeat-x;
+  background-position: 0 center;
+  animation: roadDashes 0.6s linear infinite;
+}
+
+@keyframes roadDashes {
+  0% { background-position: 0px center; }
+  100% { background-position: -20px center; }
+}
+
+/* Delivery vehicle road suspension bounce */
+.animate-vehicle-bounce {
+  animation: vehicleBounce 0.75s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes vehicleBounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+/* Wheels spin animation */
+.animate-wheel-spin {
+  animation: wheelSpin 0.5s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes wheelSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Radar pulse ring for current tracking stage */
+.animate-radar-ring {
+  animation: radarRing 1.8s cubic-bezier(0.2, 0.8, 0.25, 1) infinite;
+}
+
+@keyframes radarRing {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.85;
+  }
+  60% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+
+/* Connector line dynamic fluid flow */
+.animate-connector-flow {
+  background: linear-gradient(
+    180deg,
+    #10b981 0%,
+    #f59e0b 50%,
+    #10b981 100%
+  );
+  background-size: 100% 200%;
+  animation: connectorFlow 2s linear infinite;
+}
+
+@keyframes connectorFlow {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 0% 200%; }
+}
+
+/* Parcel rocking bounce for packing stage */
+.animate-parcel-wobble {
+  animation: parcelWobble 2.2s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+@keyframes parcelWobble {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  20% { transform: rotate(-5deg) scale(1.05); }
+  40% { transform: rotate(4deg) scale(1.05); }
+  60% { transform: rotate(-2deg) scale(1.02); }
+  80% { transform: rotate(1deg) scale(1); }
+}
+
+/* ==========================================================================
+   Classic & Professional Empty State Animations (Zero Sparkles)
+   ========================================================================== */
+
+/* Classic vertical ambient floating */
+.animate-classic-float {
+  animation: classicFloat 3.8s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes classicFloat {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+/* Floor contact shadow expansion / contraction */
+.animate-shadow-pulse {
+  animation: shadowPulse 3.8s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes shadowPulse {
+  0%, 100% {
+    transform: scaleX(1) scaleY(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scaleX(0.85) scaleY(0.75);
+    opacity: 0.3;
+  }
+}
+
+/* Hairline concentric aperture ring breathing */
+.animate-aperture-breathe {
+  animation: apertureBreathe 4.5s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes apertureBreathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.7;
+  }
+}
+
+/* Precision optical radar sweep */
+.animate-precision-sweep {
+  animation: precisionSweep 5s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes precisionSweep {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* Classic luxury contour sheen */
+.animate-contour-sheen {
+  animation: contourSheen 4.2s ease-in-out infinite;
+}
+
+@keyframes contourSheen {
+  0%, 100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.95;
+    filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.45));
+  }
+}
+
+/* Classic resting heartbeat pulse */
+.animate-classic-heartbeat {
+  animation: classicHeartbeat 3.2s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes classicHeartbeat {
+  0%, 100% {
+    transform: scale(1);
+  }
+  14% {
+    transform: scale(1.06);
+  }
+  28% {
+    transform: scale(1);
+  }
+  42% {
+    transform: scale(1.04);
+  }
+  56% {
+    transform: scale(1);
+  }
+}
+
+/* ------------------------------------------------------------------------------
+   LUXURY CHAT WALLPAPER & TAIL NOTCHES (WhatsApp & Telegram Starlight Canvas)
+   ------------------------------------------------------------------------------ */
+.chat-wallpaper-doodle {
+  background-color: #09090b;
+  background-image: 
+    radial-gradient(circle at 16px 16px, rgba(250, 204, 21, 0.055) 1.5px, transparent 1.5px),
+    radial-gradient(circle at 48px 48px, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+
+:root:not(.dark) .chat-wallpaper-doodle,
+.light .chat-wallpaper-doodle {
+  background-color: #f8fafc;
+  background-image: 
+    radial-gradient(circle at 16px 16px, rgba(15, 23, 42, 0.04) 1.5px, transparent 1.5px),
+    radial-gradient(circle at 48px 48px, rgba(217, 119, 6, 0.035) 1.2px, transparent 1.2px);
+  background-size: 64px 64px;
+}
+
+/* Floating heart burst on double-tap */
+@keyframes heartFloatUp {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.35);
+  }
+  25% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.3);
+  }
+  65% {
+    opacity: 0.95;
+    transform: translate(-50%, -75%) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -105%) scale(0.85);
+  }
+}
+
+.animate-heart-float {
+  animation: heartFloatUp 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* iOS Safe Area & Header Clarity (Prevents Notch Clipping & Text Blur) */
+.ios-safe-header {
+  padding-top: max(0.875rem, constant(safe-area-inset-top));
+  padding-top: max(0.875rem, env(safe-area-inset-top));
+  padding-bottom: 0.625rem;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-transform: none !important;
+  transform: none !important;
+  -webkit-backface-visibility: visible !important;
+  backface-visibility: visible !important;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
+}
+
+.animate-shake {
+  animation: shake 0.35s ease-in-out;
+}
+
+/* Luxury Spring Pop-In for Chat Messages (iOS Telegram style) */
+@keyframes messagePopIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.95) translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-message-pop {
+  animation: messagePopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* Smooth Luxury Image Viewer Animations */
+@keyframes viewerBackdropEnter {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes viewerBackdropExit {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes viewerImageZoomEnter {
+  0% {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes viewerImageZoomExit {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+@keyframes viewerSlideDown {
+  0% {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes viewerSlideUp {
+  0% {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-viewer-backdrop {
+  animation: viewerBackdropEnter 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity;
+}
+
+.animate-viewer-backdrop-exit {
+  animation: viewerBackdropExit 0.2s ease-in forwards;
+  will-change: opacity;
+}
+
+.animate-viewer-image {
+  animation: viewerImageZoomEnter 0.26s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.animate-viewer-image-exit {
+  animation: viewerImageZoomExit 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.animate-viewer-header {
+  animation: viewerSlideDown 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.animate-viewer-footer {
+  animation: viewerSlideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* Prevent page-swipe & overscroll navigation glitches, lock window viewport strictly */
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+
+.official-chat-dark {
+  overscroll-behavior: none !important;
+}
+
+.chat-wallpaper-doodle {
+  touch-action: pan-y;
+  overscroll-behavior-x: none !important;
+}
+
+/* Disable native mobile long-press text selection callout on message bubbles */
+[data-message-bubble],
+.message-bubble {
+  -webkit-touch-callout: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+@media (min-width: 768px) {
+  [data-message-bubble],
+  .message-bubble {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+  }
+}
+
+/* ── LUXURY CHAT LOADING SHIMMER & SKELETON ANIMATIONS ── */
+@keyframes chatShimmerWave {
+  0% {
+    transform: translateX(-150%);
+  }
+  100% {
+    transform: translateX(150%);
+  }
+}
+
+.chat-shimmer-sweep {
+  position: relative;
+  overflow: hidden;
+}
+
+.chat-shimmer-sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-150%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 35%,
+    rgba(250, 204, 21, 0.16) 50%,
+    rgba(255, 255, 255, 0.08) 65%,
+    transparent 100%
+  );
+  animation: chatShimmerWave 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+.official-chat-dark .chat-shimmer-sweep::after,
+.dark .chat-shimmer-sweep::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.03) 30%,
+    rgba(250, 204, 21, 0.12) 50%,
+    rgba(255, 255, 255, 0.03) 70%,
+    transparent 100%
+  );
+}
+
+/* Sleek Top Chat Progress Bar (Telegram / YouTube caliber) */
+@keyframes chatTopProgress {
+  0% {
+    transform: scaleX(0.05);
+    opacity: 1;
+  }
+  45% {
+    transform: scaleX(0.68);
+    opacity: 1;
+  }
+  75% {
+    transform: scaleX(0.88);
+    opacity: 0.95;
+  }
+  95% {
+    transform: scaleX(0.98);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+
+.animate-chat-top-progress {
+  transform-origin: left center;
+  animation: chatTopProgress 1.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+/* Message reveal staggered fade-and-slide */
+@keyframes chatMessageEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-message-entrance {
+  animation: chatMessageEntrance 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+
+

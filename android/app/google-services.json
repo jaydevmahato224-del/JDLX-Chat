@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "644337459324",
+    "project_id": "jdlx-mobile-b4b19",
+    "storage_bucket": "jdlx-mobile-b4b19.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:644337459324:android:974fc19ed2f5c0d04969f9",
+        "android_client_info": {
+          "package_name": "in.jdlxmobile.store"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAv17RuTP4UsEYBfHq8PkU35lJPRID2piI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:644337459324:android:974fc19ed2f5c0d04969fa",
+        "android_client_info": {
+          "package_name": "in.jdlxmobile.chat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAv17RuTP4UsEYBfHq8PkU35lJPRID2piI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
