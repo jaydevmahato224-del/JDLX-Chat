@@ -2380,16 +2380,70 @@ html, body {
 
 /* Privacy Shield blur applied when desktop screenshot tool or window blur occurs */
 .jdlx-screen-protected-window.jdlx-window-blurred .jdlx-privacy-sensitive {
-  filter: blur(28px) brightness(0.6) !important;
-  opacity: 0.15 !important;
-  transition: filter 0.12s ease-out, opacity 0.12s ease-out;
+  filter: blur(36px) brightness(0.3) !important;
+  opacity: 0.05 !important;
+  transition: none !important;
   pointer-events: none !important;
 }
 
-/* Brief visual flash suppression when PrintScreen/Snipping shortcut is intercepted */
-html.jdlx-capture-suppressed body {
-  filter: brightness(0) !important;
-  transition: filter 0.05s ease-out;
+/* Block Print / PDF export of protected chats and profiles */
+@media print {
+  body {
+    display: none !important;
+  }
+  html::after {
+    content: "🔒 JDLX Chat: Screenshots and printing of protected chats and profiles are restricted." !important;
+    display: block !important;
+    padding: 3rem !important;
+    font-family: system-ui, -apple-system, sans-serif !important;
+    font-size: 20px !important;
+    font-weight: bold !important;
+    color: #000 !important;
+    text-align: center !important;
+  }
+}
+
+/* ── Login page: mobile-app refinements (no business logic changes) ── */
+.login-sheet {
+  min-height: calc(100dvh - env(safe-area-inset-top));
+  display: flex;
+  flex-direction: column;
+}
+
+.ios-safe-header {
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+}
+
+.ui-card {
+  overflow: clip;
+}
+
+.field-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Mobile: full-width card with safe-area bottom padding */
+@media (max-width: 640px) {
+  .app-scroll-root {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  main > div {
+    border-radius: 0 !important;
+    min-height: unset !important;
+  }
+}
+
+/* Reduce motion for prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 

@@ -1532,7 +1532,21 @@ export const useChatStore = create((set, get) => ({
           })
         )
         if (get().chatToken !== token) return
-        set({ conversations: decryptedConvs, conversationsLoaded: true, conversationsLoading: false, conversationsError: null })
+
+        // Strip stale last_message previews from the conversations list when
+        // the open room has no messages — prevents the "chat leak" glitch on
+        // both the left sidebar and the right pane.
+        const messagesEmpty = get().messages.length === 0
+        const activeRoomId = get().activeRoomId
+        const cleanedConvs = messagesEmpty && activeRoomId
+          ? decryptedConvs.map((c) =>
+              sameId(c.id, activeRoomId) && c.last_message
+                ? { ...c, last_message: '', last_message_user_id: null, last_message_type: 'text', last_message_is_read: false }
+                : c
+            )
+          : decryptedConvs
+
+        set({ conversations: cleanedConvs, conversationsLoaded: true, conversationsLoading: false, conversationsError: null })
 
         // Auto-unlock: If open room currently holds any locked messages, re-decrypt them now with the fresh contact keys
         if (get().activeRoomId && get().messages.some((m) => m._locked)) {
@@ -1556,7 +1570,23 @@ export const useChatStore = create((set, get) => ({
         } else if (currentActive) {
           // Update active conversation reference
           const updated = decryptedConvs.find((c) => sameId(c.id, currentActive.id))
-          if (updated) set({ activeConversation: updated })
+          if (updated) {
+            // Never restore a stale last_message preview from the server when
+            // the room has no messages — otherwise the "chat leak" glitch
+            // reappears on every conversations poll (old preview text with an
+            // empty pane).
+            const messagesEmpty = get().messages.length === 0
+            const next = updated.last_message && messagesEmpty
+              ? {
+                  ...updated,
+                  last_message: '',
+                  last_message_user_id: null,
+                  last_message_type: 'text',
+                  last_message_is_read: false
+                }
+              : updated
+            set({ activeConversation: next })
+          }
         }
       } catch (e) {
         if (get().chatToken === token) {
@@ -1599,7 +1629,19 @@ export const useChatStore = create((set, get) => ({
     })
     if (uid) setCachedActiveRoomId(uid, conv.id)
     set((state) => ({
-      activeConversation: { ...conv, unread_count: 0 },
+      // Never carry a stale last_message preview from the conversation list
+      // when there are no actual cached messages — that causes the "chat leak"
+      // glitch (old preview text with an empty conversation pane).
+      activeConversation: cachedMsgs.length > 0
+        ? { ...conv, unread_count: 0 }
+        : {
+            ...conv,
+            unread_count: 0,
+            last_message: '',
+            last_message_user_id: null,
+            last_message_type: 'text',
+            last_message_is_read: false
+          },
       activeRoomId: conv.id,
       messages: cachedMsgs,
       messagesLoading: cachedMsgs.length === 0,
@@ -1885,10 +1927,24 @@ export const useChatStore = create((set, get) => ({
       }
     } catch (e) {
       const hasCached = get().messages.length > 0
-      set({
+      const updates = {
         messagesLoading: false,
         messagesError: hasCached ? null : 'Could not load messages. Check your connection.',
-      })
+      }
+      // No local evidence of messages AND the server fetch failed:
+      // clear the stale last_message preview so the UI does not show a
+      // "chat leak" (old preview text with an empty conversation).
+      if (!hasCached) {
+        updates.conversations = get().conversations.map((c) =>
+          sameId(c.id, targetRoomId)
+            ? { ...c, last_message: '', last_message_user_id: null, last_message_type: 'text', last_message_is_read: false }
+            : c
+        )
+        updates.activeConversation = get().activeConversation && sameId(get().activeConversation.id, targetRoomId)
+          ? { ...get().activeConversation, last_message: '', last_message_user_id: null, last_message_type: 'text', last_message_is_read: false }
+          : get().activeConversation
+      }
+      set(updates)
       console.warn('Fetch room messages error:', e)
     }
   },

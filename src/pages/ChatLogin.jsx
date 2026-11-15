@@ -650,12 +650,14 @@ export default function ChatLogin() {
   }
 
   return (
-    <div className={`app-scroll-root w-full font-sans select-text transition-colors duration-200 ${
+    <div className={`login-sheet app-scroll-root w-full font-sans select-text transition-colors duration-200 ${
       isLight ? 'bg-[#f6f7f9] text-slate-900' : 'official-chat-dark dark bg-[#090a0c] text-white'
     }`}>
-      <div className="mx-auto flex min-h-[100dvh] w-full max-w-[440px] flex-col px-4 sm:px-6">
+      <div className="mx-auto flex min-h-[100dvh] w-full max-w-[440px] flex-col px-4 sm:px-6 pb-[env(safe-area-inset-bottom)]">
       {/* Top Bar: chat brand + theme switcher */}
-      <header className="ios-safe-header flex items-center justify-between gap-3 pt-1">
+      <header className={`sticky top-0 z-30 w-full ios-safe-header flex items-center justify-between gap-3 pt-[max(0.9rem,env(safe-area-inset-top))] pb-2 backdrop-blur-md transition-colors duration-200 ${
+        isLight ? 'bg-white/80 border-b border-slate-200/50' : 'bg-[#090a0c]/80 border-b border-white/5'
+      }`}>
         <div className="flex min-w-0 items-center gap-2.5">
           <div className={`h-9 w-9 shrink-0 overflow-hidden rounded-xl border ${isLight ? 'border-slate-200 bg-white shadow-sm' : 'border-white/10 bg-[#14171b]'}`}>
             <img src="/logo192.png" alt="" className="h-full w-full object-contain" />
@@ -713,11 +715,11 @@ export default function ChatLogin() {
       </header>
 
       {/* Main Card */}
-      <main className="flex w-full flex-1 flex-col justify-center py-6 sm:py-8">
-        <div ref={cardRef} className={`ui-card relative overflow-hidden p-5 transition-colors sm:p-6 ${
+      <main className="flex w-full flex-1 flex-col pt-2 sm:pt-4 pb-4 sm:pb-8">
+        <div ref={cardRef} className={`ui-card relative overflow-hidden p-5 transition-colors sm:p-6 w-full min-w-0 ${
           isLight
-            ? 'border-slate-200/90 bg-white'
-            : 'border-white/[0.07] bg-[#0f1114]'
+            ? 'border-slate-200/90 bg-white rounded-3xl md:rounded-2xl shadow-2xl'
+            : 'border-white/[0.07] bg-[#0f1114] rounded-3xl md:rounded-2xl shadow-2xl'
         }`}>
           {/* Emblem & Branding */}
           <div className="mb-5 flex items-start gap-3.5">

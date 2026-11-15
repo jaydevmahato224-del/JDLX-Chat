@@ -8,6 +8,7 @@ import {
   CheckCheck, 
   Check, 
   ShieldCheck, 
+  ShieldAlert,
   Bell, 
   X, 
   AlertCircle, 
@@ -91,6 +92,9 @@ import { copyTextToClipboard } from '../utils/clipboard'
 import { useDialogA11y } from '../hooks/useDialogA11y'
 import { 
   useScreenProtection, 
+  useScreenProtectionState,
+  dismissShield,
+  pauseBlurShield,
   isScreenSecurityEnabled, 
   setScreenSecurityEnabled, 
   protectedMediaProps 
@@ -2079,6 +2083,7 @@ export default function ChatConversation() {
     }
   })
   const [screenSecurity, setScreenSecurity] = useState(() => isScreenSecurityEnabled())
+  const { showShield } = useScreenProtectionState()
 
   // Small synthesized chime for incoming messages (no audio asset needed).
   const audioContextRef = useRef(null)
@@ -2174,13 +2179,15 @@ export default function ChatConversation() {
   }
 
   // Screenshot & Screen Capture Protection across sensitive areas:
-  // 1. Chat Conversation area
+  // 1. Entire Chat workspace on Desktop & Mobile
+  useScreenProtection('chat_app', Boolean(screenSecurity))
+  // 2. Chat Conversation active room
   useScreenProtection('chat', Boolean((activeConversation || activeRoomId) && screenSecurity))
-  // 2. Profile & Settings Drawer
+  // 3. Profile & Settings Drawer
   useScreenProtection('profile', Boolean(showProfileDrawer && screenSecurity))
-  // 3. Friend / Contact Info Modal
+  // 4. Friend / Contact Info Modal
   useScreenProtection('contact_profile', Boolean(showContactInfoModal && screenSecurity))
-  // 4. Media & Avatar Lightbox
+  // 5. Media & Avatar Lightbox
   useScreenProtection('lightbox', Boolean(selectedPreviewImage && screenSecurity))
 
   const handleAvatarSelect = async (e) => {
@@ -6235,6 +6242,31 @@ export default function ChatConversation() {
                           )}
                         </h3>
                         <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${isLight ? 'text-amber-600' : 'text-amber-400'}`} />
+                        {screenSecurity && (
+                          <span 
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              triggerHaptic('light')
+                              toast('🛡️ Screenshot Protection Active: Screen captures, recordings, and snipping tools are blocked.', {
+                                id: 'screen-shield-info',
+                                icon: '🔒',
+                                duration: 3000,
+                                style: {
+                                  background: '#18181b',
+                                  color: '#facc15',
+                                  border: '1px solid rgba(250, 204, 21, 0.4)',
+                                  fontWeight: '600',
+                                  fontSize: '12px'
+                                }
+                              })
+                            }}
+                            className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border border-emerald-500/30 shrink-0 select-none hover:bg-emerald-500/25 transition cursor-pointer"
+                            title="Screenshot & Screen Capture Protection Active (Click for info)"
+                          >
+                            <Lock className="w-2.5 h-2.5" />
+                            <span>Protected</span>
+                          </span>
+                        )}
                         {isRoomMuted(activeRoomId) && (
                           <button
                             type="button"
@@ -7333,6 +7365,7 @@ export default function ChatConversation() {
                         type="button"
                         onClick={() => {
                           triggerHaptic('light')
+                          pauseBlurShield(8000)
                           if (fileInputRef.current) {
                             fileInputRef.current.accept = 'image/*,video/*'
                             fileInputRef.current.click()
@@ -7354,6 +7387,7 @@ export default function ChatConversation() {
                         type="button"
                         onClick={() => {
                           triggerHaptic('light')
+                          pauseBlurShield(8000)
                           if (fileInputRef.current) {
                             fileInputRef.current.accept = '.pdf,application/pdf'
                             fileInputRef.current.click()
@@ -7375,6 +7409,7 @@ export default function ChatConversation() {
                         type="button"
                         onClick={() => {
                           triggerHaptic('light')
+                          pauseBlurShield(8000)
                           if (fileInputRef.current) {
                             fileInputRef.current.accept = 'audio/*'
                             fileInputRef.current.click()
@@ -8581,6 +8616,7 @@ export default function ChatConversation() {
                             }]
                           )
                         } else {
+                          pauseBlurShield(8000)
                           avatarFileInputRef.current?.click()
                         }
                       }}
@@ -8607,6 +8643,7 @@ export default function ChatConversation() {
                       <div 
                         onClick={(e) => {
                           e.stopPropagation()
+                          pauseBlurShield(8000)
                           avatarFileInputRef.current?.click()
                         }}
                         className="absolute -bottom-1 -right-1 p-2 rounded-xl bg-gradient-to-tr from-[#facc15] to-[#eab308] text-black shadow-lg shadow-yellow-500/30 group-hover:scale-110 active:scale-95 transition-all"
@@ -8617,7 +8654,10 @@ export default function ChatConversation() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => avatarFileInputRef.current?.click()}
+                      onClick={() => {
+                        pauseBlurShield(8000)
+                        avatarFileInputRef.current?.click()
+                      }}
                       disabled={isUploadingAvatar}
                       className={`mt-2.5 text-xs font-black inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
                         isLight ? 'text-amber-700 hover:text-amber-800' : 'text-[#facc15] hover:underline'
@@ -10245,7 +10285,10 @@ export default function ChatConversation() {
                 ))}
                 <button
                   type="button"
-                  onClick={() => addMoreImagesInputRef.current?.click()}
+                  onClick={() => {
+                    pauseBlurShield(8000)
+                    addMoreImagesInputRef.current?.click()
+                  }}
                   className="w-12 h-12 rounded-xl border border-dashed border-white/25 hover:border-yellow-400/60 hover:bg-white/5 text-zinc-400 hover:text-[#facc15] flex flex-col items-center justify-center gap-0.5 shrink-0 transition cursor-pointer disabled:opacity-30"
                   title="Add more photos"
                 >
@@ -13501,6 +13544,40 @@ export default function ChatConversation() {
                 <span>{confirmDialog.confirmLabel || 'Confirm'}</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DESKTOP PRIVACY SHIELD OVERLAY (ACTIVATES ON PRINT-SCREEN, SNIPPING TOOL & DESKTOP WINDOW BLUR) ── */}
+      {showShield && (
+        <div
+          onClick={dismissShield}
+          role="alert"
+          aria-live="assertive"
+          className="fixed inset-0 z-[999999] flex flex-col items-center justify-center p-6 text-center select-none bg-[#090a0c]/98 backdrop-blur-2xl animate-in fade-in duration-75 cursor-pointer"
+        >
+          <div className="relative mb-5 flex items-center justify-center">
+            <div className="absolute -inset-4 rounded-full bg-gradient-to-tr from-amber-500/30 to-yellow-400/20 blur-xl animate-pulse" />
+            <div className="relative w-20 h-20 rounded-3xl bg-amber-500/15 border-2 border-yellow-500/40 text-[#facc15] flex items-center justify-center shadow-2xl shadow-yellow-500/20">
+              <ShieldAlert className="w-10 h-10" />
+            </div>
+          </div>
+          
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-yellow-500/15 border border-yellow-500/30 text-[#facc15] text-[11px] font-black uppercase tracking-wider mb-3">
+            <Lock className="w-3.5 h-3.5" />
+            <span>Screenshot &amp; Screen Capture Restricted</span>
+          </div>
+
+          <h2 className="text-xl sm:text-2xl font-black text-white max-w-md tracking-tight">
+            JDLX Privacy Shield Active
+          </h2>
+
+          <p className="text-xs sm:text-sm text-zinc-400 max-w-sm mt-2 leading-relaxed">
+            This chat, profile and media are protected. Screen capture, snipping tool, and unauthorized recordings are blocked to safeguard privacy.
+          </p>
+
+          <div className="mt-6 flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs text-zinc-300 font-medium hover:bg-white/10 transition">
+            <span>Click anywhere to resume</span>
           </div>
         </div>
       )}
