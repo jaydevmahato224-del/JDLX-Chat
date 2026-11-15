@@ -25,10 +25,12 @@ let nextDialogId = 0
  * Attach the returned ref to the dialog panel (not the backdrop), give that
  * panel `role="dialog" aria-modal="true"` and `tabIndex={-1}`.
  */
-export function useDialogA11y(open, onClose) {
+export function useDialogA11y(open, onClose, initialFocusSelector = null) {
   const containerRef = useRef(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  const initialFocusSelectorRef = useRef(initialFocusSelector)
+  initialFocusSelectorRef.current = initialFocusSelector
 
   useEffect(() => {
     if (!open) return undefined
@@ -46,7 +48,14 @@ export function useDialogA11y(open, onClose) {
 
     const focusFirst = () => {
       const nodes = getFocusable()
-      const target = nodes[0] || container
+      // Dialogs can name their intended entry point (a search or PIN field).
+      // Otherwise the first control (usually the close button) takes focus, so
+      // opening a profile sheet does not pop the mobile keyboard.
+      const selector = initialFocusSelectorRef.current
+      const preferred = selector
+        ? Array.from(container?.querySelectorAll(selector) || []).find((el) => el.getClientRects().length > 0)
+        : null
+      const target = preferred || nodes[0] || container
       if (target && typeof target.focus === 'function') {
         target.focus({ preventScroll: true })
       }

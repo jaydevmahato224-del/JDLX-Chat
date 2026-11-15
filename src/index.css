@@ -2363,5 +2363,35 @@ html, body {
   }
 }
 
+/* ── SCREENSHOT & PRIVACY PROTECTION SYSTEM ── */
+.jdlx-protected-view {
+  -webkit-touch-callout: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.jdlx-protected-image {
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  pointer-events: auto;
+}
+
+/* Privacy Shield blur applied when desktop screenshot tool or window blur occurs */
+.jdlx-screen-protected-window.jdlx-window-blurred .jdlx-privacy-sensitive {
+  filter: blur(28px) brightness(0.6) !important;
+  opacity: 0.15 !important;
+  transition: filter 0.12s ease-out, opacity 0.12s ease-out;
+  pointer-events: none !important;
+}
+
+/* Brief visual flash suppression when PrintScreen/Snipping shortcut is intercepted */
+html.jdlx-capture-suppressed body {
+  filter: brightness(0) !important;
+  transition: filter 0.05s ease-out;
+}
+
+
 
 

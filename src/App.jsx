@@ -69,7 +69,7 @@ function App() {
     root.style.colorScheme = isDark ? 'dark' : 'light'
     document.body.classList.toggle('official-chat-dark', isDark)
     const metas = document.querySelectorAll('meta[name="theme-color"]')
-    metas.forEach((m) => m.setAttribute('content', isDark ? '#09090b' : '#ffffff'))
+    metas.forEach((m) => m.setAttribute('content', isDark ? '#090a0c' : '#f6f7f9'))
     const appleStatusMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')
     if (appleStatusMeta) {
       appleStatusMeta.setAttribute('content', isDark ? 'black' : 'default')

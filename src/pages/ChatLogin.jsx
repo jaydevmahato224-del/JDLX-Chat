@@ -209,6 +209,26 @@ export default function ChatLogin() {
   // Tab mode: 'signin' | 'register' (default: 'signin')
   const [authMode, setAuthMode] = useState('signin')
   const [errorMsg, setErrorMsg] = useState('')
+  const cardRef = useRef(null)
+  const errorRef = useRef(null)
+  const authModeMountedRef = useRef(false)
+
+  // A validation error must never render above the user's current scroll
+  // position on the long registration form. Bring it into view when it appears.
+  useEffect(() => {
+    if (!errorMsg) return
+    errorRef.current?.scrollIntoView({ block: 'center' })
+  }, [errorMsg])
+
+  // Switching between Sign in and Create account should show the new form from
+  // the top instead of preserving the previous form's scroll offset.
+  useEffect(() => {
+    if (!authModeMountedRef.current) {
+      authModeMountedRef.current = true
+      return
+    }
+    cardRef.current?.scrollIntoView({ block: 'start' })
+  }, [authMode])
 
   // Sign In Form States
   const [loginIdentifier, setLoginIdentifier] = useState('')
@@ -657,6 +677,7 @@ export default function ChatLogin() {
             target="_blank"
             rel="noopener noreferrer"
             title="Open the JDLX store"
+            aria-label="Open the JDLX store in a new tab"
             className={`ui-btn ui-btn-ghost h-9 min-h-0 gap-1.5 px-2.5 text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}
           >
             <ExternalLink className="h-3.5 w-3.5 shrink-0" />
@@ -667,6 +688,7 @@ export default function ChatLogin() {
             href="/downloads/official-chat.apk"
             download="official-chat.apk"
             title="Download the JDLX Chat Android APK"
+            aria-label="Download the JDLX Chat Android APK"
             className={`ui-btn ui-btn-ghost h-9 min-h-0 gap-1.5 px-2.5 text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}
           >
             <Download className="h-3.5 w-3.5 shrink-0" />
@@ -692,7 +714,7 @@ export default function ChatLogin() {
 
       {/* Main Card */}
       <main className="flex w-full flex-1 flex-col justify-center py-6 sm:py-8">
-        <div className={`ui-card relative overflow-hidden p-5 transition-colors sm:p-6 ${
+        <div ref={cardRef} className={`ui-card relative overflow-hidden p-5 transition-colors sm:p-6 ${
           isLight
             ? 'border-slate-200/90 bg-white'
             : 'border-white/[0.07] bg-[#0f1114]'
@@ -786,6 +808,7 @@ export default function ChatLogin() {
           {/* Error Message Box */}
           {errorMsg && (
             <div
+              ref={errorRef}
               role="alert"
               className={`mb-3 flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-xs font-medium animate-shake ${
                 isLight
@@ -820,6 +843,7 @@ export default function ChatLogin() {
                   type="text"
                   inputMode="text"
                   autoComplete="username"
+                  aria-label="Username, email address or mobile number"
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck="false"
@@ -842,6 +866,7 @@ export default function ChatLogin() {
                   <input
                     type={showLoginPassword ? 'text' : 'password'}
                     autoComplete="current-password"
+                    aria-label="Password"
                     placeholder="Enter your password"
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
@@ -852,7 +877,7 @@ export default function ChatLogin() {
                     type="button"
                     onClick={() => setShowLoginPassword(!showLoginPassword)}
                     aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
-                    className={`absolute right-2 flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+                    className={`absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg transition-colors ${
                       isLight ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-600' : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
                     }`}
                     title={showLoginPassword ? 'Hide password' : 'Show password'}
@@ -919,6 +944,7 @@ export default function ChatLogin() {
                   type="text"
                   inputMode="text"
                   autoComplete="name"
+                  aria-label="Full name"
                   autoCapitalize="words"
                   autoCorrect="off"
                   placeholder="e.g. Jaydev Mahato"
@@ -947,6 +973,7 @@ export default function ChatLogin() {
                     type="text"
                     inputMode="text"
                     autoComplete="off"
+                    aria-label="Unique username handle"
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck="false"
@@ -971,7 +998,7 @@ export default function ChatLogin() {
 
                 {/* Real-time username feedback message */}
                 {usernameStatus.message && (
-                  <p className={`text-[11px] font-medium transition-all ${
+                  <p aria-live="polite" className={`text-[11px] font-medium transition-all ${
                     usernameStatus.available === true
                       ? 'text-emerald-600 dark:text-emerald-400'
                       : usernameStatus.available === false
@@ -994,6 +1021,7 @@ export default function ChatLogin() {
                   type="email"
                   inputMode="email"
                   autoComplete="email"
+                  aria-label="Email address"
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck="false"
@@ -1039,6 +1067,7 @@ export default function ChatLogin() {
                       type="tel"
                       inputMode="numeric"
                       pattern="[0-9]*"
+                      aria-label="Indian mobile number"
                       autoComplete="tel-national"
                       maxLength={11}
                       placeholder="98765 43210"
@@ -1068,6 +1097,7 @@ export default function ChatLogin() {
                 <select
                   value={regGender}
                   onChange={(e) => setRegGender(e.target.value)}
+                  aria-label="Gender"
                   className="ui-input ui-select text-base sm:text-sm"
                   required
                 >
@@ -1090,6 +1120,7 @@ export default function ChatLogin() {
                   <input
                     type={showRegPassword ? 'text' : 'password'}
                     autoComplete="new-password"
+                    aria-label="Create password"
                     placeholder="Min 6 characters"
                     value={regPassword}
                     onChange={(e) => setRegPassword(e.target.value)}
@@ -1100,7 +1131,7 @@ export default function ChatLogin() {
                     type="button"
                     onClick={() => setShowRegPassword(!showRegPassword)}
                     aria-label={showRegPassword ? 'Hide password' : 'Show password'}
-                    className={`absolute right-2 flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+                    className={`absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg transition-colors ${
                       isLight ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-600' : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
                     }`}
                     title={showRegPassword ? 'Hide password' : 'Show password'}

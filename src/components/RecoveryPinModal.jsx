@@ -3,6 +3,7 @@ import { ShieldCheck, KeyRound, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
+import { useDialogA11y } from '../hooks/useDialogA11y'
 
 const SETUP_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -39,6 +40,13 @@ export default function RecoveryPinModal() {
   const [lockUntil, setLockUntil] = useState(0)
   const [nowTick, setNowTick] = useState(() => Date.now())
   const handledNonceRef = useRef(0)
+  // Keeps Tab focus inside this critical dialog. Escape is intentionally not a
+  // dismissal path here: leaving without unlocking would strand the session.
+  const dialogRef = useDialogA11y(
+    Boolean(mode),
+    null,
+    mode === 'unlock' ? 'input[type="password"]' : null
+  )
 
   // A short client-side cooldown after repeated wrong PINs. It does not replace
   // the real KDF work, but it stops a scripted UI from spraying guesses and
@@ -219,6 +227,8 @@ export default function RecoveryPinModal() {
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200">
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="recovery-pin-title"
@@ -255,6 +265,7 @@ export default function RecoveryPinModal() {
               className={fieldClass}
               type="password"
               autoComplete="new-password"
+              aria-label="Recovery PIN, at least 6 characters"
               placeholder="Recovery PIN (min 6 characters)"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
@@ -264,6 +275,7 @@ export default function RecoveryPinModal() {
               className={fieldClass}
               type="password"
               autoComplete="new-password"
+              aria-label="Confirm Recovery PIN"
               placeholder="Confirm Recovery PIN"
               value={confirmPin}
               onChange={(e) => setConfirmPin(e.target.value)}
@@ -299,6 +311,8 @@ export default function RecoveryPinModal() {
               className={fieldClass}
               type="password"
               autoComplete="current-password"
+              aria-label="Recovery PIN"
+              aria-invalid={Boolean(error)}
               placeholder="Recovery PIN"
               value={pin}
               onChange={(e) => setPin(e.target.value)}

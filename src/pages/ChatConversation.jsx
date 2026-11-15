@@ -89,6 +89,12 @@ import { sameId } from '../utils/ids'
 import { triggerHaptic } from '../utils/haptics'
 import { copyTextToClipboard } from '../utils/clipboard'
 import { useDialogA11y } from '../hooks/useDialogA11y'
+import { 
+  useScreenProtection, 
+  isScreenSecurityEnabled, 
+  setScreenSecurityEnabled, 
+  protectedMediaProps 
+} from '../utils/screenProtection'
 import toast from 'react-hot-toast'
 
 // Intl formatters are expensive to construct. Reuse one per format instead of
@@ -558,6 +564,8 @@ function SwipeableConversationRow({
         {/* Pin / Unpin Button */}
         <button
           type="button"
+          tabIndex={isOpen ? 0 : -1}
+          aria-hidden={!isOpen}
           onClick={(e) => {
             e.stopPropagation()
             triggerHaptic('medium')
@@ -567,7 +575,7 @@ function SwipeableConversationRow({
             setOffsetX(0)
             onClose?.()
           }}
-          className="w-[70px] flex flex-col items-center justify-center gap-1 font-bold text-[11px] bg-[#facc15] text-[#09090b] hover:bg-yellow-400 active:scale-95 transition-all cursor-pointer select-none"
+          className="flex w-[70px] cursor-pointer select-none flex-col items-center justify-center gap-1 bg-amber-400 text-[11px] font-semibold text-[#171204] transition-all hover:bg-amber-300 active:scale-95"
           title={isPinned ? 'Unpin chat' : 'Pin chat'}
         >
           <Pin className={`w-4 h-4 ${isPinned ? 'fill-current' : ''}`} />
@@ -577,6 +585,8 @@ function SwipeableConversationRow({
         {/* Clear History Button */}
         <button
           type="button"
+          tabIndex={isOpen ? 0 : -1}
+          aria-hidden={!isOpen}
           onClick={(e) => {
             e.stopPropagation()
             triggerHaptic('medium')
@@ -586,7 +596,7 @@ function SwipeableConversationRow({
             onClose?.()
             onClear?.(conv)
           }}
-          className="w-[70px] flex flex-col items-center justify-center gap-1 font-bold text-[11px] bg-rose-600 text-white hover:bg-rose-700 active:scale-95 transition-all cursor-pointer select-none"
+          className="flex w-[70px] cursor-pointer select-none flex-col items-center justify-center gap-1 bg-rose-600 text-[11px] font-semibold text-white transition-all hover:bg-rose-700 active:scale-95"
           title="Clear chat history"
         >
           <Trash2 className="w-4 h-4" />
@@ -597,6 +607,16 @@ function SwipeableConversationRow({
       {/* Foreground Content Card */}
       <div
         onClick={handleCardClick}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            handleCardClick(e)
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open chat with ${conv.contact_name || conv.name || 'contact'}`}
         style={{
           transform: `translateX(${offsetX}px)`,
           transition: isAnimating ? 'transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)' : 'none'
@@ -2058,6 +2078,7 @@ export default function ChatConversation() {
       return true
     }
   })
+  const [screenSecurity, setScreenSecurity] = useState(() => isScreenSecurityEnabled())
 
   // Small synthesized chime for incoming messages (no audio asset needed).
   const audioContextRef = useRef(null)
@@ -2134,6 +2155,33 @@ export default function ChatConversation() {
     setShowDoodle(enabled)
     try { localStorage.setItem('jdlx_chat_doodle', String(enabled)) } catch {}
   }
+
+  const handleToggleScreenSecurity = (enabled) => {
+    setScreenSecurity(enabled)
+    setScreenSecurityEnabled(enabled)
+    triggerHaptic('light')
+    toast(enabled ? '🔒 Screenshot Protection Active' : '🔓 Screenshot Protection Disabled', {
+      icon: enabled ? '🛡️' : '⚠️',
+      duration: 2500,
+      style: {
+        background: '#18181b',
+        color: '#facc15',
+        border: '1px solid rgba(250, 204, 21, 0.4)',
+        fontWeight: '600',
+        fontSize: '12px',
+      }
+    })
+  }
+
+  // Screenshot & Screen Capture Protection across sensitive areas:
+  // 1. Chat Conversation area
+  useScreenProtection('chat', Boolean((activeConversation || activeRoomId) && screenSecurity))
+  // 2. Profile & Settings Drawer
+  useScreenProtection('profile', Boolean(showProfileDrawer && screenSecurity))
+  // 3. Friend / Contact Info Modal
+  useScreenProtection('contact_profile', Boolean(showContactInfoModal && screenSecurity))
+  // 4. Media & Avatar Lightbox
+  useScreenProtection('lightbox', Boolean(selectedPreviewImage && screenSecurity))
 
   const handleAvatarSelect = async (e) => {
     const file = e.target.files?.[0]
@@ -2461,7 +2509,7 @@ export default function ChatConversation() {
     setShowAddFriendModal(false)
     setGlobalSearchQuery('')
     setGlobalSearchResults([])
-  })
+  }, 'input[type="search"], input[placeholder^="Search by @username"]')
   const profileDialogRef = useDialogA11y(showProfileDrawer, () => setShowProfileDrawer(false))
   const notificationsDialogRef = useDialogA11y(showNotificationsDrawer, () => setShowNotificationsDrawer(false))
   const reportDialogRef = useDialogA11y(showReportModal, () => setShowReportModal(false))
@@ -2607,6 +2655,18 @@ export default function ChatConversation() {
   const isTouchRecordingRef = useRef(false)
   const [showAttachmentTray, setShowAttachmentTray] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+
+  // Popovers are dismissible with Escape, matching the modal sheets.
+  useEffect(() => {
+    if (!showAttachmentTray && !showEmojiPicker) return undefined
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return
+      setShowAttachmentTray(false)
+      setShowEmojiPicker(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showAttachmentTray, showEmojiPicker])
   const [activeEmojiCategory, setActiveEmojiCategory] = useState(0)
   const [recordingDuration, setRecordingDuration] = useState(0)
   const [showScrollBottomFab, setShowScrollBottomFab] = useState(false)
@@ -5049,7 +5109,17 @@ export default function ChatConversation() {
         <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           <div 
             onClick={() => setShowProfileDrawer(true)}
-            className="flex items-center gap-2.5 min-w-0 cursor-pointer group select-none"
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setShowProfileDrawer(true)
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            aria-label="Open profile and settings"
+            className="group flex min-w-0 cursor-pointer select-none items-center gap-2.5"
             title="Open Profile & Settings"
           >
             {/* User Avatar with luxury aura */}
@@ -5106,12 +5176,13 @@ export default function ChatConversation() {
         {/* Right: Quick Actions (Add Friend, Theme Toggle, Notifications, User Menu) */}
         <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           {/* Add Friend Button (+👤) */}
-          <button
+          <button type="button"
             onClick={() => {
               setShowAddFriendModal(true)
               fetchFriendsAndRequests()
             }}
             title="Add Friend & Search Users"
+            aria-label="Add friend and search users"
             className="ui-btn ui-btn-primary h-9 min-h-0 gap-1.5 px-2.5 text-xs sm:px-3"
           >
             <UserPlus className="w-4 h-4" />
@@ -5125,7 +5196,7 @@ export default function ChatConversation() {
 
 
           {/* Quick Theme Switcher Button */}
-          <button
+          <button type="button"
             onClick={toggleChatTheme}
             title={`Theme: ${themeLabel} — click to change`}
             aria-label={`Theme: ${themeLabel}. Click to change.`}
@@ -5140,24 +5211,25 @@ export default function ChatConversation() {
 
           {/* Install App Button (PWA - hidden in native APK) */}
           {!isPwaInstalled && !isCapacitorNative() && (
-            <button
+            <button type="button"
               onClick={triggerPwaInstall}
               title="Install JDLX Chat App"
               aria-label="Install JDLX Chat App"
               className="ui-btn ui-btn-secondary h-9 min-h-0 gap-1.5 px-2.5 text-xs"
             >
-              <Download className="w-4 h-4 text-[#facc15]" />
-              <span className="hidden lg:inline text-[11px]">Install App</span>
+              <Download className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <span className="hidden text-[11px] lg:inline">Install App</span>
             </button>
           )}
 
           {/* Notifications Bell */}
-          <button
+          <button type="button"
             onClick={() => {
               setShowNotificationsDrawer(true)
               fetchNotifications()
             }}
             title="Chat Notifications"
+            aria-label={unreadCount > 0 ? `Chat notifications, ${unreadCount} unread` : 'Chat notifications'}
             className="ui-icon-btn relative"
           >
             <Bell className="w-5 h-5" />
@@ -5190,6 +5262,7 @@ export default function ChatConversation() {
                 value={conversationFilter}
                 onChange={(e) => setConversationFilter(e.target.value)}
                 aria-label="Search chats or friends"
+                role="searchbox"
                 className={`h-9 w-full rounded-lg border py-0 pl-9 pr-8 text-xs font-medium transition-colors focus:outline-none ${
                   isLight
                     ? 'border-transparent bg-[#f2f4f7] text-slate-900 placeholder:text-slate-500 hover:bg-[#eef0f4] focus:border-amber-500/50 focus:bg-white'
@@ -5202,7 +5275,7 @@ export default function ChatConversation() {
                   onClick={() => setConversationFilter('')}
                   title="Clear search"
                   aria-label="Clear search"
-                  className={`absolute right-2 flex h-6 w-6 items-center justify-center rounded-md transition-colors ${
+                  className={`absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md transition-colors ${
                     isLight ? 'text-slate-400 hover:bg-slate-200 hover:text-slate-600' : 'text-zinc-500 hover:bg-white/10 hover:text-zinc-200'
                   }`}
                 >
@@ -5219,6 +5292,7 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setConversationTabFilter('all')
                 }}
+                aria-pressed={conversationTabFilter === 'all'}
                 className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   conversationTabFilter === 'all'
                     ? isLight
@@ -5245,6 +5319,7 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setConversationTabFilter('unread')
                 }}
+                aria-pressed={conversationTabFilter === 'unread'}
                 className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   conversationTabFilter === 'unread'
                     ? isLight
@@ -5273,6 +5348,7 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setConversationTabFilter('pinned')
                 }}
+                aria-pressed={conversationTabFilter === 'pinned'}
                 className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   conversationTabFilter === 'pinned'
                     ? isLight
@@ -5769,7 +5845,7 @@ export default function ChatConversation() {
                     <span>View all chats</span>
                   </button>
                 ) : conversationFilter.trim() && conversations.length > 0 ? (
-                  <button
+                  <button type="button"
                     onClick={() => {
                       setGlobalSearchQuery(conversationFilter.trim())
                       setShowAddFriendModal(true)
@@ -5785,7 +5861,7 @@ export default function ChatConversation() {
                     <span>Search all users for &ldquo;{conversationFilter.trim()}&rdquo;</span>
                   </button>
                 ) : (
-                  <button
+                  <button type="button"
                     onClick={() => {
                       setShowAddFriendModal(true)
                       setFriendModalTab('search')
@@ -5895,7 +5971,7 @@ export default function ChatConversation() {
                               <span className={`text-[10px] font-normal tabular-nums ${
                                 conv.unread_count > 0
                                   ? isLight ? 'font-medium text-amber-700' : 'font-medium text-amber-400'
-                                  : isLight ? 'text-slate-400' : 'text-zinc-500'
+                                  : isLight ? 'text-slate-500' : 'text-zinc-400'
                               }`}>
                                 {conv.last_message ? formatTime(conv.last_message_at) : ''}
                               </span>
@@ -5991,7 +6067,7 @@ export default function ChatConversation() {
                                 type="button"
                                 onClick={(e) => togglePinConversation(e, conv.id)}
                                 title={isPinned ? 'Unpin chat' : 'Pin chat to top'}
-                                className={`p-1 rounded-lg opacity-0 group-hover:opacity-100 hover:scale-110 active:scale-95 transition-all cursor-pointer ${
+                                className={`cursor-pointer rounded-lg p-1 opacity-0 transition-all hover:scale-110 focus-visible:opacity-100 group-hover:opacity-100 active:scale-95 ${
                                   isPinned ? 'text-[#facc15]' : isLight ? 'text-slate-400 hover:text-amber-600' : 'text-zinc-500 hover:text-white'
                                 }`}
                               >
@@ -6063,7 +6139,7 @@ export default function ChatConversation() {
           onTouchMove={handleEdgeTouchMove}
           onTouchEnd={handleEdgeTouchEnd}
           onTouchCancel={handleEdgeTouchEnd}
-          className={`relative flex-1 flex flex-col overflow-hidden transition-colors ${
+          className={`relative flex-1 flex flex-col overflow-hidden transition-colors jdlx-privacy-sensitive ${
             mobileView === 'list' ? 'hidden md:flex' : 'flex'
           }`}
         >
@@ -6108,7 +6184,17 @@ export default function ChatConversation() {
                   {/* Active Contact Avatar & Name (Clickable Profile) */}
                   <div
                     onClick={() => setShowContactInfoModal(true)}
-                    className="flex items-center gap-2.5 min-w-0 cursor-pointer group hover:opacity-90 active:scale-[0.99] transition-all select-none"
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setShowContactInfoModal(true)
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label="View contact profile and encryption details"
+                    className="group flex min-w-0 cursor-pointer select-none items-center gap-2.5 transition-all hover:opacity-90 active:scale-[0.99]"
                     title="Click to view contact profile & encryption details"
                   >
                     <div className="relative shrink-0">
@@ -6189,8 +6275,8 @@ export default function ChatConversation() {
                           peerTyping 
                             ? 'text-amber-500 animate-pulse' 
                             : isContactOnline 
-                              ? 'text-emerald-500' 
-                              : isLight ? 'text-slate-400' : 'text-zinc-500'
+                              ? 'text-emerald-600 dark:text-emerald-400' 
+                              : isLight ? 'text-slate-500' : 'text-zinc-400'
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                             peerTyping ? 'bg-amber-400 animate-ping' : isContactOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' : 'bg-zinc-500/50'
@@ -6235,6 +6321,7 @@ export default function ChatConversation() {
                         }
                       }}
                       placeholder={`Search messages with ${getContactDisplayName(activeConversation)}…`}
+                      aria-label={`Search messages with ${getContactDisplayName(activeConversation)}`}
                       className={`h-9 w-full rounded-lg border py-0 pl-9 pr-8 text-xs font-medium transition-colors focus:outline-none sm:text-sm ${
                         isLight
                           ? 'border-[#e4e7ec] bg-[#f6f7f9] text-slate-900 focus:border-amber-500/60 focus:bg-white'
@@ -6249,7 +6336,7 @@ export default function ChatConversation() {
                           setChatSearchMatchIndex(0)
                           chatSearchInputRef.current?.focus()
                         }}
-                        className="absolute right-2.5 p-1 rounded-full text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                        className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-black/5 hover:text-zinc-600 dark:hover:bg-white/10 dark:hover:text-zinc-200 cursor-pointer"
                         title="Clear search query"
                       >
                         <X className="w-3.5 h-3.5" />
@@ -6945,6 +7032,8 @@ export default function ChatConversation() {
                                         <button
                                           key={r.emoji}
                                           type="button"
+                                          aria-pressed={Boolean(r.mine)}
+                                          aria-label={`${r.mine ? 'Remove' : 'Add'} ${r.emoji} reaction`}
                                           onClick={() => toggleReaction(r.targetId || m.id, r.emoji)}
                                           className={`px-1.5 py-0.5 rounded-full text-[11px] border active:scale-95 transition ${
                                             r.mine
@@ -6969,7 +7058,7 @@ export default function ChatConversation() {
                                         isUser 
                                           ? 'text-[#09090b]/80 font-semibold' 
                                           : isLight 
-                                            ? 'text-slate-400 font-medium' 
+                                            ? 'text-slate-500 font-medium' 
                                             : 'text-zinc-400 font-medium'
                                       }`}
                                     >
@@ -7110,6 +7199,8 @@ export default function ChatConversation() {
                                             <button
                                               key={r.emoji}
                                               type="button"
+                                              aria-pressed={Boolean(r.mine)}
+                                              aria-label={`${r.mine ? 'Remove' : 'Add'} ${r.emoji} reaction`}
                                               onClick={() => toggleReaction(m.id, r.emoji)}
                                               className={`px-1.5 py-0.5 rounded-full text-[11px] border active:scale-95 transition animate-reaction-pop ${
                                                 r.mine
@@ -7133,7 +7224,7 @@ export default function ChatConversation() {
                                           isUser 
                                             ? 'text-[#09090b]/80 font-semibold' 
                                             : isLight 
-                                              ? 'text-slate-400 font-medium' 
+                                              ? 'text-slate-500 font-medium' 
                                               : 'text-zinc-400 font-medium'
                                         }`}
                                       >
@@ -7322,6 +7413,7 @@ export default function ChatConversation() {
                             <button
                               key={cat.name}
                               type="button"
+                              aria-pressed={activeEmojiCategory === idx}
                               onClick={() => setActiveEmojiCategory(idx)}
                               className={`px-2 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1 select-none ${
                                 activeEmojiCategory === idx
@@ -7499,6 +7591,8 @@ export default function ChatConversation() {
                       setShowEmojiPicker(false)
                     }}
                     disabled={uploadingImage || isRecording || Boolean(voiceReview) || isBlockedConversation}
+                    aria-expanded={showAttachmentTray}
+                    aria-label={isBlockedConversation ? 'Unblock this user to attach files' : 'Attach photo, video, document or audio'}
                     title={isBlockedConversation ? 'Unblock this user to attach files' : 'Attach photo, video, document or audio'}
                     className={`flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border transition-colors active:scale-95 ${
                       showAttachmentTray
@@ -7675,6 +7769,8 @@ export default function ChatConversation() {
                           setShowEmojiPicker((prev) => !prev)
                           setShowAttachmentTray(false)
                         }}
+                        aria-expanded={showEmojiPicker}
+                        aria-label="Choose emoji"
                         title="Choose emoji"
                         className={`mb-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center self-end rounded-lg transition-colors active:scale-95 ${
                           showEmojiPicker
@@ -7901,7 +7997,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Add friend"
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88vh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88dvh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
               isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-[#f4f4f5]'
             }`}
           >
@@ -7937,15 +8033,21 @@ export default function ChatConversation() {
             </div>
 
             {/* Segmented Tab Bar */}
-            <div className={`grid grid-cols-3 gap-1 rounded-lg p-1 text-xs font-medium ${
-              isLight ? 'bg-slate-100 text-slate-600' : 'bg-white/[0.05] text-zinc-400'
-            }`}>
+            <div
+              role="tablist"
+              aria-label="Add friend options"
+              className={`grid grid-cols-3 gap-1 rounded-lg p-1 text-xs font-medium ${
+                isLight ? 'bg-slate-100 text-slate-600' : 'bg-white/[0.05] text-zinc-400'
+              }`}
+            >
               <button
                 type="button"
                 onClick={() => {
                   triggerHaptic('light')
                   setFriendModalTab('search')
                 }}
+                role="tab"
+                aria-selected={friendModalTab === 'search'}
                 className={`cursor-pointer rounded-md py-1.5 transition-all ${
                   friendModalTab === 'search'
                     ? isLight ? 'bg-white font-semibold text-slate-900 shadow-sm' : 'bg-white/[0.1] font-semibold text-white'
@@ -7960,6 +8062,8 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setFriendModalTab('requests')
                 }}
+                role="tab"
+                aria-selected={friendModalTab === 'requests'}
                 className={`relative cursor-pointer rounded-md py-1.5 transition-all ${
                   friendModalTab === 'requests'
                     ? isLight ? 'bg-white font-semibold text-slate-900 shadow-sm' : 'bg-white/[0.1] font-semibold text-white'
@@ -7979,6 +8083,8 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setFriendModalTab('invite')
                 }}
+                role="tab"
+                aria-selected={friendModalTab === 'invite'}
                 className={`cursor-pointer rounded-md py-1.5 transition-all ${
                   friendModalTab === 'invite'
                     ? isLight ? 'bg-white font-semibold text-slate-900 shadow-sm' : 'bg-white/[0.1] font-semibold text-white'
@@ -8002,6 +8108,7 @@ export default function ChatConversation() {
                       placeholder="Search by @username, name, email or phone..."
                       value={globalSearchQuery}
                       onChange={(e) => setGlobalSearchQuery(e.target.value)}
+                      aria-label="Search people by username, name, email or phone"
                       className="ui-input pl-8 pr-9 text-xs"
                     />
                     {searchingGlobal ? (
@@ -8105,7 +8212,7 @@ export default function ChatConversation() {
                           {/* Action Button */}
                           <div className="shrink-0">
                             {isFriend ? (
-                              <button
+                              <button type="button"
                                 onClick={() => handleDirectChatStart(u)}
                                 className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] text-[11px] font-black cursor-pointer shadow-sm active:scale-95 transition-all"
                               >
@@ -8118,14 +8225,14 @@ export default function ChatConversation() {
                                 Request Sent
                               </span>
                             ) : isPendingRecv ? (
-                              <button
+                              <button type="button"
                                 onClick={() => handleRespondRequest(u.friend_request_id, 'accept')}
                                 className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-[11px] font-black cursor-pointer shadow-sm active:scale-95 transition-all"
                               >
                                 Accept
                               </button>
                             ) : (
-                              <button
+                              <button type="button"
                                 disabled={isActionBusy}
                                 onClick={() => handleSendFriendRequest(u)}
                                 className={`px-3 py-1.5 rounded-xl border text-[11px] font-black flex items-center gap-1 cursor-pointer active:scale-95 transition-all ${
@@ -8188,13 +8295,13 @@ export default function ChatConversation() {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
-                          <button
+                          <button type="button"
                             onClick={() => handleRespondRequest(req.request_id, 'accept')}
                             className="px-2.5 py-1.5 rounded-xl bg-emerald-500 text-white text-[11px] font-black active:scale-95 transition-all cursor-pointer"
                           >
                             Accept
                           </button>
-                          <button
+                          <button type="button"
                             onClick={() => handleRespondRequest(req.request_id, 'decline')}
                             className={`px-2 py-1.5 rounded-xl border text-[11px] font-medium active:scale-95 transition-all cursor-pointer ${
                               isLight ? 'bg-white border-slate-200 text-slate-600' : 'bg-[#27272a] border-[#3f3f46] text-zinc-300 hover:text-white'
@@ -8256,7 +8363,7 @@ export default function ChatConversation() {
                         }`}>
                           @{fr.username || fr.name}
                         </div>
-                        <button
+                        <button type="button"
                           onClick={() => handleDirectChatStart({ id: fr.friend_id, username: fr.username, name: fr.name })}
                           className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] text-[10px] font-black cursor-pointer shadow-sm active:scale-95 transition-all"
                         >
@@ -8294,9 +8401,12 @@ export default function ChatConversation() {
                     {inviteInfo?.invite_url || `${window.location.origin}/chat/login?ref=@${chatUser?.username || 'member'}`}
                   </span>
                   <button
+                    type="button"
                     onClick={handleCopyInviteLink}
-                    className={`p-1.5 rounded-lg border shrink-0 active:scale-95 transition-all cursor-pointer ${
-                      isLight ? 'bg-white hover:bg-slate-100 text-amber-700 border-slate-200' : 'bg-[#27272a] hover:bg-[#3f3f46] text-[#facc15] border-[#3f3f46]'
+                    title="Copy invite link"
+                    aria-label="Copy invite link"
+                    className={`shrink-0 cursor-pointer rounded-lg border p-1.5 transition-all active:scale-95 ${
+                      isLight ? 'border-slate-200 bg-white text-amber-700 hover:bg-slate-100' : 'border-[#3f3f46] bg-[#27272a] text-[#facc15] hover:bg-[#3f3f46]'
                     }`}
                   >
                     <Copy className="w-4 h-4" />
@@ -8304,14 +8414,14 @@ export default function ChatConversation() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-2.5">
-                  <button
+                  <button type="button"
                     onClick={handleShareInviteWhatsapp}
                     className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 text-white font-black text-xs hover:bg-emerald-700 active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                   >
                     <Share2 className="w-3.5 h-3.5" />
                     <span>WhatsApp</span>
                   </button>
-                  <button
+                  <button type="button"
                     onClick={handleCopyInviteLink}
                     className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] font-black text-xs hover:brightness-105 active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                   >
@@ -8338,7 +8448,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="My profile"
             tabIndex={-1}
-            className={`w-full max-w-lg rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90vh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
+            className={`w-full max-w-lg rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90dvh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 jdlx-privacy-sensitive ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
@@ -8360,6 +8470,12 @@ export default function ChatConversation() {
                     <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-gradient-to-r from-amber-500 to-yellow-500 text-black">
                       JDLX
                     </span>
+                    {screenSecurity && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[8.5px] font-bold uppercase tracking-wider bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 flex items-center gap-1">
+                        <Lock className="w-2.5 h-2.5" />
+                        <span>Secured</span>
+                      </span>
+                    )}
                   </h3>
                   <p className={`text-[11px] font-medium ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                     Customize your profile, preferences &amp; security
@@ -8481,7 +8597,8 @@ export default function ChatConversation() {
                           <img
                             src={resolveMediaUrl(chatUser.profile_image)}
                             alt={chatUser?.name || 'User'}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 jdlx-protected-image"
+                            {...protectedMediaProps}
                           />
                         ) : (
                           <span>{chatUser?.name?.[0]?.toUpperCase() || 'U'}</span>
@@ -8647,6 +8764,7 @@ export default function ChatConversation() {
                           <button
                             key={preset}
                             type="button"
+                            aria-pressed={editBio === preset}
                             onClick={() => setEditBio(preset)}
                             className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
                               editBio === preset
@@ -8682,6 +8800,7 @@ export default function ChatConversation() {
                           <button
                             key={id}
                             type="button"
+                            aria-pressed={selected}
                             onClick={() => setEditGender(id)}
                             className={`p-2 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                               selected
@@ -8783,6 +8902,7 @@ export default function ChatConversation() {
                           <button
                             key={id}
                             type="button"
+                            aria-pressed={selected}
                             onClick={() => {
                               triggerHaptic('light')
                               setChatTheme(id)
@@ -8842,9 +8962,12 @@ export default function ChatConversation() {
                       </div>
                       <button
                         type="button"
+                        role="switch"
+                        aria-checked={enterToSend}
+                        aria-label="Press Enter to send"
                         onClick={() => handleToggleEnterToSend(!enterToSend)}
-                        className={`w-12 h-6 rounded-full transition-colors relative cursor-pointer shrink-0 ${
-                          enterToSend ? 'bg-gradient-to-r from-[#facc15] to-[#eab308]' : 'bg-zinc-700'
+                        className={`relative h-6 w-12 shrink-0 cursor-pointer rounded-full transition-colors ${
+                          enterToSend ? 'bg-amber-400' : 'bg-zinc-700'
                         }`}
                       >
                         <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-black transition-transform ${
@@ -8868,9 +8991,12 @@ export default function ChatConversation() {
                       </div>
                       <button
                         type="button"
+                        role="switch"
+                        aria-checked={chatSounds}
+                        aria-label="Chat sound effects"
                         onClick={() => handleToggleChatSounds(!chatSounds)}
-                        className={`w-12 h-6 rounded-full transition-colors relative cursor-pointer shrink-0 ${
-                          chatSounds ? 'bg-gradient-to-r from-[#facc15] to-[#eab308]' : 'bg-zinc-700'
+                        className={`relative h-6 w-12 shrink-0 cursor-pointer rounded-full transition-colors ${
+                          chatSounds ? 'bg-amber-400' : 'bg-zinc-700'
                         }`}
                       >
                         <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-black transition-transform ${
@@ -8893,9 +9019,12 @@ export default function ChatConversation() {
                       </div>
                       <button
                         type="button"
+                        role="switch"
+                        aria-checked={showDoodle}
+                        aria-label="Chat wallpaper doodle"
                         onClick={() => handleToggleDoodle(!showDoodle)}
-                        className={`w-12 h-6 rounded-full transition-colors relative cursor-pointer shrink-0 ${
-                          showDoodle ? 'bg-gradient-to-r from-[#facc15] to-[#eab308]' : 'bg-zinc-700'
+                        className={`relative h-6 w-12 shrink-0 cursor-pointer rounded-full transition-colors ${
+                          showDoodle ? 'bg-amber-400' : 'bg-zinc-700'
                         }`}
                       >
                         <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-black transition-transform ${
@@ -9230,6 +9359,51 @@ export default function ChatConversation() {
                     </p>
                   </div>
 
+                  {/* Screenshot Protection & Screen Security */}
+                  <div className={`p-3.5 rounded-2xl border transition-all ${
+                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
+                  }`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className={`text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                          <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Screenshot &amp; Screen Security</span>
+                          <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider ${
+                            screenSecurity 
+                              ? 'bg-emerald-500/15 text-emerald-500 border border-emerald-500/30' 
+                              : 'bg-zinc-700/50 text-zinc-400 border border-zinc-600/30'
+                          }`}>
+                            {screenSecurity ? 'Active' : 'Disabled'}
+                          </span>
+                        </div>
+                        <p className={`text-[10.5px] font-medium mt-1 leading-relaxed ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                          Restricts screenshots, screen recordings, and recent app switcher previews on chats, profile pages, and profile photos.
+                        </p>
+                        {isCapacitorNative && (
+                          <p className="text-[9.5px] font-bold text-amber-500/90 mt-1 flex items-center gap-1">
+                            <span>• Hardware security active (Android FLAG_SECURE)</span>
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={screenSecurity}
+                        aria-label="Screen capture protection"
+                        onClick={() => handleToggleScreenSecurity(!screenSecurity)}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-[#0f1114] ${
+                          screenSecurity ? 'bg-amber-500' : isLight ? 'bg-slate-300' : 'bg-zinc-700'
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                            screenSecurity ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Public Key Fingerprint */}
                   <div className={`p-3.5 rounded-2xl border space-y-2 ${
                     isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
@@ -9425,7 +9599,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Notifications"
             tabIndex={-1}
-            className={`w-full sm:max-w-sm max-h-[85vh] sm:max-h-full rounded-t-[32px] sm:rounded-none border-t sm:border-t-0 sm:border-l flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-drawer-spring-right transition-colors pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full sm:max-w-sm max-h-[85dvh] sm:max-h-full rounded-t-2xl sm:rounded-none border-t sm:border-t-0 sm:border-l flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-drawer-spring-right transition-colors pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
@@ -9446,12 +9620,15 @@ export default function ChatConversation() {
                 )}
               </div>
               <button
+                type="button"
                 onClick={() => {
                   triggerHaptic('light')
                   setShowNotificationsDrawer(false)
                 }}
-                className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
-                  isLight ? 'hover:bg-slate-100 text-slate-500' : 'hover:bg-[#18181b] text-zinc-400 hover:text-white'
+                title="Close notifications"
+                aria-label="Close notifications"
+                className={`cursor-pointer rounded-xl p-1.5 transition-colors ${
+                  isLight ? 'text-slate-500 hover:bg-slate-100' : 'text-zinc-400 hover:bg-[#18181b] hover:text-white'
                 }`}
               >
                 <X className="w-5 h-5" />
@@ -9476,7 +9653,17 @@ export default function ChatConversation() {
                     <div
                       key={n.id}
                       onClick={() => handleNotificationClick(n)}
-                      className={`group relative p-3.5 rounded-2xl border transition-all duration-150 cursor-pointer select-none active:scale-[0.99] ${
+                      onKeyDown={(e) => {
+                        if (e.target !== e.currentTarget) return
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          handleNotificationClick(n)
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${n.is_read ? '' : 'Unread: '}${n.title}. ${n.message || ''}`.trim()}
+                      className={`group relative p-3.5 rounded-2xl border transition-all duration-150 cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2 active:scale-[0.99] dark:focus-visible:ring-offset-[#0f1114] ${
                         isUnread
                           ? isLight
                             ? 'border-amber-300 bg-amber-50/80 shadow-xs hover:bg-amber-100/70 hover:border-amber-400'
@@ -9876,11 +10063,14 @@ export default function ChatConversation() {
                 Report @{activeConversation?.contact_username || 'user'}
               </h3>
               <button
+                type="button"
                 onClick={() => {
                   triggerHaptic('light')
                   setShowReportModal(false)
                 }}
-                className={`p-1 rounded-lg ${isLight ? 'hover:bg-slate-100' : 'hover:bg-[#27272a]'}`}
+                title="Close report dialog"
+                aria-label="Close report dialog"
+                className={`rounded-lg p-1 ${isLight ? 'hover:bg-slate-100' : 'hover:bg-[#27272a]'}`}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -9889,6 +10079,7 @@ export default function ChatConversation() {
             <select
               value={reportReason}
               onChange={(e) => setReportReason(e.target.value)}
+              aria-label="Reason for reporting"
               className={`w-full px-3 py-2.5 rounded-xl border text-xs font-bold ${
                 isLight
                   ? 'bg-slate-50 border-slate-200 text-slate-900'
@@ -9915,7 +10106,7 @@ export default function ChatConversation() {
               }`}
             />
 
-            <button
+            <button type="button"
               onClick={submitReport}
               className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] text-xs font-black active:scale-95 transition-all"
             >
@@ -10135,159 +10326,189 @@ export default function ChatConversation() {
       })()}
 
       {/* ── IMAGE FULL PREVIEW LIGHTBOX (MINIMALISTIC, LUXURY, SMOOTH ANIMATION) ── */}
-      {selectedPreviewImage && (
-        <div
-          onClick={handleClosePreview}
-          className={`fixed inset-0 z-50 flex flex-col justify-between bg-black/95 backdrop-blur-2xl select-none overflow-hidden ${
-            isClosingPreview ? 'animate-viewer-backdrop-exit' : 'animate-viewer-backdrop'
-          }`}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Photo viewer"
-          ref={lightboxDialogRef}
-          tabIndex={-1}
-        >
-          {/* Top Minimalist Header Bar */}
+      {selectedPreviewImage && (() => {
+        const currentPreview = previewImages[previewIndex]
+        const isAvatarPreview = Boolean(
+          currentPreview?.is_avatar ||
+          currentPreview?.id === 'avatar' ||
+          currentPreview?.id === 'contact-avatar' ||
+          currentPreview?.id === 'my-avatar' ||
+          currentPreview?.title === 'Profile Photo' ||
+          currentPreview?.url === resolveMediaUrl(activeConversation?.contact_avatar) ||
+          (chatUser?.profile_image && currentPreview?.url === resolveMediaUrl(chatUser.profile_image))
+        )
+
+        return (
           <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-30 bg-gradient-to-b from-black/85 via-black/40 to-transparent animate-viewer-header"
+            onClick={handleClosePreview}
+            className={`fixed inset-0 z-50 flex flex-col justify-between bg-black/95 backdrop-blur-2xl select-none overflow-hidden jdlx-privacy-sensitive ${
+              isClosingPreview ? 'animate-viewer-backdrop-exit' : 'animate-viewer-backdrop'
+            }`}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Photo viewer"
+            ref={lightboxDialogRef}
+            tabIndex={-1}
           >
-            {/* Left: Photo Info & Counter */}
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="min-w-0 flex flex-col">
-                <div className="flex items-center gap-2">
-                  <span className="text-white text-sm sm:text-base font-bold truncate">
-                    {previewImages[previewIndex]?.title || (previewImages.length > 1
-                      ? `${previewIndex + 1} of ${previewImages.length}`
-                      : 'Photo')}
-                  </span>
-                  <div className="w-1.5 h-1.5 rounded-full bg-[#facc15] shrink-0" />
-                  <span className="text-zinc-400 text-xs font-medium truncate">
-                    {previewImages[previewIndex]?.sender_name || 'JDLX Chat'}
-                  </span>
-                </div>
-                {previewImages[previewIndex] && (
-                  <p className="text-[11px] text-zinc-400 font-medium truncate">
-                    {previewImages[previewIndex].subtitle || (
-                      previewImages[previewIndex].created_at
-                        ? `${previewImages[previewIndex].sender_name ? `${previewImages[previewIndex].sender_name} • ` : ''}${formatMessageTime(previewImages[previewIndex].created_at)}`
-                        : (previewImages[previewIndex].sender_name ? `${previewImages[previewIndex].sender_name}` : '')
+            {/* Top Minimalist Header Bar */}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-30 bg-gradient-to-b from-black/85 via-black/40 to-transparent animate-viewer-header"
+            >
+              {/* Left: Photo Info & Counter */}
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="min-w-0 flex flex-col">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white text-sm sm:text-base font-bold truncate">
+                      {isAvatarPreview ? 'Profile Photo' : (previewImages[previewIndex]?.title || (previewImages.length > 1
+                        ? `${previewIndex + 1} of ${previewImages.length}`
+                        : 'Photo'))}
+                    </span>
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#facc15] shrink-0" />
+                    <span className="text-zinc-400 text-xs font-medium truncate">
+                      {previewImages[previewIndex]?.sender_name || 'JDLX Chat'}
+                    </span>
+                    {isAvatarPreview && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-yellow-500/15 border border-yellow-500/30 text-[#facc15] flex items-center gap-1 shrink-0">
+                        <Lock className="w-2.5 h-2.5" />
+                        <span>Protected</span>
+                      </span>
                     )}
-                  </p>
+                  </div>
+                  {previewImages[previewIndex] && (
+                    <p className="text-[11px] text-zinc-400 font-medium truncate">
+                      {previewImages[previewIndex].subtitle || (
+                        previewImages[previewIndex].created_at
+                          ? `${previewImages[previewIndex].sender_name ? `${previewImages[previewIndex].sender_name} • ` : ''}${formatMessageTime(previewImages[previewIndex].created_at)}`
+                          : (previewImages[previewIndex].sender_name ? `${previewImages[previewIndex].sender_name}` : '')
+                      )}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Right: Minimal Action Buttons & Dedicated Top-Right Cross Button */}
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                {isAvatarPreview && (
+                  <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-yellow-500/10 border border-yellow-500/25 text-[#facc15] text-[11px] font-bold select-none mr-1">
+                    <Lock className="w-3 h-3 text-amber-500 shrink-0" />
+                    <span>Screenshots &amp; Downloads Disabled</span>
+                  </div>
                 )}
-              </div>
-            </div>
 
-            {/* Right: Minimal Action Buttons & Dedicated Top-Right Cross Button */}
-            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-              {/* Desktop Zoom Controls (Hidden on mobile to keep header ultra-clean) */}
-              <div className="hidden md:flex items-center gap-1 bg-white/5 border border-white/10 rounded-full px-2 py-1 backdrop-blur-md mr-1">
+                {/* Desktop Zoom Controls (Hidden on mobile to keep header ultra-clean) */}
+                <div className="hidden md:flex items-center gap-1 bg-white/5 border border-white/10 rounded-full px-2 py-1 backdrop-blur-md mr-1">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewZoom((z) => {
+                      const next = Math.max(1, +(z - 0.5).toFixed(1))
+                      if (next === 1) setPanOffset({ x: 0, y: 0 })
+                      return next
+                    })}
+                    disabled={previewZoom <= 1}
+                    title="Zoom out (-)"
+                    className="p-1 rounded-full text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                  >
+                    <ZoomOut className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewZoom(1)
+                      setPanOffset({ x: 0, y: 0 })
+                    }}
+                    title="Reset zoom (0)"
+                    className="px-1.5 text-[11px] font-mono font-bold text-[#facc15] cursor-pointer"
+                  >
+                    {Math.round(previewZoom * 100)}%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewZoom((z) => Math.min(3.5, +(z + 0.5).toFixed(1)))}
+                    disabled={previewZoom >= 3.5}
+                    title="Zoom in (+)"
+                    className="p-1 rounded-full text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                  >
+                    <ZoomIn className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Rotate 90° */}
                 <button
                   type="button"
-                  onClick={() => setPreviewZoom((z) => {
-                    const next = Math.max(1, +(z - 0.5).toFixed(1))
-                    if (next === 1) setPanOffset({ x: 0, y: 0 })
-                    return next
-                  })}
-                  disabled={previewZoom <= 1}
-                  title="Zoom out (-)"
-                  className="p-1 rounded-full text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
-                >
-                  <ZoomOut className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPreviewZoom(1)
-                    setPanOffset({ x: 0, y: 0 })
-                  }}
-                  title="Reset zoom (0)"
-                  className="px-1.5 text-[11px] font-mono font-bold text-[#facc15] cursor-pointer"
-                >
-                  {Math.round(previewZoom * 100)}%
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreviewZoom((z) => Math.min(3.5, +(z + 0.5).toFixed(1)))}
-                  disabled={previewZoom >= 3.5}
-                  title="Zoom in (+)"
-                  className="p-1 rounded-full text-zinc-300 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
-                >
-                  <ZoomIn className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Rotate 90° */}
-              <button
-                type="button"
-                onClick={() => setPreviewRotation((r) => (r + 90) % 360)}
-                title="Rotate 90° (R)"
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] flex items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
-              >
-                <RotateCw className="w-4 h-4 sm:w-5 sm:h-5" />
-              </button>
-
-              {/* Copy Image */}
-              <button
-                type="button"
-                onClick={() => handleCopyMedia(selectedPreviewImage)}
-                title="Copy Image (C)"
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] flex items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
-              >
-                <Copy className="w-4 h-4 sm:w-5 sm:h-5" />
-              </button>
-
-              {/* Native Web Share */}
-              {typeof navigator !== 'undefined' && navigator.share && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await navigator.share({
-                        title: 'JDLX Chat Photo',
-                        url: selectedPreviewImage,
-                      })
-                    } catch {}
-                  }}
-                  title="Share photo"
+                  onClick={() => setPreviewRotation((r) => (r + 90) % 360)}
+                  title="Rotate 90° (R)"
                   className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] flex items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
                 >
-                  <Share2 className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <RotateCw className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
-              )}
 
-              {/* Download Media */}
-              <button
-                type="button"
-                onClick={() => handleDownloadMedia(selectedPreviewImage)}
-                title="Download photo (D)"
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] flex items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
-              >
-                <Download className="w-4 h-4 sm:w-5 sm:h-5" />
-              </button>
+                {/* For standard images, show Copy, Share, and Download */}
+                {!isAvatarPreview && (
+                  <>
+                    {/* Copy Image */}
+                    <button
+                      type="button"
+                      onClick={() => handleCopyMedia(selectedPreviewImage)}
+                      title="Copy Image (C)"
+                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] flex items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
+                    >
+                      <Copy className="w-4 h-4 sm:w-5 sm:h-5" />
+                    </button>
 
-              {/* Fullscreen (Desktop only) */}
-              <button
-                type="button"
-                onClick={toggleFullscreen}
-                title={isFullscreen ? "Exit Fullscreen (F)" : "Enter Fullscreen (F)"}
-                className="hidden sm:flex w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
-              >
-                {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-              </button>
+                    {/* Native Web Share */}
+                    {typeof navigator !== 'undefined' && navigator.share && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.share({
+                              title: 'JDLX Chat Photo',
+                              url: selectedPreviewImage,
+                            })
+                          } catch {}
+                        }}
+                        title="Share photo"
+                        className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] flex items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
+                      >
+                        <Share2 className="w-4 h-4 sm:w-5 sm:h-5" />
+                      </button>
+                    )}
 
-              {/* Dedicated Top-Right Cross Button (The ONLY close button) */}
-              <button
-                type="button"
-                onClick={handleClosePreview}
-                className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/15 hover:bg-rose-500/90 active:scale-95 text-white flex items-center justify-center transition-all duration-200 border border-white/20 backdrop-blur-md shadow-xl ml-1 cursor-pointer hover:rotate-90 group"
-                title="Close viewer (Esc)"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5 sm:w-6 sm:h-6 transition-transform group-hover:scale-110" />
-              </button>
+                    {/* Download Media */}
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadMedia(selectedPreviewImage)}
+                      title="Download photo (D)"
+                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] flex items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
+                    >
+                      <Download className="w-4 h-4 sm:w-5 sm:h-5" />
+                    </button>
+                  </>
+                )}
+
+                {/* Fullscreen (Desktop only) */}
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  title={isFullscreen ? "Exit Fullscreen (F)" : "Enter Fullscreen (F)"}
+                  className="hidden sm:flex w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white/90 hover:text-[#facc15] items-center justify-center transition border border-white/10 backdrop-blur-md cursor-pointer"
+                >
+                  {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                </button>
+
+                {/* Dedicated Top-Right Cross Button (The ONLY close button) */}
+                <button
+                  type="button"
+                  onClick={handleClosePreview}
+                  className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/15 hover:bg-rose-500/90 active:scale-95 text-white flex items-center justify-center transition-all duration-200 border border-white/20 backdrop-blur-md shadow-xl ml-1 cursor-pointer hover:rotate-90 group"
+                  title="Close viewer (Esc)"
+                  aria-label="Close"
+                >
+                  <X className="w-5 h-5 sm:w-6 sm:h-6 transition-transform group-hover:scale-110" />
+                </button>
+              </div>
             </div>
-          </div>
 
           {/* Centered Image Canvas with Smooth Scale-In Animation & Navigation Arrows */}
           <div
@@ -10435,10 +10656,18 @@ export default function ChatConversation() {
                     }}
                     className={
                       isAvatarPreview
-                        ? "w-[min(88vw,420px)] h-[min(88vw,420px)] sm:w-[min(80vw,520px)] sm:h-[min(80vw,520px)] max-h-[75vh] sm:max-h-[80vh] aspect-square rounded-[36px] sm:rounded-[44px] object-cover shadow-2xl border-2 sm:border-4 border-yellow-500/30 ring-4 sm:ring-8 ring-black/60 transition-transform duration-75 select-none touch-none"
+                        ? "w-[min(88vw,420px)] h-[min(88vw,420px)] sm:w-[min(80vw,520px)] sm:h-[min(80vw,520px)] max-h-[75vh] sm:max-h-[80vh] aspect-square rounded-[36px] sm:rounded-[44px] object-cover shadow-2xl border-2 sm:border-4 border-yellow-500/30 ring-4 sm:ring-8 ring-black/60 transition-transform duration-75 select-none touch-none jdlx-protected-image"
                         : "max-h-[78vh] sm:max-h-[82vh] max-w-[92vw] min-w-[min(88vw,340px)] sm:min-w-[min(70vw,480px)] w-auto h-auto rounded-2xl object-contain shadow-2xl border border-white/10 transition-transform duration-75 select-none touch-none"
                     }
+                    {...(isAvatarPreview ? protectedMediaProps : {})}
                   />
+                  {isAvatarPreview && (
+                    <div 
+                      className="absolute inset-0 z-20 pointer-events-auto cursor-default rounded-[36px] sm:rounded-[44px]"
+                      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); return false; }}
+                      onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); return false; }}
+                    />
+                  )}
                 </div>
               )
             })()}
@@ -10482,10 +10711,12 @@ export default function ChatConversation() {
 
           {/* Bottom Hint */}
           <div className="text-[11px] text-zinc-400 select-none pb-1 font-medium text-center animate-viewer-footer">
-            {previewImages.length > 1 ? 'Use ← / → arrows or swipe to browse • ' : ''}Double-click to zoom • F for fullscreen • D to download • C to copy • Esc to close
+            {isAvatarPreview 
+              ? '🔒 Profile Photo Protected: Screenshots & downloads are disabled • Esc to close'
+              : `${previewImages.length > 1 ? 'Use ← / → arrows or swipe to browse • ' : ''}Double-click to zoom • F for fullscreen • D to download • C to copy • Esc to close`}
           </div>
         </div>
-      )}
+      )})()}
 
       {/* ── CONTACT PROFILE & SECURITY MODAL (Telegram / WhatsApp Luxury Standard) ── */}
       {showContactInfoModal && activeConversation && (
@@ -10500,7 +10731,7 @@ export default function ChatConversation() {
             onClick={(e) => e.stopPropagation()}
             ref={contactDialogRef}
             tabIndex={-1}
-            className={`w-full max-w-md md:max-w-[420px] lg:max-w-[450px] md:h-full max-h-[92dvh] md:max-h-full rounded-t-[36px] md:rounded-none md:rounded-l-3xl border-t md:border-t-0 md:border-l shadow-2xl overflow-hidden animate-sheet-spring-up md:animate-drawer-spring-right flex flex-col ${
+            className={`w-full max-w-md md:max-w-[420px] lg:max-w-[450px] md:h-full max-h-[92dvh] md:max-h-full rounded-t-[36px] md:rounded-none md:rounded-l-3xl border-t md:border-t-0 md:border-l shadow-2xl overflow-hidden animate-sheet-spring-up md:animate-drawer-spring-right flex flex-col jdlx-privacy-sensitive ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-400/30' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
@@ -10508,10 +10739,18 @@ export default function ChatConversation() {
             <div className="relative pt-3 pb-2 px-5 sm:px-6 bg-gradient-to-b from-amber-500/10 via-yellow-500/5 to-transparent shrink-0">
               <SheetGrabHandle onDismiss={() => setShowContactInfoModal(false)} />
               <div className="flex items-center justify-between mt-1">
-                <span className="text-[11px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5" />
-                  Contact Info
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5" />
+                    Contact Info
+                  </span>
+                  {screenSecurity && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[8.5px] font-bold uppercase tracking-wider bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 flex items-center gap-1">
+                      <Lock className="w-2.5 h-2.5" />
+                      <span>Protected</span>
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
@@ -10608,7 +10847,8 @@ export default function ChatConversation() {
                           alt="" 
                           loading="lazy" 
                           decoding="async" 
-                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" 
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 jdlx-protected-image" 
+                          {...protectedMediaProps}
                         />
                       ) : (
                         getContactDisplayName(activeConversation)?.[0]?.toUpperCase() || 'U'
@@ -12837,7 +13077,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Starred Messages"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-lg max-h-[85vh] rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 overflow-hidden pb-[max(1rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full max-w-lg max-h-[85dvh] rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 overflow-hidden pb-[max(1rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
@@ -13083,7 +13323,9 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setShowPwaInstallModal(false)
                 }}
-                className="p-1 rounded-xl opacity-60 hover:opacity-100 transition"
+                title="Close install dialog"
+                aria-label="Close install dialog"
+                className="rounded-xl p-1 opacity-60 transition hover:opacity-100"
               >
                 <X className="w-4 h-4" />
               </button>
