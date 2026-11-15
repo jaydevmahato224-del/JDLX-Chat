@@ -97,6 +97,9 @@ import {
   pauseBlurShield,
   isScreenSecurityEnabled, 
   setScreenSecurityEnabled, 
+  isStealthModeEnabled,
+  setStealthModeEnabled,
+  toggleStealthMode,
   protectedMediaProps 
 } from '../utils/screenProtection'
 import toast from 'react-hot-toast'
@@ -2083,7 +2086,16 @@ export default function ChatConversation() {
     }
   })
   const [screenSecurity, setScreenSecurity] = useState(() => isScreenSecurityEnabled())
+  const [stealthMode, setStealthMode] = useState(() => isStealthModeEnabled())
   const { showShield } = useScreenProtectionState()
+
+  useEffect(() => {
+    const handleStealthChange = (e) => {
+      setStealthMode(Boolean(e.detail?.enabled))
+    }
+    window.addEventListener('jdlx_stealth_mode_changed', handleStealthChange)
+    return () => window.removeEventListener('jdlx_stealth_mode_changed', handleStealthChange)
+  }, [])
 
   // Small synthesized chime for incoming messages (no audio asset needed).
   const audioContextRef = useRef(null)
@@ -5201,6 +5213,20 @@ export default function ChatConversation() {
             )}
           </button>
 
+          {/* Voice / Video Call Button */}
+          <button type="button"
+            onClick={() => {
+              if (activeRoomId) get().initiateCall(activeRoomId, 'voice')
+            }}
+            title="Start Voice Call"
+            aria-label="Start voice call"
+            disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+            className="ui-btn ui-btn-secondary h-9 min-h-0 gap-1.5 px-2.5 text-xs sm:px-3"
+          >
+            <Phone className={`w-4 h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
+            <span className="hidden sm:inline">Call</span>
+          </button>
+
 
           {/* Quick Theme Switcher Button */}
           <button type="button"
@@ -6243,29 +6269,41 @@ export default function ChatConversation() {
                         </h3>
                         <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${isLight ? 'text-amber-600' : 'text-amber-400'}`} />
                         {screenSecurity && (
-                          <span 
+                          <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation()
-                              triggerHaptic('light')
-                              toast('🛡️ Screenshot Protection Active: Screen captures, recordings, and snipping tools are blocked.', {
-                                id: 'screen-shield-info',
-                                icon: '🔒',
-                                duration: 3000,
-                                style: {
-                                  background: '#18181b',
-                                  color: '#facc15',
-                                  border: '1px solid rgba(250, 204, 21, 0.4)',
-                                  fontWeight: '600',
-                                  fontSize: '12px'
+                              const next = toggleStealthMode()
+                              setStealthMode(next)
+                              triggerHaptic('selection')
+                              toast(
+                                next
+                                  ? '👁️ Stealth Anti-Screenshot Active: Messages are veiled in frosted blur and reveal only when hovered.'
+                                  : '🛡️ Stealth Mode Disabled: Standard screenshot protection active.',
+                                {
+                                  id: 'stealth-toggle-toast',
+                                  icon: next ? '👁️' : '🛡️',
+                                  duration: 3500,
+                                  style: {
+                                    background: '#18181b',
+                                    color: '#facc15',
+                                    border: '1px solid rgba(250, 204, 21, 0.4)',
+                                    fontWeight: '600',
+                                    fontSize: '12px'
+                                  }
                                 }
-                              })
+                              )
                             }}
-                            className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border border-emerald-500/30 shrink-0 select-none hover:bg-emerald-500/25 transition cursor-pointer"
-                            title="Screenshot & Screen Capture Protection Active (Click for info)"
+                            className={`hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider shrink-0 select-none transition-all cursor-pointer ${
+                              stealthMode
+                                ? 'bg-amber-500/20 text-[#facc15] border border-amber-500/40 shadow-xs'
+                                : 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
+                            }`}
+                            title={stealthMode ? "Stealth Anti-Screenshot Mode Active (Click to disable)" : "Screenshot Protection Active (Click to toggle Stealth Anti-Screenshot Mask)"}
                           >
                             <Lock className="w-2.5 h-2.5" />
-                            <span>Protected</span>
-                          </span>
+                            <span>{stealthMode ? 'Stealth Guard' : 'Protected'}</span>
+                          </button>
                         )}
                         {isRoomMuted(activeRoomId) && (
                           <button
@@ -6445,12 +6483,25 @@ export default function ChatConversation() {
                   touchAction: 'pan-y',
                   overscrollBehaviorX: 'none'
                 }}
-                className={`flex-1 space-y-1.5 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4 transition-colors sm:px-6 ${
+                className={`relative flex-1 space-y-1.5 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4 transition-colors sm:px-6 ${
                   activeWallpaperClass
                 } ${
                   !activeWallpaperClass ? (isLight ? 'bg-[#f8f9fb]' : 'bg-[#0b0d10]') : ''
                 }`}
               >
+                {/* Cryptographic Anti-Capture Watermark Overlay */}
+                {screenSecurity && (
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 z-0 overflow-hidden select-none opacity-[0.035] dark:opacity-[0.05] flex flex-wrap gap-x-16 gap-y-12 p-8 font-mono text-[10px] font-bold uppercase tracking-widest text-current rotate-[-12deg] scale-125"
+                  >
+                    {Array.from({ length: 32 }).map((_, i) => (
+                      <span key={i} className="whitespace-nowrap">
+                        🔒 JDLX PROTECTED • {chatUser?.username ? `@${chatUser.username}` : 'CONFIDENTIAL'} • DO NOT CAPTURE
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {/* WhatsApp-Style End-to-End Encryption Notice (Appears only once messages are loaded) */}
                 {!((messagesLoading || (activeRoomId && !sameId(initialRoomFetchedRef.current, activeRoomId))) && (!messages || messages.length === 0)) && (
                   <div className="w-full flex justify-center my-3 px-3 select-none animate-in fade-in duration-300">
@@ -6812,7 +6863,7 @@ export default function ChatConversation() {
                               data-message-bubble="true"
                               onDoubleClick={() => handleDoubleTapReaction(m)}
                               style={{ WebkitTouchCallout: 'none' }}
-                              className={`group relative ${
+                              className={`group relative jdlx-stealth-msg ${
                                 isAlbum
                                   ? 'p-1 sm:p-1.5 w-[280px] sm:w-[320px] max-w-full'
                                   : (isImage && !hasText)
@@ -9442,6 +9493,51 @@ export default function ChatConversation() {
                         />
                       </button>
                     </div>
+
+                    {/* Stealth Anti-Screenshot Mask Sub-setting (Desktop & Mobile) */}
+                    {screenSecurity && (
+                      <div className={`mt-3 pt-3 border-t flex items-center justify-between gap-3 ${
+                        isLight ? 'border-slate-200/80' : 'border-white/[0.08]'
+                      }`}>
+                        <div className="min-w-0 flex-1">
+                          <div className={`text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 ${isLight ? 'text-slate-700' : 'text-zinc-200'}`}>
+                            <Lock className="w-3 h-3 text-amber-500" />
+                            <span>Stealth Anti-Screenshot Mask</span>
+                            <span className="text-[8.5px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider bg-amber-500/15 text-amber-500 border border-amber-500/30">
+                              Desktop
+                            </span>
+                          </div>
+                          <p className={`text-[10px] font-medium mt-0.5 leading-snug ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                            Veils message bubbles with a frosted blur. Only the hovered message is revealed, preventing full-screen captures.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={stealthMode}
+                          aria-label="Stealth Anti-Screenshot Mask"
+                          onClick={() => {
+                            const next = toggleStealthMode()
+                            setStealthMode(next)
+                            triggerHaptic('light')
+                            toast(next ? '👁️ Stealth Anti-Screenshot Mask Enabled' : 'Stealth Mask Disabled', {
+                              icon: next ? '👁️' : '🛡️',
+                              duration: 2500,
+                              style: { background: '#18181b', color: '#facc15', border: '1px solid rgba(250, 204, 21, 0.4)', fontSize: '12px' }
+                            })
+                          }}
+                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                            stealthMode ? 'bg-amber-500' : isLight ? 'bg-slate-300' : 'bg-zinc-700'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                              stealthMode ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Public Key Fingerprint */}

@@ -812,12 +812,20 @@ export const useChatStore = create((set, get) => ({
   sending: false,
   conversationsLoading: Boolean(getStoredChatToken() && (!INITIAL_CONVERSATIONS || INITIAL_CONVERSATIONS.length === 0)),
   conversationsLoaded: INITIAL_CONVERSATIONS.length > 0,
-  // Distinguishes "inbox is empty" from "inbox request failed". The UI used to
-  // show "No chats yet" for both, so an expired token looked like a new account.
   conversationsError: null,
   messagesError: null,
   _presenceVisibilityHandler: null,
   error: null,
+  // ── Voice / Video call state ──
+  activeCall: null,            // { roomId, callType, callerId, calleeId, state, ... }
+  callLocalStream: null,       // MediaStream (mic)
+  callRemoteStream: null,      // MediaStream (peer audio)
+  callPeerConnection: null,    // RTCPeerConnection
+  callIsMuted: false,
+  callIsSpeakerOn: true,
+  callTimerSeconds: 0,
+  callTimerRef: null,
+  callAbortController: null,
 
   fetchChatBranding: async () => {
     try {
@@ -3537,14 +3545,349 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
+  // ── Voice / Video call actions ──
+  // Public STUN servers only (no TURN configured); works on the same network /
+  // most NATs. Relayed candidates require a TURN server in production.
+  _callStunServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+
+  startCallTimer: () => {
+    const state = get()
+    if (state.callTimerRef) return
+    const ref = setInterval(() => {
+      set((s) => ({ callTimerSeconds: (s.callTimerSeconds || 0) + 1 }))
+    }, 1000)
+    set({ callTimerRef: ref })
+  },
+
+  stopCallTimer: () => {
+    const { callTimerRef } = get()
+    if (callTimerRef) clearInterval(callTimerRef)
+    set({ callTimerRef: null, callTimerSeconds: 0 })
+  },
+
+  cleanupCallResources: () => {
+    const state = get()
+    get().stopCallTimer()
+    if (state.callAbortController) {
+      try { state.callAbortController.abort() } catch {}
+      set({ callAbortController: null })
+    }
+    if (state.callPeerConnection) {
+      try { state.callPeerConnection.close() } catch {}
+      set({ callPeerConnection: null })
+    }
+    if (state.callLocalStream) {
+      state.callLocalStream.getTracks().forEach((t) => t.stop())
+      set({ callLocalStream: null })
+    }
+    if (state.callRemoteStream) {
+      state.callRemoteStream.getTracks().forEach((t) => t.stop())
+      set({ callRemoteStream: null })
+    }
+    set({ activeCall: null, callIsMuted: false, callIsSpeakerOn: true })
+  },
+
+  endCall: async () => {
+    const { activeCall, chatToken } = get()
+    if (!activeCall) return
+    try {
+      if (chatToken) {
+        await apiFetch(`/chat/rooms/${activeCall.roomId}/call/end`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${chatToken}` }
+        })
+      }
+    } catch (e) {
+      console.warn('end call signal error:', e)
+    } finally {
+      get().cleanupCallResources()
+    }
+  },
+
+  toggleMute: () => {
+    const { callIsMuted, callLocalStream } = get()
+    const next = !callIsMuted
+    if (callLocalStream) {
+      callLocalStream.getAudioTracks().forEach((t) => { t.enabled = !next })
+    }
+    set({ callIsMuted: next })
+  },
+
+  toggleSpeaker: () => {
+    set((state) => ({ callIsSpeakerOn: !state.callIsSpeakerOn }))
+  },
+
+  // Create an RTCPeerConnection with ICE + track handling wired to the store.
+  createCallPeerConnection: (onTrack, onIceCandidate, onStateChange) => {
+    const pc = new RTCPeerConnection({ iceServers: get()._callStunServers })
+    pc.onicecandidate = (ev) => {
+      if (ev.candidate) onIceCandidate(ev.candidate)
+    }
+    pc.ontrack = (ev) => {
+      const [track] = ev.streams
+      if (track) {
+        const rs = get().callRemoteStream
+        if (!rs || !rs.getAudioTracks().length) {
+          set({ callRemoteStream: new MediaStream([track]) })
+        }
+      }
+    }
+    pc.onconnectionstatechange = () => onStateChange(pc.connectionState)
+    return pc
+  },
+
+  // Initiate an outgoing voice/video call from the active room.
+  initiateCall: async (roomId, callType = 'voice') => {
+    const { chatToken, chatUser, activeRoomId } = get()
+    if (!chatToken || !chatUser) return { success: false, error: 'Not signed in' }
+    if (!roomId) roomId = activeRoomId
+    if (!roomId) return { success: false, error: 'No room' }
+
+    let localStream
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: callType === 'video'
+      })
+    } catch (e) {
+      console.warn('Microphone access denied:', e)
+      return { success: false, error: 'Microphone access denied' }
+    }
+    set({ callLocalStream: localStream, callIsMuted: false })
+
+    const pc = get().createCallPeerConnection(
+      (track) => {
+        const rs = get().callRemoteStream
+        if (!rs || !rs.getAudioTracks().length) {
+          set({ callRemoteStream: new MediaStream([track]) })
+        }
+      },
+      async (candidate) => {
+        try {
+          await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${chatToken}`
+            },
+            body: JSON.stringify({ candidate: candidate.candidate })
+          })
+        } catch (e) {
+          console.warn('send ice candidate error:', e)
+        }
+      },
+      (state) => {
+        if (state === 'failed' || state === 'closed') get().cleanupCallResources()
+      }
+    )
+    set({ callPeerConnection: pc })
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
+
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+
+    const abort = new AbortController()
+    set({ callAbortController: abort })
+    try {
+      const res = await apiFetch(`/chat/rooms/${roomId}/call/offer`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${chatToken}`
+        },
+        body: JSON.stringify({ call_type: callType, offer_sdp: offer.sdp }),
+        signal: abort.signal
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        get().cleanupCallResources()
+        return { success: false, error: json.error || 'Call offer failed' }
+      }
+      set({
+        activeCall: {
+          roomId,
+          callType,
+          callerId: chatUser.id,
+          calleeId: null,
+          state: 'ringing',
+          startedAt: Date.now()
+        }
+      })
+      get().startCallTimer()
+      get().pollCallState(roomId, true)
+      return { success: true }
+    } catch (e) {
+      if (e.name === 'AbortError') return { success: false, error: 'Call cancelled' }
+      get().cleanupCallResources()
+      return { success: false, error: e.message || 'Call failed' }
+    }
+  },
+
+  // Answer an incoming call (callee side).
+  answerCall: async (callId) => {
+    const { chatToken, chatUser, activeCall, activeRoomId } = get()
+    if (!chatToken || !chatUser) return { success: false, error: 'Not signed in' }
+    const roomId = activeRoomId
+    if (!roomId) return { success: false, error: 'No room' }
+
+    let localStream
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    } catch (e) {
+      return { success: false, error: 'Microphone access denied' }
+    }
+    set({ callLocalStream: localStream, callIsMuted: false })
+
+    const pc = get().createCallPeerConnection(
+      (track) => {
+        const rs = get().callRemoteStream
+        if (!rs || !rs.getAudioTracks().length) {
+          set({ callRemoteStream: new MediaStream([track]) })
+        }
+      },
+      async (candidate) => {
+        try {
+          await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${chatToken}`
+            },
+            body: JSON.stringify({ candidate: candidate.candidate })
+          })
+        } catch (e) {
+          console.warn('send ice candidate error:', e)
+        }
+      },
+      (state) => {
+        if (state === 'failed' || state === 'closed') get().cleanupCallResources()
+      }
+    )
+    set({ callPeerConnection: pc })
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
+
+    const offerSdp = activeCall?.offerSdp
+    if (offerSdp) {
+      await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp })
+      const answer = await pc.createAnswer()
+      await pc.setLocalDescription(answer)
+      try {
+        const res = await apiFetch(`/chat/rooms/${roomId}/call/answer`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${chatToken}`
+          },
+          body: JSON.stringify({ answer_sdp: answer.sdp })
+        })
+        const json = await res.json()
+        if (!res.ok || !json.success) {
+          get().cleanupCallResources()
+          return { success: false, error: json.error || 'Call answer failed' }
+        }
+      } catch (e) {
+        get().cleanupCallResources()
+        return { success: false, error: e.message || 'Call answer failed' }
+      }
+    }
+
+    set({
+      activeCall: {
+        ...(activeCall || {}),
+        roomId,
+        state: 'active',
+        calleeId: chatUser.id
+      }
+    })
+    get().startCallTimer()
+    get().pollCallState(roomId, false)
+    return { success: true }
+  },
+
+  // Long-poll the call state so the callee learns of the offer and both peers
+  // stay in sync (answer / end / ICE candidates).
+  pollCallState: async (roomId, isCaller) => {
+    const { chatToken } = get()
+    if (!chatToken) return
+    const abort = new AbortController()
+    set({ callAbortController: abort })
+
+    while (!abort.signal.aborted) {
+      try {
+        const res = await apiFetch(`/chat/rooms/${roomId}/call/state`, {
+          headers: { Authorization: `Bearer ${chatToken}` },
+          signal: abort.signal
+        })
+        const json = await res.json()
+        if (!res.ok || !json.success) break
+        const call = json.data || {}
+        const state = call.state || 'idle'
+
+        if (state === 'ringing' && !isCaller) {
+          set({
+            activeCall: {
+              roomId,
+              callType: call.call_type || 'voice',
+              callerId: call.caller_id,
+              calleeId: call.callee_id || null,
+              state: 'ringing',
+              offerSdp: call.offer_sdp || null,
+              startedAt: call.started_at ? new Date(call.started_at).getTime() : Date.now()
+            }
+          })
+        } else if (state === 'active') {
+          set((s) => ({
+            activeCall: { ...s.activeCall, state: 'active', calleeId: call.callee_id || s.activeCall?.calleeId }
+          }))
+          if (call.answer_sdp) {
+            try {
+              const pc = get().callPeerConnection
+              if (pc) {
+                await pc.setRemoteDescription({ type: 'answer', sdp: call.answer_sdp })
+              }
+            } catch (e) {
+              console.warn('set remote answer error:', e)
+            }
+          }
+          const cands = call.candidates || []
+          for (const cand of cands) {
+            try {
+              const pc = get().callPeerConnection
+              if (pc) await pc.addIceCandidate({ candidate: cand })
+            } catch (e) {
+              console.warn('add ice candidate error:', e)
+            }
+          }
+        } else if (state === 'ended' || state === 'idle') {
+          get().cleanupCallResources()
+          break
+        }
+
+        await new Promise((r) => setTimeout(r, 1500))
+      } catch (e) {
+        if (e.name === 'AbortError') break
+        console.warn('poll call state error:', e)
+        await new Promise((r) => setTimeout(r, 2000))
+      }
+    }
+  },
+
+  stopPollCallState: () => {
+    const { callAbortController } = get()
+    if (callAbortController) {
+      try { callAbortController.abort() } catch {}
+      set({ callAbortController: null })
+    }
+  },
+
   // Clears ONLY the conversation the user is actually looking at. There is no
   // legacy /chat/clear fallback any more: that endpoint could resolve a DM
   // room from user_id and delete the history for both participants.
   clearChatHistory: async (targetRoomId) => {
     const token = get().chatToken
-    if (!token) return false
-
-    const roomId = targetRoomId || get().activeRoomId || get().activeConversation?.id
     if (!roomId) return false
     try {
       const res = await apiFetch(`/chat/rooms/${roomId}/clear`, {

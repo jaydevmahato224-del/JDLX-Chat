@@ -11,6 +11,7 @@ try {
 }
 
 const STORAGE_KEY = 'jdlx_chat_screen_security'
+const STEALTH_STORAGE_KEY = 'jdlx_chat_stealth_mode'
 
 /**
  * Returns whether Screenshot Protection / Screen Security is enabled in settings.
@@ -24,6 +25,43 @@ export function isScreenSecurityEnabled() {
   } catch {
     return true
   }
+}
+
+/**
+ * Returns whether Stealth Mode (Anti-Screenshot Mask) is enabled.
+ * When enabled on desktop, messages have a frosted veil that reveals on hover.
+ */
+export function isStealthModeEnabled() {
+  if (typeof window === 'undefined') return false
+  try {
+    const val = localStorage.getItem(STEALTH_STORAGE_KEY)
+    return val === 'true'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Sets Stealth Mode preference.
+ */
+export function setStealthModeEnabled(enabled) {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(STEALTH_STORAGE_KEY, String(Boolean(enabled)))
+  } catch {}
+  if (enabled) {
+    document.documentElement.classList.add('jdlx-stealth-active')
+  } else {
+    document.documentElement.classList.remove('jdlx-stealth-active')
+  }
+  notifySubscribers()
+  window.dispatchEvent(new CustomEvent('jdlx_stealth_mode_changed', { detail: { enabled: Boolean(enabled) } }))
+}
+
+export function toggleStealthMode() {
+  const current = isStealthModeEnabled()
+  setStealthModeEnabled(!current)
+  return !current
 }
 
 /**
@@ -61,10 +99,12 @@ function notifySubscribers() {
 
 export function getShieldState() {
   const enabled = isScreenSecurityEnabled()
+  const stealthMode = isStealthModeEnabled()
   const isProtected = enabled && activeReasons.size > 0
   const showShield = isProtected && (isCaptureTriggered || (isWindowBlurred && !isBlurPaused))
   return {
     enabled,
+    stealthMode,
     isProtected,
     showShield,
     isCaptureTriggered,
@@ -107,7 +147,7 @@ function notifyScreenshotBlocked() {
   const now = Date.now()
   if (now - lastToastTime < 2500) return
   lastToastTime = now
-  toast('🔒 Screenshot Protected: Screen capture is restricted to protect privacy.', {
+  toast('🔒 Screenshot Protected: Screen capture and copying are restricted.', {
     id: 'screenshot-blocked-toast',
     icon: '🛡️',
     duration: 3500,
@@ -144,13 +184,20 @@ function triggerCaptureProtection() {
 function handleKeyDown(e) {
   if (!isScreenSecurityEnabled() || activeReasons.size === 0) return
 
-  // PrintScreen key
-  const isPrintScreen = e.key === 'PrintScreen' || e.code === 'PrintScreen' || e.keyCode === 44
+  // PrintScreen key variations across OSes (Windows, Linux, macOS)
+  const isPrintScreen = 
+    e.key === 'PrintScreen' || 
+    e.key === 'Snapshot' || 
+    e.code === 'PrintScreen' || 
+    e.keyCode === 44 || 
+    e.which === 44
 
   // Snipping tool / OS screenshot shortcuts:
-  // Win+Shift+S / Cmd+Shift+S / Cmd+Shift+3 / Cmd+Shift+4 / Cmd+Shift+5 / Ctrl+Shift+S
+  // Win+Shift+S / Cmd+Shift+S / Cmd+Shift+3 / Cmd+Shift+4 / Cmd+Shift+5 / Ctrl+Shift+S / Alt+PrintScreen / Ctrl+PrintScreen
   const isCaptureShortcut =
-    ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'S' || e.key === 's' || e.key === '3' || e.key === '4' || e.key === '5'))
+    ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'S' || e.key === 's' || e.key === '3' || e.key === '4' || e.key === '5')) ||
+    (e.altKey && isPrintScreen) ||
+    ((e.metaKey || e.ctrlKey) && isPrintScreen)
 
   // Browser Print / Save to PDF
   const isPrintShortcut = (e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')
@@ -171,7 +218,14 @@ function handleKeyDown(e) {
 
 function handleKeyUp(e) {
   if (!isScreenSecurityEnabled() || activeReasons.size === 0) return
-  if (e.key === 'PrintScreen' || e.code === 'PrintScreen' || e.keyCode === 44) {
+  const isPrintScreen = 
+    e.key === 'PrintScreen' || 
+    e.key === 'Snapshot' || 
+    e.code === 'PrintScreen' || 
+    e.keyCode === 44 || 
+    e.which === 44
+
+  if (isPrintScreen) {
     try {
       e.preventDefault()
       e.stopPropagation()
@@ -207,6 +261,35 @@ function handleVisibilityChange() {
   }
 }
 
+function handleMouseLeave(e) {
+  if (!isScreenSecurityEnabled() || activeReasons.size === 0 || isBlurPaused) return
+  // If mouse moves completely outside the viewport (e.g. to OS panel, external snipping tool, or secondary monitor)
+  if (!e.relatedTarget && !e.toElement) {
+    isWindowBlurred = true
+    document.documentElement.classList.add('jdlx-window-blurred')
+    notifySubscribers()
+  }
+}
+
+function handleMouseEnter() {
+  if (isWindowBlurred && document.hasFocus() && !isCaptureTriggered) {
+    isWindowBlurred = false
+    document.documentElement.classList.remove('jdlx-window-blurred')
+    notifySubscribers()
+  }
+}
+
+function handleCopy(e) {
+  if (!isScreenSecurityEnabled() || activeReasons.size === 0) return
+  try {
+    e.preventDefault()
+    if (e.clipboardData) {
+      e.clipboardData.setData('text/plain', '🔒 JDLX Chat: Screenshots and copying protected chats are restricted for privacy.')
+    }
+  } catch {}
+  notifyScreenshotBlocked()
+}
+
 function attachWebListeners() {
   if (typeof window === 'undefined' || isWebListenersAttached) return
   isWebListenersAttached = true
@@ -215,6 +298,9 @@ function attachWebListeners() {
   window.addEventListener('blur', handleWindowBlur)
   window.addEventListener('focus', handleWindowFocus)
   document.addEventListener('visibilitychange', handleVisibilityChange)
+  document.documentElement.addEventListener('mouseleave', handleMouseLeave)
+  document.documentElement.addEventListener('mouseenter', handleMouseEnter)
+  document.addEventListener('copy', handleCopy, true)
 }
 
 function detachWebListeners() {
@@ -225,6 +311,9 @@ function detachWebListeners() {
   window.removeEventListener('blur', handleWindowBlur)
   window.removeEventListener('focus', handleWindowFocus)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  document.documentElement.removeEventListener('mouseleave', handleMouseLeave)
+  document.documentElement.removeEventListener('mouseenter', handleMouseEnter)
+  document.removeEventListener('copy', handleCopy, true)
   document.documentElement.classList.remove('jdlx-window-blurred')
 }
 
@@ -343,4 +432,7 @@ export const protectedMediaProps = {
 // Auto-initialize protection on load if enabled
 if (typeof window !== 'undefined') {
   syncProtection()
+  if (isStealthModeEnabled()) {
+    document.documentElement.classList.add('jdlx-stealth-active')
+  }
 }
