@@ -86,7 +86,7 @@ function getPasswordStrength(password) {
       label: 'Weak',
       color: 'bg-rose-500',
       textColor: 'text-rose-500',
-      hint: 'Password is too short or simple'
+      hint: 'Too weak — use 8+ chars with an uppercase, a lowercase & a number'
     }
   }
   if (score === 2) {
@@ -95,7 +95,7 @@ function getPasswordStrength(password) {
       label: 'Fair',
       color: 'bg-amber-500',
       textColor: 'text-amber-500',
-      hint: 'Add numbers & special symbols to strengthen'
+      hint: 'Almost! Include an uppercase, a lowercase and a number'
     }
   }
   if (score === 3) {
@@ -114,6 +114,18 @@ function getPasswordStrength(password) {
     textColor: 'text-emerald-400',
     hint: 'Excellent! High-entropy cryptographic strength'
   }
+}
+
+// Hard requirement enforced on submit (mirrors the backend policy): 8+
+// characters with at least one uppercase letter, one lowercase letter and one
+// number. Returns an error message, or null when the password qualifies.
+function getPasswordPolicyError(password) {
+  const pw = password || ''
+  if (pw.length < 8) return 'Password must be at least 8 characters long.'
+  if (!/[A-Z]/.test(pw)) return 'Password must include at least one uppercase letter.'
+  if (!/[a-z]/.test(pw)) return 'Password must include at least one lowercase letter.'
+  if (!/[0-9]/.test(pw)) return 'Password must include at least one number.'
+  return null
 }
 
 function formatIndianPhone(value) {
@@ -256,8 +268,13 @@ export default function ChatLogin() {
 
   const handlePhoneChange = (e) => {
     setErrorMsg('')
-    const raw = e.target.value.replace(/\D/g, '').slice(0, 10)
-    setRegPhone(raw)
+    let digits = e.target.value.replace(/\D/g, '')
+    // Indian mobile numbers never start with 0, but people habitually dial
+    // "0" before the number: "09102852964" used to be sliced to the FIRST 10
+    // digits, storing a wrong number. Strip the prefix instead of truncating.
+    if (digits.startsWith('0')) digits = digits.replace(/^0+/, '')
+    if (digits.length > 10 && digits.startsWith('91')) digits = digits.slice(2)
+    setRegPhone(digits.slice(0, 10))
   }
 
   // Real-time username check state
@@ -577,8 +594,9 @@ export default function ChatLogin() {
       return
     }
 
-    if (!regPassword || regPassword.length < 6) {
-      setErrorMsg('Password must be at least 6 characters long.')
+    const passwordPolicyError = getPasswordPolicyError(regPassword)
+    if (passwordPolicyError) {
+      setErrorMsg(`${passwordPolicyError} Use 8+ characters with an uppercase letter, a lowercase letter and a number.`)
       return
     }
 
@@ -655,8 +673,8 @@ export default function ChatLogin() {
     }`}>
       <div className="mx-auto flex min-h-[100dvh] w-full max-w-[440px] flex-col px-4 sm:px-6 pb-[env(safe-area-inset-bottom)]">
       {/* Top Bar: chat brand + theme switcher */}
-      <header className={`sticky top-0 z-30 w-full ios-safe-header flex items-center justify-between gap-3 pt-[max(0.9rem,env(safe-area-inset-top))] pb-2 backdrop-blur-md transition-colors duration-200 ${
-        isLight ? 'bg-white/80 border-b border-slate-200/50' : 'bg-[#090a0c]/80 border-b border-white/5'
+      <header className={`sticky top-0 z-30 w-full ios-safe-header flex items-center justify-between gap-3 pt-[max(0.9rem,env(safe-area-inset-top))] pb-2 transition-colors duration-200 ${
+        isLight ? 'bg-white border-b border-slate-200' : 'bg-[#090a0c] border-b border-white/10'
       }`}>
         <div className="flex min-w-0 items-center gap-2.5">
           <div className={`h-9 w-9 shrink-0 overflow-hidden rounded-xl border ${isLight ? 'border-slate-200 bg-white shadow-sm' : 'border-white/10 bg-[#14171b]'}`}>
@@ -715,7 +733,7 @@ export default function ChatLogin() {
       </header>
 
       {/* Main Card */}
-      <main className="flex w-full flex-1 flex-col pt-2 sm:pt-4 pb-4 sm:pb-8">
+      <main className="flex w-full flex-1 flex-col pt-3 sm:pt-5 pb-4 sm:pb-8">
         <div ref={cardRef} className={`ui-card relative overflow-hidden p-5 transition-colors sm:p-6 w-full min-w-0 ${
           isLight
             ? 'border-slate-200/90 bg-white rounded-3xl md:rounded-2xl shadow-2xl'
@@ -1068,7 +1086,8 @@ export default function ChatLogin() {
                     <input
                       type="tel"
                       inputMode="numeric"
-                      pattern="[0-9]*"
+                      pattern="[0-9 ]*"
+                      title="Enter a 10-digit Indian mobile number"
                       aria-label="Indian mobile number"
                       autoComplete="tel-national"
                       maxLength={11}
@@ -1123,7 +1142,7 @@ export default function ChatLogin() {
                     type={showRegPassword ? 'text' : 'password'}
                     autoComplete="new-password"
                     aria-label="Create password"
-                    placeholder="Min 6 characters"
+                    placeholder="Min 8 characters (A-Z, a-z, 0-9)"
                     value={regPassword}
                     onChange={(e) => setRegPassword(e.target.value)}
                     className="ui-input pr-10 text-base sm:text-sm"
@@ -1141,6 +1160,9 @@ export default function ChatLogin() {
                     {showRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                <p className={`text-[10px] ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
+                  Use 8+ characters with an uppercase letter, a lowercase letter and a number.
+                </p>
 
                 {/* Password Strength Meter (Dynamic Segmented Bar) */}
                 {regPassword.length > 0 && (

@@ -1126,6 +1126,8 @@ export default function ChatConversation() {
     initiateCall,
     answerCall,
     endCall,
+    startCallWatcher,
+    stopCallWatcher,
     callIsMuted,
     callIsSpeakerOn,
     callTimerSeconds,
@@ -3143,6 +3145,19 @@ export default function ChatConversation() {
     startRealtime()
     return () => stopRealtime()
   }, [activeRoomId, mobileView, startRealtime, stopRealtime])
+
+  // 2b-1. Incoming-call watcher for the open room: the callee side learns about
+  // an incoming call this way and IncomingCallModal appears. Runs only while
+  // this screen is mounted with a room open; it pauses itself while a call is
+  // in progress and resumes watching once that call ends.
+  useEffect(() => {
+    if (!activeRoomId || !chatUser) {
+      stopCallWatcher()
+      return undefined
+    }
+    startCallWatcher(activeRoomId)
+    return () => stopCallWatcher()
+  }, [activeRoomId, chatUser?.id, startCallWatcher, stopCallWatcher])
 
   // 2c. Friend requests & accepts arrive instantly instead of on the next
   // 30-second refresh (the poll below stays only as a safety net).
@@ -5225,8 +5240,12 @@ export default function ChatConversation() {
 
           {/* Voice / Video Call Button */}
           <button type="button"
-            onClick={() => {
-              if (activeRoomId) get().initiateCall(activeRoomId, 'voice')
+            onClick={async () => {
+              if (!activeRoomId) return
+              const res = await initiateCall(activeRoomId, 'voice')
+              if (res && res.success === false) {
+                toast.error(res.error || 'Call failed. Please try again.')
+              }
             }}
             title="Start Voice Call"
             aria-label="Start voice call"

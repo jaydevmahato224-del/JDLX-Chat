@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Phone, Mic, Volume2, VolumeX, X, User, Loader2, RefreshCw } from 'lucide-react'
+import { Phone, Mic, Volume2, VolumeX, X, Loader2, RefreshCw } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
 import toast from 'react-hot-toast'
@@ -7,33 +7,37 @@ import toast from 'react-hot-toast'
 export default function IncomingCallModal() {
   const {
     activeCall,
+    activeConversation,
+    chatUser,
     callIsMuted,
     callIsSpeakerOn,
     toggleMute,
     toggleSpeaker,
     answerCall,
-    endCall,
-    cleanupCallResources
+    endCall
   } = useChatStore(useShallow((state) => state))
 
-  if (!activeCall || activeCall.state !== 'ringing') return null
-
-  const callerName = activeCall.callerId ? 'Caller' : 'Incoming Call'
-
-  // Auto-decline after ~45s if no answer
+  // Auto-decline after ~45s if no answer. The guard lives INSIDE the effect so
+  // the hook order stays stable across renders (early returns must come after
+  // all hooks — rules of hooks).
   useEffect(() => {
+    if (!activeCall || activeCall.state !== 'ringing') return undefined
     const t = setTimeout(() => {
       toast('Call timed out')
       endCall()
     }, 45000)
     return () => clearTimeout(t)
-  }, [endCall])
+  }, [activeCall?.callerId, activeCall?.state, endCall])
 
-  const formatTime = (s) => {
-    const m = Math.floor(s / 60)
-    const sec = s % 60
-    return `${m}:${sec < 10 ? '0' : ''}${sec}`
-  }
+  if (!activeCall || activeCall.state !== 'ringing') return null
+  // The caller's own outgoing call also sits in 'ringing' state; they get the
+  // CallScreen ("Calling…") instead of an incoming-call prompt for themselves.
+  if (activeCall.callerId === chatUser?.id) return null
+
+  const displayName =
+    activeConversation?.other_user?.name ||
+    activeConversation?.other_user?.username ||
+    'Incoming Call'
 
   return (
     <div
@@ -53,7 +57,7 @@ export default function IncomingCallModal() {
             </div>
             <div>
               <p className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Incoming Call</p>
-              <p className="text-[20px] font-semibold text-white">{callerName}</p>
+              <p className="text-[20px] font-semibold text-white">{displayName}</p>
             </div>
           </div>
           <button

@@ -27,3 +27,13 @@ local.properties
 .gradle/
 build/
 .env*
+
+# Python & SQLite
+__pycache__/
+*.pyc
+*.pyo
+*.db
+backend/__pycache__/
+backend/tests/__pycache__/
+backend/jdlx.db
+

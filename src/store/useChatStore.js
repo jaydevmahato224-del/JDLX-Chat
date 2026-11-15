@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import toast from 'react-hot-toast'
 import { apiFetch } from '../utils/apiFetch'
 import { sameId } from '../utils/ids'
 import { supabase, setSupabaseRealtimeAuth } from '../utils/supabaseClient'
@@ -825,7 +826,8 @@ export const useChatStore = create((set, get) => ({
   callIsSpeakerOn: true,
   callTimerSeconds: 0,
   callTimerRef: null,
-  callAbortController: null,
+  callAbortController: null,   // in-call poller (pollCallState)
+  callWatchAbortController: null, // passive incoming-call watcher (startCallWatcher)
 
   fetchChatBranding: async () => {
     try {
@@ -3808,12 +3810,18 @@ export const useChatStore = create((set, get) => ({
   },
 
   // Long-poll the call state so the callee learns of the offer and both peers
-  // stay in sync (answer / end / ICE candidates).
+  // stay in sync (answer / end / ICE candidates). The remote answer and ICE
+  // candidates are applied exactly ONCE each — the backend returns the full
+  // history on every poll, and re-applying them spams RTCPeerConnection with
+  // duplicate setRemoteDescription/addIceCandidate calls.
   pollCallState: async (roomId, isCaller) => {
     const { chatToken } = get()
     if (!chatToken) return
     const abort = new AbortController()
     set({ callAbortController: abort })
+    const ringingSince = Date.now()
+    let answerApplied = false
+    let appliedCandidates = 0
 
     while (!abort.signal.aborted) {
       try {
@@ -3838,11 +3846,20 @@ export const useChatStore = create((set, get) => ({
               startedAt: call.started_at ? new Date(call.started_at).getTime() : Date.now()
             }
           })
+        } else if (state === 'ringing' && isCaller) {
+          // No-answer guard: never ring forever, otherwise the stale 'ringing'
+          // row keeps blocking new offers ("A call is already in progress").
+          if (Date.now() - ringingSince > 60000) {
+            toast('No answer')
+            await get().endCall()
+            break
+          }
         } else if (state === 'active') {
           set((s) => ({
             activeCall: { ...s.activeCall, state: 'active', calleeId: call.callee_id || s.activeCall?.calleeId }
           }))
-          if (call.answer_sdp) {
+          if (call.answer_sdp && !answerApplied) {
+            answerApplied = true
             try {
               const pc = get().callPeerConnection
               if (pc) {
@@ -3852,8 +3869,10 @@ export const useChatStore = create((set, get) => ({
               console.warn('set remote answer error:', e)
             }
           }
+          // Candidates accumulate server-side; only apply the unseen ones.
           const cands = call.candidates || []
-          for (const cand of cands) {
+          for (const cand of cands.slice(appliedCandidates)) {
+            appliedCandidates += 1
             try {
               const pc = get().callPeerConnection
               if (pc) await pc.addIceCandidate({ candidate: cand })
@@ -3880,6 +3899,72 @@ export const useChatStore = create((set, get) => ({
     if (callAbortController) {
       try { callAbortController.abort() } catch {}
       set({ callAbortController: null })
+    }
+  },
+
+  // Passive watcher for the OPEN room: lets the callee learn about an incoming
+  // call without being the one who started polling (the caller's poller only
+  // exists after initiateCall runs). Cheap GET poll — the endpoint has no rate
+  // limit — and it pauses itself automatically while a call is in progress,
+  // resuming (and watching for the NEXT call) once that call ends.
+  startCallWatcher: async (roomId) => {
+    if (!roomId) return
+    const prev = get().callWatchAbortController
+    if (prev) {
+      try { prev.abort() } catch {}
+    }
+    if (get().activeCall) return
+    const abort = new AbortController()
+    set({ callWatchAbortController: abort })
+
+    while (!abort.signal.aborted) {
+      if (get().activeCall) {
+        // A call is running; its own poller (pollCallState) is in charge.
+        await new Promise((r) => setTimeout(r, 2000))
+        continue
+      }
+      if (!get().chatToken) break
+      try {
+        const res = await apiFetch(`/chat/rooms/${roomId}/call/state`, {
+          headers: { Authorization: `Bearer ${get().chatToken}` },
+          signal: abort.signal,
+          timeoutMs: 0
+        })
+        const json = await res.json()
+        if (!res.ok || !json.success) break
+        const call = json.data || {}
+        if (
+          call.state === 'ringing'
+          && call.caller_id !== get().chatUser?.id
+          && !get().activeCall
+        ) {
+          set({
+            activeCall: {
+              roomId,
+              callType: call.call_type || 'voice',
+              callerId: call.caller_id,
+              calleeId: call.callee_id || null,
+              state: 'ringing',
+              offerSdp: call.offer_sdp || null,
+              startedAt: call.started_at ? new Date(call.started_at).getTime() : Date.now()
+            }
+          })
+        }
+        await new Promise((r) => setTimeout(r, 2000))
+      } catch (e) {
+        if (e.name === 'AbortError') break
+        console.warn('call watcher error:', e)
+        await new Promise((r) => setTimeout(r, 3000))
+      }
+    }
+    if (get().callWatchAbortController === abort) set({ callWatchAbortController: null })
+  },
+
+  stopCallWatcher: () => {
+    const { callWatchAbortController } = get()
+    if (callWatchAbortController) {
+      try { callWatchAbortController.abort() } catch {}
+      set({ callWatchAbortController: null })
     }
   },
 

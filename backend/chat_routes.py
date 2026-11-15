@@ -561,6 +561,24 @@ def is_valid_chat_email(value):
     return bool(CHAT_EMAIL_RE.match(str(value or '').strip().lower()))
 
 
+def chat_password_policy_error(password):
+    """Strong-password policy for NEW chat passwords (registration / Google
+    sign-up completion). Login is intentionally NOT gated by this so existing
+    accounts can always sign in. Returns an error message, or None when the
+    password satisfies the policy: 8+ characters with at least one uppercase
+    letter, one lowercase letter and one number."""
+    pw = str(password or '')
+    if len(pw) < 8:
+        return "Password must be at least 8 characters long."
+    if not re.search(r'[A-Z]', pw):
+        return "Password must include at least one uppercase letter."
+    if not re.search(r'[a-z]', pw):
+        return "Password must include at least one lowercase letter."
+    if not re.search(r'\d', pw):
+        return "Password must include at least one number."
+    return None
+
+
 CHAT_GENDERS = {'male', 'female', 'other', 'prefer_not_to_say'}
 
 
@@ -1264,8 +1282,9 @@ def chat_auth_register():
     if not cleaned_phone and not email:
         return error_response("Please enter your email address or 10-digit mobile number.", 400)
 
-    if not password or len(str(password)) < 6:
-        return error_response("Password must be at least 6 characters long.", 400)
+    pw_policy_err = chat_password_policy_error(password)
+    if pw_policy_err:
+        return error_response(pw_policy_err, 400)
 
     if gender and gender not in CHAT_GENDERS:
         return error_response("Please select a valid gender.", 400)
@@ -1376,8 +1395,9 @@ def chat_google_complete_signup():
         return error_response(u_err, 400)
     if gender not in CHAT_GENDERS:
         return error_response("Please select your gender.", 400)
-    if not password or len(str(password)) < 6:
-        return error_response("Password must be at least 6 characters long.", 400)
+    pw_policy_err = chat_password_policy_error(password)
+    if pw_policy_err:
+        return error_response(pw_policy_err, 400)
 
     cleaned_phone = re.sub(r'\D', '', phone)
     if cleaned_phone.startswith('91') and len(cleaned_phone) == 12:
@@ -1687,6 +1707,259 @@ def chat_friendship_accepted(cursor, user_a, user_b):
         (user_a, user_b, user_b, user_a)
     )
     return cursor.fetchone() is not None
+
+
+def _clean_group_title(value):
+    """Group names are user text: strip control chars and cap the length."""
+    title = re.sub(r'[\u0000-\u001F\u007F-\u009F]', '', str(value or '')).strip()
+    return title[:80]
+
+
+def _parse_group_member_ids(raw_ids, actor_id=None):
+    """Normalise a member-id list (dedupe, drop the actor, cap at 49)."""
+    if not isinstance(raw_ids, list):
+        return None
+    ids = []
+    for raw in raw_ids:
+        try:
+            uid = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if uid <= 0 or (actor_id is not None and uid == actor_id):
+            continue
+        if uid not in ids:
+            ids.append(uid)
+    return ids[:49]
+
+
+def get_chat_room_for_user(cursor, room_id, user_id):
+    """Return (room_dict, allowed).
+
+    Direct rooms keep their existing participant columns. Group rooms are
+    authorised ONLY through official_chat_group_members, which also means a
+    removed member loses access immediately without touching the room row.
+    """
+    cursor.execute("SELECT * FROM official_chat_rooms WHERE id = ? LIMIT 1", (room_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None, False
+    room = dict(row)
+    if room.get('user_id') == user_id or room.get('user_two_id') == user_id:
+        return room, True
+    cursor.execute(
+        "SELECT role FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+        (room_id, user_id)
+    )
+    member = cursor.fetchone()
+    if member:
+        room['group_role'] = member['role'] or 'member'
+        return room, True
+    return room, False
+
+
+def _group_member_rows(cursor, room_id):
+    cursor.execute(
+        """SELECT gm.user_id, gm.role, gm.joined_at,
+                  u.name, u.username, u.profile_image,
+                  CASE WHEN u.last_seen_at >= datetime('now', '-90 seconds')
+                       THEN 1 ELSE 0 END AS is_online
+           FROM official_chat_group_members gm
+           JOIN chat_users u ON u.id = gm.user_id
+           WHERE gm.room_id = ?
+           ORDER BY CASE WHEN gm.role = 'admin' THEN 0 ELSE 1 END,
+                    gm.joined_at ASC, gm.user_id ASC""",
+        (room_id,)
+    )
+    members = []
+    for row in cursor.fetchall():
+        member = dict(row)
+        member['id'] = member.pop('user_id')
+        member['is_online'] = bool(member.get('is_online'))
+        member['joined_at'] = format_utc_iso(member.get('joined_at'))
+        members.append(member)
+    return members
+
+
+def _group_member_ids(cursor, room_id):
+    cursor.execute(
+        "SELECT user_id FROM official_chat_group_members WHERE room_id = ? ORDER BY joined_at ASC, user_id ASC",
+        (room_id,)
+    )
+    return [int(row['user_id']) for row in cursor.fetchall()]
+
+
+def _group_unread_count(cursor, room_id, user_id):
+    cursor.execute(
+        """SELECT COUNT(*) AS cnt FROM official_chat_messages m
+           LEFT JOIN official_chat_read_state rs
+             ON rs.room_id = m.room_id AND rs.user_id = ?
+           LEFT JOIN official_chat_room_clears c
+             ON c.room_id = m.room_id AND c.user_id = ?
+           WHERE m.room_id = ? AND m.user_id != ?
+             AND m.id > COALESCE(rs.last_read_id, 0)
+             AND m.id > COALESCE(c.cleared_upto_id, 0)
+             AND m.id NOT IN (SELECT message_id FROM chat_message_hides WHERE user_id = ?)""",
+        (user_id, user_id, room_id, user_id, user_id)
+    )
+    row = cursor.fetchone()
+    return int(row['cnt'] or 0) if row else 0
+
+
+def _build_group_conversation(cursor, room_id, user_id):
+    """Inbox shape for a group. Mirrors direct conversations for the UI while
+    keeping group-only fields (member_count, is_group) additive."""
+    cursor.execute("SELECT * FROM official_chat_rooms WHERE id = ? AND room_type = 'group'", (room_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    room = dict(row)
+    cursor.execute(
+        "SELECT role FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+        (room_id, user_id)
+    )
+    my_member = cursor.fetchone()
+    if not my_member:
+        return None
+
+    member_ids = _group_member_ids(cursor, room_id)
+    member_count = len(member_ids)
+
+    cursor.execute(
+        "SELECT last_read_id FROM official_chat_read_state WHERE room_id = ? AND user_id = ?",
+        (room_id, user_id)
+    )
+    read_row = cursor.fetchone()
+    last_read_id = int(read_row['last_read_id'] or 0) if read_row else 0
+
+    cursor.execute(
+        "SELECT cleared_upto_id FROM official_chat_room_clears WHERE room_id = ? AND user_id = ?",
+        (room_id, user_id)
+    )
+    clear_row = cursor.fetchone()
+    cleared_upto = int(clear_row['cleared_upto_id'] or 0) if clear_row else 0
+
+    cursor.execute(
+        """SELECT id, user_id, sender_name, message, message_type, created_at, is_read
+           FROM official_chat_messages
+           WHERE room_id = ? AND id > ?
+             AND id NOT IN (SELECT message_id FROM chat_message_hides WHERE user_id = ?)
+           ORDER BY id DESC LIMIT 1""",
+        (room_id, cleared_upto, user_id)
+    )
+    last_msg = cursor.fetchone()
+
+    unread_count = _group_unread_count(cursor, room_id, user_id)
+
+    e2e_secret = room.get('e2e_secret')
+    if not e2e_secret:
+        e2e_secret = secrets.token_hex(32)
+        cursor.execute("UPDATE official_chat_rooms SET e2e_secret = ? WHERE id = ?", (e2e_secret, room_id))
+
+    last_message_is_read = False
+    if last_msg and last_msg['user_id'] == user_id:
+        # A group message counts as seen only when every other member has read it.
+        cursor.execute(
+            """SELECT MIN(COALESCE(rs.last_read_id, 0)) AS min_read
+               FROM official_chat_group_members gm
+               LEFT JOIN official_chat_read_state rs
+                 ON rs.room_id = gm.room_id AND rs.user_id = gm.user_id
+               WHERE gm.room_id = ? AND gm.user_id != ?""",
+            (room_id, user_id)
+        )
+        min_row = cursor.fetchone()
+        min_read = int(min_row['min_read'] or 0) if min_row else 0
+        last_message_is_read = bool(member_count > 1 and min_read >= last_msg['id'])
+
+    last_time = last_msg['created_at'] if last_msg else room.get('created_at')
+    return {
+        'id': room['id'],
+        'room_key': room['room_key'],
+        'e2e_secret': e2e_secret,
+        'room_type': 'group',
+        'is_group': True,
+        'is_direct': False,
+        'is_system': False,
+        'other_user': None,
+        'contact_name': room.get('title') or 'Group',
+        'contact_username': 'group',
+        'contact_avatar': None,
+        'contact_online': False,
+        'contact_public_key': None,
+        'contact_bio': f"{member_count} member{'s' if member_count != 1 else ''}",
+        'contact_joined_at': format_utc_iso(room.get('created_at')),
+        'blocked_by_me': False,
+        'blocked_me': False,
+        'last_message': (last_msg['message'] if last_msg else '') or '',
+        'last_message_at': format_utc_iso(last_time) if last_time else None,
+        'last_message_user_id': last_msg['user_id'] if last_msg else None,
+        'last_message_sender_name': last_msg['sender_name'] if last_msg else None,
+        'last_message_type': (last_msg['message_type'] or 'text') if last_msg else 'text',
+        'last_message_is_read': last_message_is_read,
+        'unread_count': unread_count,
+        'member_count': member_count,
+        'member_ids': member_ids,
+        'creator_id': room.get('user_id'),
+        'is_creator': same_id_check(room.get('user_id'), user_id),
+        'my_role': my_member['role'] or 'member',
+        'last_read_id': last_read_id,
+    }
+
+
+def same_id_check(a, b):
+    """Small helper kept local to avoid importing the frontend id helper."""
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def _group_details(cursor, room_id, user_id):
+    cursor.execute("SELECT * FROM official_chat_rooms WHERE id = ? AND room_type = 'group'", (room_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    room = dict(row)
+    cursor.execute(
+        "SELECT role FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+        (room_id, user_id)
+    )
+    my_member = cursor.fetchone()
+    if not my_member:
+        return None
+    members = _group_member_rows(cursor, room_id)
+    return {
+        'id': room['id'],
+        'title': room.get('title') or 'Group',
+        'name': room.get('title') or 'Group',
+        'room_key': room['room_key'],
+        'room_type': 'group',
+        'e2e_secret': room.get('e2e_secret'),
+        'creator_id': room.get('user_id'),
+        'is_creator': same_id_check(room.get('user_id'), user_id),
+        'my_role': my_member['role'] or 'member',
+        'member_count': len(members),
+        'members': members,
+        'created_at': format_utc_iso(room.get('created_at')),
+    }
+
+
+def _group_member_is_admin(cursor, room_id, user_id):
+    cursor.execute(
+        "SELECT role FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+        (room_id, user_id)
+    )
+    row = cursor.fetchone()
+    return bool(row and (row['role'] or '') in ('admin', 'creator'))
+
+
+def _insert_group_notifications(cursor, room_id, member_ids, title, message):
+    """Create inbox notifications for group membership changes."""
+    for member_id in member_ids:
+        cursor.execute(
+            """INSERT INTO official_chat_notifications (user_id, room_id, title, message)
+               VALUES (?, ?, ?, ?)""",
+            (member_id, room_id, title[:120], message[:500])
+        )
 
 
 @chat_bp.route('/messages/<int:message_id>', methods=['PATCH'])
@@ -2171,6 +2444,7 @@ def get_chat_conversations():
                    last_msg.message AS last_msg_text,
                    last_msg.created_at AS last_msg_created_at,
                    last_msg.user_id AS last_msg_user_id,
+                   last_msg.sender_name AS last_msg_sender_name,
                    CASE 
                        WHEN last_msg.deleted = 1 THEN 'deleted'
                        WHEN last_msg.message_type IS NOT NULL AND last_msg.message_type != '' THEN last_msg.message_type
@@ -2224,6 +2498,8 @@ def get_chat_conversations():
                 'id': room_id,
                 'room_key': r['room_key'],
                 'e2e_secret': e2e_sec,
+                'room_type': 'direct',
+                'is_group': False,
                 'is_direct': True,
                 'is_system': False,
                 'other_user': {
@@ -2247,10 +2523,32 @@ def get_chat_conversations():
                 'last_message': raw_last_msg or '',
                 'last_message_at': format_utc_iso(last_msg_time) if last_msg_time else None,
                 'last_message_user_id': r['last_msg_user_id'] if has_last_msg else None,
+                'last_message_sender_name': r['last_msg_sender_name'] if has_last_msg else None,
                 'last_message_type': (r['last_msg_type'] or 'text') if has_last_msg else 'text',
                 'last_message_is_read': bool(r['last_msg_is_read']) if has_last_msg else False,
-                'unread_count': int(r['unread_count'])
+                'unread_count': int(r['unread_count']),
+                'member_count': 2,
+                'member_ids': [other_id] if other_id else []
             })
+
+        # Groups are additive: the direct query above is untouched so existing
+        # 1-to-1 inbox behaviour stays exactly the same.
+        cursor.execute(
+            """SELECT gm.room_id
+               FROM official_chat_group_members gm
+               JOIN official_chat_rooms r ON r.id = gm.room_id
+               WHERE gm.user_id = ? AND r.room_type = 'group' AND r.status != 'deleted'""",
+            (my_id,)
+        )
+        for group_row in cursor.fetchall():
+            group_conv = _build_group_conversation(cursor, group_row['room_id'], my_id)
+            if group_conv:
+                conversations.append(group_conv)
+
+        conversations.sort(
+            key=lambda c: c.get('last_message_at') or c.get('contact_joined_at') or '',
+            reverse=True
+        )
 
         if needs_commit:
             conn.commit()
@@ -2321,6 +2619,323 @@ def open_direct_chat(target_user_id):
         conn.close()
 
 
+# -----------------------------------------------------------------------------
+# GROUP CHAT
+# -----------------------------------------------------------------------------
+
+MAX_GROUP_MEMBERS = 50
+
+
+def _validate_group_friends(cursor, actor_id, member_ids):
+    """Every new group member must be an accepted friend of the actor.
+
+    This preserves the existing social consent model: a group can't be used to
+    pull a stranger into a conversation they never agreed to join.
+    """
+    if not member_ids:
+        return None
+    placeholders = ','.join('?' for _ in member_ids)
+    cursor.execute(
+        f"SELECT id, name, username FROM chat_users WHERE id IN ({placeholders})",
+        member_ids
+    )
+    found = {int(row['id']): dict(row) for row in cursor.fetchall()}
+    for member_id in member_ids:
+        if member_id not in found:
+            return "One of the selected friends no longer exists"
+        if chat_block_exists(cursor, actor_id, member_id):
+            return "You can't add a blocked user to a group"
+        if not chat_friendship_accepted(cursor, actor_id, member_id):
+            return "You can only add friends who accepted your friend request"
+    return found
+
+
+@chat_bp.route('/groups', methods=['POST'])
+@chat_token_required
+def create_chat_group():
+    """Create a group from accepted friends and add it to the inbox."""
+    my_id = request.chat_user['user_id']
+    if not check_chat_rate_limit("group_create", f"user_{my_id}", max_requests=10, window_seconds=3600):
+        return error_response("Too many groups created. Please try again later.", 429)
+
+    data = request.get_json(silent=True) or {}
+    name = _clean_group_title(data.get('name') or data.get('title'))
+    if len(name) < 2:
+        return error_response("Group name must be at least 2 characters", 400)
+
+    member_ids = _parse_group_member_ids(data.get('member_ids'), my_id)
+    if member_ids is None:
+        return error_response("Invalid group members", 400)
+    if not member_ids:
+        return error_response("Add at least one friend to create a group", 400)
+    if len(member_ids) + 1 > MAX_GROUP_MEMBERS:
+        return error_response(f"A group can have at most {MAX_GROUP_MEMBERS} members", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        members = _validate_group_friends(cursor, my_id, member_ids)
+        if isinstance(members, str):
+            return error_response(members, 403)
+
+        room_key = f"GRP-{my_id}-{secrets.token_hex(6)}"
+        e2e_secret = secrets.token_hex(32)
+        cursor.execute(
+            """INSERT INTO official_chat_rooms
+               (user_id, user_two_id, room_key, title, status, room_type,
+                last_message, last_message_at, e2e_secret)
+               VALUES (?, NULL, ?, ?, 'active', 'group', 'Group created', CURRENT_TIMESTAMP, ?)""",
+            (my_id, room_key, name, e2e_secret)
+        )
+        room_id = cursor.lastrowid
+        cursor.execute(
+            """INSERT INTO official_chat_group_members
+               (room_id, user_id, role, added_by) VALUES (?, ?, 'admin', ?)""",
+            (room_id, my_id, my_id)
+        )
+        for member_id in member_ids:
+            cursor.execute(
+                """INSERT INTO official_chat_group_members
+                   (room_id, user_id, role, added_by) VALUES (?, ?, 'member', ?)""",
+                (room_id, member_id, my_id)
+            )
+
+        actor = request.chat_user.get('username') or f"user_{my_id}"
+        _insert_group_notifications(
+            cursor, room_id, member_ids,
+            f"Added to {name}",
+            f"@{actor} added you to the group \"{name}\""
+        )
+        conn.commit()
+
+        conversation = _build_group_conversation(cursor, room_id, my_id)
+        conn.commit()
+        return success_response({
+            'group': _group_details(cursor, room_id, my_id),
+            'conversation': conversation
+        }, "Group created", 201)
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/groups/<int:room_id>', methods=['GET'])
+@chat_token_required
+def get_chat_group(room_id):
+    my_id = request.chat_user['user_id']
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        group = _group_details(cursor, room_id, my_id)
+        if not group:
+            return error_response("Group not found or you are not a member", 404)
+        return success_response(group, "Group retrieved")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/groups/<int:room_id>', methods=['PATCH'])
+@chat_token_required
+def rename_chat_group(room_id):
+    my_id = request.chat_user['user_id']
+    data = request.get_json(silent=True) or {}
+    name = _clean_group_title(data.get('name') or data.get('title'))
+    if len(name) < 2:
+        return error_response("Group name must be at least 2 characters", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        group = _group_details(cursor, room_id, my_id)
+        if not group:
+            return error_response("Group not found or you are not a member", 404)
+        if not _group_member_is_admin(cursor, room_id, my_id):
+            return error_response("Only group admins can rename this group", 403)
+
+        cursor.execute("UPDATE official_chat_rooms SET title = ? WHERE id = ?", (name, room_id))
+        conn.commit()
+        return success_response(_group_details(cursor, room_id, my_id), "Group renamed")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/groups/<int:room_id>/members', methods=['POST'])
+@chat_token_required
+def add_chat_group_members(room_id):
+    my_id = request.chat_user['user_id']
+    if not check_chat_rate_limit("group_add_member", f"user_{my_id}", max_requests=30, window_seconds=3600):
+        return error_response("Too many member changes. Please try again later.", 429)
+
+    data = request.get_json(silent=True) or {}
+    new_ids = _parse_group_member_ids(data.get('member_ids'), my_id)
+    if not new_ids:
+        return error_response("Select at least one friend to add", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        group = _group_details(cursor, room_id, my_id)
+        if not group:
+            return error_response("Group not found or you are not a member", 404)
+        if not _group_member_is_admin(cursor, room_id, my_id):
+            return error_response("Only group admins can add members", 403)
+
+        existing_ids = set(_group_member_ids(cursor, room_id))
+        new_ids = [uid for uid in new_ids if uid not in existing_ids]
+        if not new_ids:
+            return error_response("Those friends are already in this group", 400)
+        if len(existing_ids) + len(new_ids) > MAX_GROUP_MEMBERS:
+            return error_response(f"A group can have at most {MAX_GROUP_MEMBERS} members", 400)
+
+        members = _validate_group_friends(cursor, my_id, new_ids)
+        if isinstance(members, str):
+            return error_response(members, 403)
+
+        cursor.execute(
+            "SELECT COALESCE(MAX(id), 0) AS max_id FROM official_chat_messages WHERE room_id = ?",
+            (room_id,)
+        )
+        joined_at_id = int(cursor.fetchone()['max_id'] or 0)
+        for member_id in new_ids:
+            cursor.execute(
+                """INSERT INTO official_chat_group_members
+                   (room_id, user_id, role, added_by) VALUES (?, ?, 'member', ?)""",
+                (room_id, member_id, my_id)
+            )
+            # New members see prior history but start with zero unread instead of
+            # inheriting every old message as an unread badge.
+            if joined_at_id:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO official_chat_read_state
+                       (room_id, user_id, last_read_id, updated_at) VALUES (?, ?, ?, ?)""",
+                    (room_id, member_id, joined_at_id, int(time.time()))
+                )
+
+        actor = request.chat_user.get('username') or f"user_{my_id}"
+        _insert_group_notifications(
+            cursor, room_id, new_ids,
+            f"Added to {group['title']}",
+            f"@{actor} added you to the group \"{group['title']}\""
+        )
+        conn.commit()
+        return success_response(_group_details(cursor, room_id, my_id), "Members added")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/groups/<int:room_id>/members/<int:member_id>', methods=['DELETE'])
+@chat_token_required
+def remove_chat_group_member(room_id, member_id):
+    my_id = request.chat_user['user_id']
+    if member_id == my_id:
+        return error_response("Use leave group to remove yourself", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        group = _group_details(cursor, room_id, my_id)
+        if not group:
+            return error_response("Group not found or you are not a member", 404)
+        if not _group_member_is_admin(cursor, room_id, my_id):
+            return error_response("Only group admins can remove members", 403)
+        if same_id_check(group.get('creator_id'), member_id):
+            return error_response("The group creator cannot be removed", 400)
+
+        cursor.execute(
+            "SELECT role FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+            (room_id, member_id)
+        )
+        member = cursor.fetchone()
+        if not member:
+            return error_response("This person is not in the group", 404)
+
+        cursor.execute(
+            "DELETE FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+            (room_id, member_id)
+        )
+        cursor.execute(
+            "DELETE FROM official_chat_read_state WHERE room_id = ? AND user_id = ?",
+            (room_id, member_id)
+        )
+        cursor.execute(
+            """INSERT INTO official_chat_notifications (user_id, room_id, title, message)
+               VALUES (?, ?, ?, ?)""",
+            (member_id, room_id, f"Removed from {group['title']}",
+             f"You were removed from the group \"{group['title']}\"")
+        )
+        conn.commit()
+        return success_response(_group_details(cursor, room_id, my_id), "Member removed")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/groups/<int:room_id>/members/me', methods=['DELETE'])
+@chat_token_required
+def leave_chat_group(room_id):
+    my_id = request.chat_user['user_id']
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM official_chat_rooms WHERE id = ? AND room_type = 'group'", (room_id,))
+        row = cursor.fetchone()
+        if not row:
+            return error_response("Group not found", 404)
+        room = dict(row)
+        cursor.execute(
+            "SELECT role FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+            (room_id, my_id)
+        )
+        member = cursor.fetchone()
+        if not member:
+            return error_response("You are not a member of this group", 403)
+
+        cursor.execute(
+            "DELETE FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+            (room_id, my_id)
+        )
+        cursor.execute(
+            "DELETE FROM official_chat_read_state WHERE room_id = ? AND user_id = ?",
+            (room_id, my_id)
+        )
+
+        new_creator_id = None
+        if same_id_check(room.get('user_id'), my_id):
+            cursor.execute(
+                """SELECT user_id FROM official_chat_group_members
+                   WHERE room_id = ? ORDER BY joined_at ASC, user_id ASC LIMIT 1""",
+                (room_id,)
+            )
+            next_member = cursor.fetchone()
+            if next_member:
+                new_creator_id = int(next_member['user_id'])
+                cursor.execute(
+                    "UPDATE official_chat_rooms SET user_id = ? WHERE id = ?",
+                    (new_creator_id, room_id)
+                )
+                cursor.execute(
+                    "UPDATE official_chat_group_members SET role = 'admin' WHERE room_id = ? AND user_id = ?",
+                    (room_id, new_creator_id)
+                )
+                cursor.execute(
+                    """INSERT INTO official_chat_notifications (user_id, room_id, title, message)
+                       VALUES (?, ?, ?, ?)""",
+                    (new_creator_id, room_id, f"You are now admin of {room['title']}",
+                     f"@{request.chat_user.get('username') or my_id} left the group. You are now the admin.")
+                )
+            else:
+                # Nobody left: retire the room so it disappears from every inbox.
+                cursor.execute(
+                    "UPDATE official_chat_rooms SET status = 'deleted' WHERE id = ?",
+                    (room_id,)
+                )
+        conn.commit()
+        return success_response(
+            {'room_id': room_id, 'new_creator_id': new_creator_id},
+            "Left group"
+        )
+    finally:
+        conn.close()
+
+
 @chat_bp.route('/rooms/<int:room_id>/messages', methods=['GET'])
 @chat_token_required
 def get_room_messages(room_id):
@@ -2329,17 +2944,16 @@ def get_room_messages(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM official_chat_rooms WHERE id = ? LIMIT 1", (room_id,))
-        room = cursor.fetchone()
-        if not room:
+        room_dict, can_access = get_chat_room_for_user(cursor, room_id, my_id)
+        if not room_dict:
             return error_response("Chat room not found", 404)
-
-        room_dict = dict(room)
-        # Participant check
-        if room_dict['user_id'] != my_id and room_dict.get('user_two_id') != my_id:
+        if not can_access:
             return error_response("Access denied to this chat room", 403)
 
-        other_id = room_dict.get('user_two_id') if room_dict['user_id'] == my_id else room_dict['user_id']
+        is_group_room = room_dict.get('room_type') == 'group'
+        other_id = None if is_group_room else (
+            room_dict.get('user_two_id') if room_dict['user_id'] == my_id else room_dict['user_id']
+        )
         peer_pubkey = None
         if other_id:
             cursor.execute("SELECT public_key FROM chat_users WHERE id = ?", (other_id,))
@@ -2462,16 +3076,13 @@ def mark_chat_room_read(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?",
-            (room_id,)
-        )
-        room = cursor.fetchone()
+        room, can_access = get_chat_room_for_user(cursor, room_id, my_id)
         if not room:
             return error_response("Chat room not found", 404)
-        if room['user_id'] != my_id and room['user_two_id'] != my_id:
+        if not can_access:
             return error_response("Access denied", 403)
 
+        is_group_room = room.get('room_type') == 'group'
         now = int(time.time())
         if max_id:
             cursor.execute(
@@ -2525,19 +3136,18 @@ def send_room_message(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM official_chat_rooms WHERE id = ? LIMIT 1", (room_id,))
-        room = cursor.fetchone()
-        if not room:
+        room_dict, can_access = get_chat_room_for_user(cursor, room_id, my_id)
+        if not room_dict:
             return error_response("Chat room not found", 404)
-
-        room_dict = dict(room)
-        if room_dict['user_id'] != my_id and room_dict.get('user_two_id') != my_id:
+        if not can_access:
             return error_response("Access denied to this chat room", 403)
 
+        is_group_room = room_dict.get('room_type') == 'group'
+
         # Safety: direct messages require BOTH an accepted friendship and no
-        # block in either direction. Checking only room membership used to let a
-        # stale/legacy room send messages to a user who never accepted.
-        if room_dict.get('user_two_id'):
+        # block in either direction. Group access is enforced by membership
+        # above and deliberately skips the 1-to-1 friendship gate.
+        if room_dict.get('user_two_id') and not is_group_room:
             other_id = room_dict['user_two_id'] if room_dict['user_id'] == my_id else room_dict['user_id']
             if chat_block_exists(cursor, my_id, other_id):
                 return error_response(
@@ -4570,6 +5180,269 @@ def download_chat_apk():
             download_name='official-chat.apk'
         )
     return error_response('Official Chat APK not found on server.', 404)
+
+
+# -----------------------------------------------------------------------------
+# VOICE / VIDEO CALL SIGNALING (SDP + ICE candidates over HTTP, no WebSocket)
+# -----------------------------------------------------------------------------
+_CALL_RATE_LIMIT = {"max_requests": 30, "window_seconds": 60}
+
+
+def _call_peer_ids(cursor, room_id, my_id):
+    """Return (caller_is_user_id, other_id) for a direct room, or None if not a
+    participant / not a direct room."""
+    cursor.execute(
+        "SELECT user_id, user_two_id, room_type FROM official_chat_rooms WHERE id = ?",
+        (room_id,)
+    )
+    room = cursor.fetchone()
+    if not room:
+        return None
+    if room['room_type'] != 'direct':
+        return None
+    if my_id != room['user_id'] and my_id != room['user_two_id']:
+        return None
+    other_id = room['user_two_id'] if my_id == room['user_id'] else room['user_id']
+    return other_id
+
+
+def _parse_candidates(raw):
+    if not raw:
+        return []
+    try:
+        arr = json.loads(raw)
+        return arr if isinstance(arr, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+@chat_bp.route('/rooms/<int:room_id>/call/offer', methods=['POST'])
+@chat_token_required
+def chat_call_offer(room_id):
+    """Initiate a voice/video call. Stores an SDP offer so the callee can poll
+    /call/state and retrieve it."""
+    my_id = request.chat_user['user_id']
+    if not check_chat_rate_limit("call_offer", f"user_{my_id}", **_CALL_RATE_LIMIT):
+        return error_response("Too many call attempts. Please try again later.", 429)
+
+    data = request.get_json(silent=True) or {}
+    call_type = str(data.get('call_type') or 'voice')
+    if call_type not in ('voice', 'video'):
+        call_type = 'voice'
+    offer_sdp = str(data.get('offer_sdp') or '').strip()
+    if not offer_sdp:
+        return error_response("Offer SDP is required", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        other_id = _call_peer_ids(cursor, room_id, my_id)
+        if other_id is None:
+            return error_response("Access denied to this chat room", 403)
+
+        # Expire stale rows first: a 'ringing' row whose caller vanished
+        # (closed the tab mid-ring) or an 'active' row abandoned long ago
+        # would otherwise block every new offer for this room with 409 forever.
+        now_ts = int(time.time())
+        cursor.execute(
+            """UPDATE official_chat_calls
+               SET state = 'ended', ended_at = ?
+               WHERE room_id = ? AND state = 'ringing'
+                 AND started_at IS NOT NULL AND ? - started_at > 90""",
+            (now_ts, room_id, now_ts)
+        )
+        cursor.execute(
+            """UPDATE official_chat_calls
+               SET state = 'ended', ended_at = ?
+               WHERE room_id = ? AND state = 'active'
+                 AND started_at IS NOT NULL AND ? - started_at > 14400""",
+            (now_ts, room_id, now_ts)
+        )
+        conn.commit()
+
+        # Only one live call per room at a time.
+        cursor.execute(
+            "SELECT id, state FROM official_chat_calls WHERE room_id = ? AND state IN ('ringing','active') ORDER BY id DESC LIMIT 1",
+            (room_id,)
+        )
+        existing = cursor.fetchone()
+        if existing:
+            return error_response("A call is already in progress in this room", 409)
+
+        now = int(time.time())
+        cursor.execute(
+            """INSERT INTO official_chat_calls
+               (room_id, caller_id, callee_id, call_type, state, offer_sdp, candidates, started_at)
+               VALUES (?, ?, ?, ?, 'ringing', ?, '[]', ?)""",
+            (room_id, my_id, other_id, call_type, offer_sdp, now)
+        )
+        conn.commit()
+        return success_response({"call_type": call_type, "state": "ringing"}, "Call offered")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/rooms/<int:room_id>/call/answer', methods=['POST'])
+@chat_token_required
+def chat_call_answer(room_id):
+    """Callee answers with an SDP answer, moving the call to 'active'."""
+    my_id = request.chat_user['user_id']
+    data = request.get_json(silent=True) or {}
+    answer_sdp = str(data.get('answer_sdp') or '').strip()
+    if not answer_sdp:
+        return error_response("Answer SDP is required", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        other_id = _call_peer_ids(cursor, room_id, my_id)
+        if other_id is None:
+            return error_response("Access denied to this chat room", 403)
+
+        cursor.execute(
+            "SELECT id, caller_id, state FROM official_chat_calls WHERE room_id = ? AND state = 'ringing' ORDER BY id DESC LIMIT 1",
+            (room_id,)
+        )
+        call = cursor.fetchone()
+        if not call:
+            return error_response("No ringing call to answer", 404)
+        if call['caller_id'] == my_id:
+            return error_response("You cannot answer your own call", 403)
+
+        cursor.execute(
+            "UPDATE official_chat_calls SET state = 'active', answer_sdp = ?, callee_id = ? WHERE id = ?",
+            (answer_sdp, my_id, call['id'])
+        )
+        conn.commit()
+        return success_response({"state": "active"}, "Call answered")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/rooms/<int:room_id>/call/ice-candidate', methods=['POST'])
+@chat_token_required
+def chat_call_ice_candidate(room_id):
+    """Exchange an ICE candidate (appended to the call's candidate list)."""
+    my_id = request.chat_user['user_id']
+    data = request.get_json(silent=True) or {}
+    candidate = str(data.get('candidate') or '').strip()
+    if not candidate:
+        return error_response("Candidate is required", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        other_id = _call_peer_ids(cursor, room_id, my_id)
+        if other_id is None:
+            return error_response("Access denied to this chat room", 403)
+
+        cursor.execute(
+            "SELECT id, state, candidates FROM official_chat_calls WHERE room_id = ? AND state IN ('ringing','active') ORDER BY id DESC LIMIT 1",
+            (room_id,)
+        )
+        call = cursor.fetchone()
+        if not call:
+            return error_response("No active call to exchange candidates with", 404)
+
+        cands = _parse_candidates(call['candidates'])
+        cands.append(candidate)
+        # Keep the list bounded so it cannot grow without bound.
+        if len(cands) > 200:
+            cands = cands[-200:]
+        cursor.execute(
+            "UPDATE official_chat_calls SET candidates = ? WHERE id = ?",
+            (json.dumps(cands), call['id'])
+        )
+        conn.commit()
+        return success_response(None, "Candidate stored")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/rooms/<int:room_id>/call/end', methods=['POST'])
+@chat_token_required
+def chat_call_end(room_id):
+    """End/hangup a call. Marks the call row 'ended'."""
+    my_id = request.chat_user['user_id']
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        _call_peer_ids(cursor, room_id, my_id)  # access check
+        cursor.execute(
+            "SELECT id FROM official_chat_calls WHERE room_id = ? AND state IN ('ringing','active') ORDER BY id DESC LIMIT 1",
+            (room_id,)
+        )
+        call = cursor.fetchone()
+        if call:
+            cursor.execute(
+                "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",
+                (int(time.time()), call['id'])
+            )
+            conn.commit()
+        return success_response(None, "Call ended")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/rooms/<int:room_id>/call/state', methods=['GET'])
+@chat_token_required
+def chat_call_state(room_id):
+    """Current call state for a room (polled by the callee / both peers)."""
+    my_id = request.chat_user['user_id']
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        other_id = _call_peer_ids(cursor, room_id, my_id)
+        if other_id is None:
+            return error_response("Access denied to this chat room", 403)
+
+        cursor.execute(
+            """SELECT id, caller_id, callee_id, call_type, state, offer_sdp,
+                      answer_sdp, candidates, started_at, ended_at
+               FROM official_chat_calls
+               WHERE room_id = ?
+               ORDER BY id DESC LIMIT 1""",
+            (room_id,)
+        )
+        call = cursor.fetchone()
+        if not call:
+            return success_response({"state": "idle"}, "No call")
+
+        # Auto-expire abandoned ringing calls (e.g. the caller closed the tab
+        # and nobody answered): a stale 'ringing' row would otherwise block
+        # every new offer for this room with 409 forever.
+        if call['state'] == 'ringing' and call['started_at'] and (int(time.time()) - int(call['started_at'])) > 90:
+            cursor.execute(
+                "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",
+                (int(time.time()), call['id'])
+            )
+            conn.commit()
+            cursor.execute(
+                """SELECT id, caller_id, callee_id, call_type, state, offer_sdp,
+                          answer_sdp, candidates, started_at, ended_at
+                   FROM official_chat_calls
+                   WHERE room_id = ?
+                   ORDER BY id DESC LIMIT 1""",
+                (room_id,)
+            )
+            call = cursor.fetchone()
+            if not call:
+                return success_response({"state": "idle"}, "No call")
+
+        return success_response({
+            "call_id": call['id'],
+            "caller_id": call['caller_id'],
+            "callee_id": call['callee_id'],
+            "call_type": call['call_type'],
+            "state": call['state'],
+            "offer_sdp": call['offer_sdp'],
+            "answer_sdp": call['answer_sdp'],
+            "candidates": _parse_candidates(call['candidates']),
+            "started_at": call['started_at'],
+            "ended_at": call['ended_at'],
+        }, "Call state")
+    finally:
+        conn.close()
 
 
 

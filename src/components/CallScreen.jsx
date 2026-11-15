@@ -1,12 +1,12 @@
-import { useEffect, useRef } from 'react'
 import { Phone, Mic, Volume2, VolumeX, X, User, Video } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
-import toast from 'react-hot-toast'
 
 export default function CallScreen() {
   const {
     activeCall,
+    activeConversation,
+    chatUser,
     callLocalStream,
     callRemoteStream,
     callIsMuted,
@@ -14,20 +14,19 @@ export default function CallScreen() {
     callTimerSeconds,
     toggleMute,
     toggleSpeaker,
-    endCall,
-    cleanupCallResources
+    endCall
   } = useChatStore(useShallow((state) => state))
 
-  if (!activeCall || activeCall.state !== 'active') return null
+  if (!activeCall) return null
+
+  const isCallerRinging = activeCall.state === 'ringing' && activeCall.callerId === chatUser?.id
+  if (activeCall.state !== 'active' && !isCallerRinging) return null
 
   const isVideo = activeCall.callType === 'video'
-
-  // Cleanup when the call leaves active state (e.g. ended by peer)
-  useEffect(() => {
-    return () => {
-      // Do not cleanup here; cleanup is driven by endCall / peer 'ended'
-    }
-  }, [])
+  const peerName =
+    activeConversation?.other_user?.name ||
+    activeConversation?.other_user?.username ||
+    'Call'
 
   const formatTime = (s) => {
     const m = Math.floor(s / 60)
@@ -53,10 +52,10 @@ export default function CallScreen() {
             </div>
             <div>
               <p className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                {isVideo ? 'Video Call' : 'Voice Call'} · Active
+                {isCallerRinging ? 'Calling…' : isVideo ? 'Video Call' : 'Voice Call'} · {peerName}
               </p>
               <p className="text-[20px] font-semibold text-white">
-                {formatTime(callTimerSeconds)}
+                {isCallerRinging ? 'Ringing…' : formatTime(callTimerSeconds)}
               </p>
             </div>
           </div>
