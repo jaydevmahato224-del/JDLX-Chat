@@ -6206,10 +6206,6 @@ export default function ChatConversation() {
               <div className={`ios-safe-header relative z-20 flex min-h-[64px] shrink-0 items-center justify-between border-b px-3 transition-colors select-none sm:px-5 ${
                 isLight ? 'border-[#e4e7ec] bg-white' : 'border-white/[0.07] bg-[#0f1114]'
               }`}>
-                {/* Sleek Top Chat Progress Bar (Telegram / YouTube caliber) */}
-                {messagesLoading && (
-                  <div className="absolute bottom-0 left-0 right-0 h-[2.5px] bg-gradient-to-r from-amber-500 via-[#facc15] to-amber-300 z-30 animate-chat-top-progress shadow-[0_0_12px_rgba(250,204,21,0.6)] pointer-events-none" />
-                )}
                 <div className="flex items-center gap-2.5 min-w-0">
                   {/* Mobile Back button to Chat List */}
                   <button
@@ -6559,75 +6555,8 @@ export default function ChatConversation() {
                   </div>
                 )}
 
-                {/* Messages Bubbles with Sticky Floating Date Separator & Tails */}
-                {((messagesLoading || (activeRoomId && !sameId(initialRoomFetchedRef.current, activeRoomId))) && (!messages || messages.length === 0)) ? (
-                  <div className="py-6 space-y-4 px-2 sm:px-4 max-w-2xl mx-auto w-full select-none" aria-label="Loading messages">
-                    {/* Shimmer Skeleton Bubble 1: Received Left */}
-                    <div className="flex items-end gap-2 justify-start animate-fade-in">
-                      <div className={`w-7 h-7 rounded-xl shrink-0 chat-shimmer-sweep ${
-                        isLight ? 'bg-slate-200' : 'bg-[#202024]'
-                      }`} />
-                      <div className={`p-3 rounded-2xl rounded-bl-xs w-[68%] sm:w-[52%] space-y-2 border chat-shimmer-sweep ${
-                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-white/[0.07]'
-                      }`}>
-                        <div className={`h-2.5 rounded-full w-4/5 ${isLight ? 'bg-slate-200' : 'bg-zinc-700/60'}`} />
-                        <div className={`h-2 rounded-full w-2/5 ${isLight ? 'bg-slate-100' : 'bg-zinc-800'}`} />
-                      </div>
-                    </div>
-
-                    {/* Shimmer Skeleton Bubble 2: Sent Right */}
-                    <div className="flex justify-end animate-fade-in">
-                      <div className={`p-3 rounded-2xl rounded-br-xs w-[54%] sm:w-[40%] space-y-2 border chat-shimmer-sweep ${
-                        isLight 
-                          ? 'bg-gradient-to-r from-amber-100 to-amber-200/80 border-amber-300/60 text-amber-900' 
-                          : 'bg-gradient-to-r from-yellow-500/20 to-amber-500/15 border-yellow-500/30'
-                      }`}>
-                        <div className={`h-2.5 rounded-full w-3/4 ${isLight ? 'bg-amber-300/70' : 'bg-yellow-400/30'}`} />
-                        <div className={`h-2 rounded-full w-1/3 ml-auto ${isLight ? 'bg-amber-200' : 'bg-yellow-400/20'}`} />
-                      </div>
-                    </div>
-
-                    {/* Shimmer Skeleton Bubble 3: Photo Attachment Received Left */}
-                    <div className="flex items-end gap-2 justify-start animate-fade-in">
-                      <div className={`w-7 h-7 rounded-xl shrink-0 chat-shimmer-sweep ${
-                        isLight ? 'bg-slate-200' : 'bg-[#202024]'
-                      }`} />
-                      <div className={`p-2 rounded-2xl rounded-bl-xs w-[65%] sm:w-[48%] space-y-2 border chat-shimmer-sweep ${
-                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-white/[0.07]'
-                      }`}>
-                        <div className={`h-32 sm:h-36 rounded-xl flex items-center justify-center ${
-                          isLight ? 'bg-slate-100' : 'bg-[#222228]'
-                        }`}>
-                          <ImageIcon className="w-8 h-8 opacity-20 text-[#facc15]" />
-                        </div>
-                        <div className={`h-2 rounded-full w-1/2 ${isLight ? 'bg-slate-200' : 'bg-zinc-700/60'}`} />
-                      </div>
-                    </div>
-
-                    {/* Shimmer Skeleton Bubble 4: Sent Right (Quick Reply) */}
-                    <div className="flex justify-end animate-fade-in">
-                      <div className={`px-4 py-2.5 rounded-2xl rounded-br-xs w-[40%] sm:w-[30%] border chat-shimmer-sweep ${
-                        isLight 
-                          ? 'bg-gradient-to-r from-amber-100 to-amber-200/80 border-amber-300/60' 
-                          : 'bg-gradient-to-r from-yellow-500/20 to-amber-500/15 border-yellow-500/30'
-                      }`}>
-                        <div className={`h-2.5 rounded-full w-4/5 ${isLight ? 'bg-amber-300/70' : 'bg-yellow-400/30'}`} />
-                      </div>
-                    </div>
-
-                    {/* Shimmer Skeleton Bubble 5: Received Left */}
-                    <div className="flex items-end gap-2 justify-start animate-fade-in">
-                      <div className={`w-7 h-7 rounded-xl shrink-0 chat-shimmer-sweep ${
-                        isLight ? 'bg-slate-200' : 'bg-[#202024]'
-                      }`} />
-                      <div className={`p-3 rounded-2xl rounded-bl-xs w-[45%] sm:w-[35%] space-y-1.5 border chat-shimmer-sweep ${
-                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-white/[0.07]'
-                      }`}>
-                        <div className={`h-2.5 rounded-full w-3/4 ${isLight ? 'bg-slate-200' : 'bg-zinc-700/60'}`} />
-                      </div>
-                    </div>
-                  </div>
-                ) : (!messages || messages.length === 0) ? (
+                {/* Messages View */}
+                {(!messages || messages.length === 0) ? (
                   <div className="py-16 text-center space-y-3">
                     <p className={`text-xs ${isLight ? 'text-slate-600' : 'text-zinc-300'}`}>
                       {messagesError || 'No messages here yet. Send a greeting to start chatting!'}
