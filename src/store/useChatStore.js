@@ -1653,9 +1653,24 @@ export const useChatStore = create((set, get) => ({
       peerLastDeliveredId: savedDelivered,
       // Clear any previous room's pre-derived key
       derivedRoomKey: null,
-      conversations: state.conversations.map((c) =>
-        sameId(c.id, conv.id) ? { ...c, unread_count: 0 } : c
-      )
+      conversations: state.conversations.map((c) => {
+        if (sameId(c.id, conv.id)) {
+          // Clear stale preview from the conversations list when there are no
+          // cached messages — prevents the chat leak glitch on the left sidebar.
+          if (cachedMsgs.length === 0) {
+            return {
+              ...c,
+              unread_count: 0,
+              last_message: '',
+              last_message_user_id: null,
+              last_message_type: 'text',
+              last_message_is_read: false
+            }
+          }
+          return { ...c, unread_count: 0 }
+        }
+        return c
+      })
     }))
     // Non-blocking fetch so UI view switches instantaneously in 0ms:
     get().startRealtime()
