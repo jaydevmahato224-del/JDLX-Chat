@@ -38,15 +38,27 @@ function getDefaultApiBaseUrl() {
 
   // Local dev: chat dev server talks to the local Flask backend.
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return `${protocol}//${hostname}:5000/api`
+    return `${protocol}//${hostname}:5001/api`
   }
 
   // Any hosted domain (Cloudflare pages.dev/workers.dev, vercel.app, jdlxmobile.in, custom domains) uses production backend
   return PROD_BACKEND_URL
 }
 
+// Safety net for local dev: when the page itself is a localhost dev page and
+// the configured API URL is the production default (e.g. .env was reverted by
+// a build script or git checkout), prefer the local backend so local testing
+// never silently targets production.
+function isLocalDevPage() {
+  if (typeof window === 'undefined') return false
+  const hostname = window.location.hostname
+  return hostname === 'localhost' || hostname === '127.0.0.1'
+}
+
 export const API_BASE_URL = (
-  CONFIGURED_CHAT_API_URL || getDefaultApiBaseUrl()
+  isLocalDevPage() && CONFIGURED_CHAT_API_URL === DEFAULT_PROD_BACKEND_URL
+    ? getDefaultApiBaseUrl()
+    : (CONFIGURED_CHAT_API_URL || getDefaultApiBaseUrl())
 ).replace(/\/+$/, '')
 
 // Bare backend origin (for /static media etc.)

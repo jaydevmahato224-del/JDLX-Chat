@@ -96,7 +96,14 @@ export default function IncomingCallModal() {
             </button>
             <button
               type="button"
-              onClick={() => answerCall(activeCall.callerId)}
+              onClick={async () => {
+                try {
+                  const res = await answerCall(activeCall.callerId)
+                  if (res && !res.success) toast.error(res.error || 'Call failed')
+                } catch (e) {
+                  toast.error(e?.message || 'Call failed')
+                }
+              }}
               className="h-14 w-14 shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 flex items-center justify-center text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.25)] transition-all hover:scale-105 active:scale-95"
               aria-label="Accept call"
             >

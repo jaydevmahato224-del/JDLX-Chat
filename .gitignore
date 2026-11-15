@@ -37,3 +37,8 @@ backend/__pycache__/
 backend/tests/__pycache__/
 backend/jdlx.db
 
+
+# Backend secrets (never commit)
+backend/.env
+backend/.jwt_secret
+backend/*.db

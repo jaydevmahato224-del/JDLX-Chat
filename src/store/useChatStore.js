@@ -3622,6 +3622,23 @@ export const useChatStore = create((set, get) => ({
     set((state) => ({ callIsSpeakerOn: !state.callIsSpeakerOn }))
   },
 
+  // Chrome >= M100 emits `a=extmap-allow-mixed`, which Firefox's SDP parser
+  // cannot read — it rejects the WHOLE remote description with
+  // "Failed to parse SessionDescription ... Invalid SDP line". The line is
+  // optional to interpret, so strip it before applying a remote description.
+  // Firefox's parser also rejects SPACE-separated values inside `a=ssrc`
+  // lines, so `a=ssrc:<id> msid:<stream> <track>` (Chrome's style) fails with
+  // the same "Invalid SDP line" error. Track association is already covered
+  // by the media-level `a=msid` line, so drop those redundant lines.
+  // (Cross-browser calls: e.g. a Chrome caller -> Firefox callee.)
+  sanitizeRemoteSdp: (sdp) => {
+    if (typeof sdp !== 'string') return sdp
+    return sdp
+      .replace(/a=extmap-allow-mixed\r\n/g, '')
+      .replace(/a=extmap-allow-mixed\n/g, '')
+      .replace(/a=ssrc:\d+ msid:[^\r\n]*(\r?\n|$)/g, '')
+  },
+
   // Create an RTCPeerConnection with ICE + track handling wired to the store.
   createCallPeerConnection: (onTrack, onIceCandidate, onStateChange) => {
     const pc = new RTCPeerConnection({ iceServers: get()._callStunServers })
@@ -3743,70 +3760,88 @@ export const useChatStore = create((set, get) => ({
     }
     set({ callLocalStream: localStream, callIsMuted: false })
 
-    const pc = get().createCallPeerConnection(
-      (track) => {
-        const rs = get().callRemoteStream
-        if (!rs || !rs.getAudioTracks().length) {
-          set({ callRemoteStream: new MediaStream([track]) })
+    try {
+      const pc = get().createCallPeerConnection(
+        (track) => {
+          const rs = get().callRemoteStream
+          if (!rs || !rs.getAudioTracks().length) {
+            set({ callRemoteStream: new MediaStream([track]) })
+          }
+        },
+        async (candidate) => {
+          try {
+            await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${chatToken}`
+              },
+              body: JSON.stringify({ candidate: candidate.candidate })
+            })
+          } catch (e) {
+            console.warn('send ice candidate error:', e)
+          }
+        },
+        (state) => {
+          if (state === 'failed' || state === 'closed') get().cleanupCallResources()
         }
-      },
-      async (candidate) => {
-        try {
-          await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${chatToken}`
-            },
-            body: JSON.stringify({ candidate: candidate.candidate })
-          })
-        } catch (e) {
-          console.warn('send ice candidate error:', e)
-        }
-      },
-      (state) => {
-        if (state === 'failed' || state === 'closed') get().cleanupCallResources()
-      }
-    )
-    set({ callPeerConnection: pc })
-    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
+      )
+      set({ callPeerConnection: pc })
+      localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
 
-    const offerSdp = activeCall?.offerSdp
-    if (offerSdp) {
-      await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp })
+      // Prefer the offer captured by the call watcher; if it is missing (the
+      // state update may have raced the accept click), fetch it from the
+      // backend so the answer is never silently skipped.
+      let offerSdp = activeCall?.offerSdp
+      if (!offerSdp) {
+        try {
+          const res = await apiFetch(`/chat/rooms/${roomId}/call/state`, {
+            headers: { Authorization: `Bearer ${chatToken}` }
+          })
+          const json = await res.json()
+          offerSdp = json?.data?.offer_sdp || null
+        } catch (e) {
+          console.warn('fetch call offer fallback error:', e)
+        }
+      }
+      if (!offerSdp) {
+        get().cleanupCallResources()
+        return { success: false, error: 'Call offer not available' }
+      }
+
+      await pc.setRemoteDescription({ type: 'offer', sdp: get().sanitizeRemoteSdp(offerSdp) })
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
-      try {
-        const res = await apiFetch(`/chat/rooms/${roomId}/call/answer`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${chatToken}`
-          },
-          body: JSON.stringify({ answer_sdp: answer.sdp })
-        })
-        const json = await res.json()
-        if (!res.ok || !json.success) {
-          get().cleanupCallResources()
-          return { success: false, error: json.error || 'Call answer failed' }
-        }
-      } catch (e) {
+      const res = await apiFetch(`/chat/rooms/${roomId}/call/answer`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${chatToken}`
+        },
+        body: JSON.stringify({ answer_sdp: answer.sdp })
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) {
         get().cleanupCallResources()
-        return { success: false, error: e.message || 'Call answer failed' }
+        return { success: false, error: json.error || 'Call answer failed' }
       }
-    }
 
-    set({
-      activeCall: {
-        ...(activeCall || {}),
-        roomId,
-        state: 'active',
-        calleeId: chatUser.id
-      }
-    })
-    get().startCallTimer()
-    get().pollCallState(roomId, false)
-    return { success: true }
+      set({
+        activeCall: {
+          ...(activeCall || {}),
+          roomId,
+          state: 'active',
+          calleeId: chatUser.id
+        }
+      })
+      get().startCallTimer()
+      get().pollCallState(roomId, false)
+      return { success: true }
+    } catch (e) {
+      console.warn('answer call error:', e)
+      get().cleanupCallResources()
+      return { success: false, error: e.message || 'Call answer failed' }
+    }
   },
 
   // Long-poll the call state so the callee learns of the offer and both peers
@@ -3834,7 +3869,9 @@ export const useChatStore = create((set, get) => ({
         const call = json.data || {}
         const state = call.state || 'idle'
 
-        if (state === 'ringing' && !isCaller) {
+        // Only surface a fresh incoming call; after answering, the callee's
+        // own activeCall (state 'active') must never be reset back to ringing.
+        if (state === 'ringing' && !isCaller && !get().activeCall) {
           set({
             activeCall: {
               roomId,
@@ -3858,12 +3895,14 @@ export const useChatStore = create((set, get) => ({
           set((s) => ({
             activeCall: { ...s.activeCall, state: 'active', calleeId: call.callee_id || s.activeCall?.calleeId }
           }))
-          if (call.answer_sdp && !answerApplied) {
+          // Only the CALLER applies the remote answer: the callee already set
+          // this SDP as its LOCAL description when it answered.
+          if (call.answer_sdp && isCaller && !answerApplied) {
             answerApplied = true
             try {
               const pc = get().callPeerConnection
               if (pc) {
-                await pc.setRemoteDescription({ type: 'answer', sdp: call.answer_sdp })
+                await pc.setRemoteDescription({ type: 'answer', sdp: get().sanitizeRemoteSdp(call.answer_sdp) })
               }
             } catch (e) {
               console.warn('set remote answer error:', e)

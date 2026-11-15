@@ -8337,10 +8337,16 @@ export default function ChatConversation() {
                               </span>
                             ) : isPendingRecv ? (
                               <button type="button"
+                                disabled={requestActionLoading === u.friend_request_id}
                                 onClick={() => handleRespondRequest(u.friend_request_id, 'accept')}
-                                className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-[11px] font-black cursor-pointer shadow-sm active:scale-95 transition-all"
+                                className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-[11px] font-black cursor-pointer shadow-sm active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait flex items-center justify-center gap-1 min-w-[64px]"
                               >
-                                Accept
+                                {requestActionLoading === u.friend_request_id ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    <span>…</span>
+                                  </>
+                                ) : 'Accept'}
                               </button>
                             ) : (
                               <button type="button"
@@ -8407,18 +8413,25 @@ export default function ChatConversation() {
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button type="button"
+                            disabled={requestActionLoading === req.request_id}
                             onClick={() => handleRespondRequest(req.request_id, 'accept')}
-                            className="px-2.5 py-1.5 rounded-xl bg-emerald-500 text-white text-[11px] font-black active:scale-95 transition-all cursor-pointer"
+                            className="px-2.5 py-1.5 rounded-xl bg-emerald-500 text-white text-[11px] font-black active:scale-95 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-wait flex items-center justify-center gap-1 min-w-[64px]"
                           >
-                            Accept
+                            {requestActionLoading === req.request_id ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span>Accepting…</span>
+                              </>
+                            ) : 'Accept'}
                           </button>
                           <button type="button"
+                            disabled={requestActionLoading === req.request_id}
                             onClick={() => handleRespondRequest(req.request_id, 'decline')}
-                            className={`px-2 py-1.5 rounded-xl border text-[11px] font-medium active:scale-95 transition-all cursor-pointer ${
+                            className={`px-2 py-1.5 rounded-xl border text-[11px] font-medium active:scale-95 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-wait ${
                               isLight ? 'bg-white border-slate-200 text-slate-600' : 'bg-[#27272a] border-[#3f3f46] text-zinc-300 hover:text-white'
                             }`}
                           >
-                            Decline
+                            {requestActionLoading === req.request_id ? '…' : 'Decline'}
                           </button>
                         </div>
                       </div>
