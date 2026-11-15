@@ -103,6 +103,8 @@ import {
   protectedMediaProps 
 } from '../utils/screenProtection'
 import toast from 'react-hot-toast'
+import IncomingCallModal from '../components/IncomingCallModal'
+import CallScreen from '../components/CallScreen'
 
 // Intl formatters are expensive to construct. Reuse one per format instead of
 // building a new formatter for every timestamp on every render.
@@ -1119,6 +1121,14 @@ export default function ChatConversation() {
     openRecoverySetup,
     sendRoomMessage,
     openDirectChat,
+    // Voice / Video call state & actions
+    activeCall,
+    initiateCall,
+    answerCall,
+    endCall,
+    callIsMuted,
+    callIsSpeakerOn,
+    callTimerSeconds,
     friends,
     incomingRequests,
     outgoingRequests,
@@ -6489,15 +6499,15 @@ export default function ChatConversation() {
                   !activeWallpaperClass ? (isLight ? 'bg-[#f8f9fb]' : 'bg-[#0b0d10]') : ''
                 }`}
               >
-                {/* Cryptographic Anti-Capture Watermark Overlay */}
+                {/* Subtle End-to-End Encrypted Background Watermark */}
                 {screenSecurity && (
                   <div
                     aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 z-0 overflow-hidden select-none opacity-[0.035] dark:opacity-[0.05] flex flex-wrap gap-x-16 gap-y-12 p-8 font-mono text-[10px] font-bold uppercase tracking-widest text-current rotate-[-12deg] scale-125"
+                    className="pointer-events-none absolute inset-0 z-0 overflow-hidden select-none opacity-[0.03] dark:opacity-[0.045] flex flex-wrap gap-x-16 gap-y-12 p-8 font-mono text-[10.5px] font-bold uppercase tracking-widest text-current rotate-[-12deg] scale-125"
                   >
                     {Array.from({ length: 32 }).map((_, i) => (
                       <span key={i} className="whitespace-nowrap">
-                        🔒 JDLX PROTECTED • {chatUser?.username ? `@${chatUser.username}` : 'CONFIDENTIAL'} • DO NOT CAPTURE
+                        🔒 End-to-End Encrypted
                       </span>
                     ))}
                   </div>
@@ -13677,6 +13687,10 @@ export default function ChatConversation() {
           </div>
         </div>
       )}
+
+      {/* ── INCOMING CALL MODAL / ACTIVE CALL SCREEN ── */}
+      <IncomingCallModal />
+      <CallScreen />
     </div>
   )
 }
