@@ -221,9 +221,9 @@ export default function RecoveryPinModal() {
   }`
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md animate-in fade-in duration-200">
       <div
-        className={`w-full max-w-sm rounded-2xl border p-5 shadow-2xl ${
+        className={`w-full max-w-sm rounded-2xl border p-5 shadow-2xl animate-popover-spring origin-center ${
           isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-zinc-800 bg-[#111113] text-white'
         }`}
       >

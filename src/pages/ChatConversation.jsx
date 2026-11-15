@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { 
@@ -65,6 +65,7 @@ import {
   Key,
   Volume2,
   VolumeX,
+  Settings,
   Sliders,
   Database,
   Upload,
@@ -304,6 +305,7 @@ function VoiceNotePlayer({ audioUrl, isUser, isLight, seedId }) {
             {bars.current.map((height, i) => {
               const barPercent = (i + 0.5) / bars.current.length
               const isPlayed = barPercent <= activePercent
+              const isHead = isPlaying && Math.abs(barPercent - activePercent) <= (1.2 / bars.current.length)
 
               return (
                 <div
@@ -321,7 +323,7 @@ function VoiceNotePlayer({ audioUrl, isUser, isLight, seedId }) {
                         : isLight
                           ? 'bg-slate-300 group-hover:bg-slate-400'
                           : 'bg-zinc-700/80 group-hover:bg-zinc-600'
-                  } ${isPlaying && isPlayed ? 'brightness-110' : ''}`}
+                  } ${isHead ? 'scale-y-125 brightness-125' : isPlaying && isPlayed ? 'brightness-110' : ''}`}
                 />
               )
             })}
@@ -613,7 +615,7 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
   const [isAnimating, setIsAnimating] = useState(false)
   const [isPressed, setIsPressed] = useState(false)
   const [isHighlighted, setIsHighlighted] = useState(false)
-  const touchStartRef = useRef({ x: 0, y: 0 })
+  const touchStartRef = useRef({ x: 0, y: 0, id: null })
   const isSwipingRef = useRef(false)
   const isVerticalScrollRef = useRef(false)
   const lastTapRef = useRef(0)
@@ -623,18 +625,57 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
   const pressTimerRef = useRef(null)
   const longPressTimerRef = useRef(null)
   const isLongPressTriggeredRef = useRef(false)
+  const animTimerRef = useRef(null)
+
+  // Keep references fresh without triggering effect teardown/listener churn on every keystroke
+  const onSwipeReplyRef = useRef(onSwipeReply)
+  onSwipeReplyRef.current = onSwipeReply
+  const onDoubleTapRef = useRef(onDoubleTap)
+  onDoubleTapRef.current = onDoubleTap
+  const onLongPressRef = useRef(onLongPress)
+  onLongPressRef.current = onLongPress
+  const mRef = useRef(m)
+  mRef.current = m
+  const isUserRef = useRef(isUser)
+  isUserRef.current = isUser
 
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
+    const cleanupWindowListeners = () => {
+      window.removeEventListener('touchmove', handleTouchMove)
+      window.removeEventListener('touchend', handleTouchEnd)
+      window.removeEventListener('touchcancel', resetSwipe)
+    }
+
+    const resetSwipe = () => {
+      cleanupWindowListeners()
+      if (pressTimerRef.current) clearTimeout(pressTimerRef.current)
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+      setIsPressed(false)
+      isLongPressTriggeredRef.current = false
+      setIsAnimating(true)
+      offsetXRef.current = 0
+      setOffsetX(0)
+      isSwipingRef.current = false
+      isVerticalScrollRef.current = false
+      hasTriggeredHapticRef.current = false
+
+      if (animTimerRef.current) clearTimeout(animTimerRef.current)
+      animTimerRef.current = setTimeout(() => {
+        setIsAnimating(false)
+      }, 200)
+    }
+
     const handleTouchStart = (e) => {
       if (e.touches.length !== 1) return
       const touch = e.touches[0]
-      // Never intercept gestures initiated near the screen edge (reserved for Edge Swipe-to-Back)
-      if (touch.clientX <= 28) return
+      const screenW = typeof window !== 'undefined' ? window.innerWidth : 400
+      // Never intercept gestures initiated near the screen edges (reserved for OS swipe-to-back)
+      if (touch.clientX <= 24 || touch.clientX >= screenW - 24) return
 
-      touchStartRef.current = { x: touch.clientX, y: touch.clientY }
+      touchStartRef.current = { x: touch.clientX, y: touch.clientY, id: touch.identifier }
       isSwipingRef.current = false
       isVerticalScrollRef.current = false
       hasTriggeredHapticRef.current = false
@@ -642,6 +683,16 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
       setIsAnimating(false)
       setIsPressed(false)
       setIsHighlighted(false)
+      if (animTimerRef.current) {
+        clearTimeout(animTimerRef.current)
+        animTimerRef.current = null
+      }
+
+      // Attach touchmove, touchend, touchcancel to window to guarantee capture even if finger moves off bubble or scrolls
+      window.addEventListener('touchmove', handleTouchMove, { passive: false })
+      window.addEventListener('touchend', handleTouchEnd, { passive: true })
+      window.addEventListener('touchcancel', resetSwipe, { passive: true })
+
       try {
         if (window.getSelection) {
           window.getSelection().removeAllRanges()
@@ -667,7 +718,7 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
         } catch {}
         triggerHaptic('heavy')
         const rect = el ? el.getBoundingClientRect() : null
-        onLongPress?.(m, rect)
+        onLongPressRef.current?.(mRef.current, rect)
         setTimeout(() => {
           setIsHighlighted(false)
         }, 350)
@@ -701,10 +752,14 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
       if (!isSwipingRef.current) {
         if (absY > 6 && absY > absX) {
           isVerticalScrollRef.current = true
+          resetSwipe()
           return
         }
-        // Claim the horizontal swipe gesture on minimal travel (4px) to stop page navigation
-        if (absX >= 4 && absX > absY) {
+        // Direction check before claiming swipe:
+        // Incoming (!isUser): swipe RIGHT (deltaX > 0)
+        // Outgoing (isUser): swipe LEFT (deltaX < 0)
+        const validDirection = !isUserRef.current ? deltaX > 0 : deltaX < 0
+        if (absX >= 6 && absX > absY && validDirection) {
           isSwipingRef.current = true
         }
       }
@@ -715,24 +770,25 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
         }
 
         // WhatsApp swipe right (or Telegram swipe left):
-        const sign = deltaX > 0 ? 1 : -1
-        // Smooth elastic damping capped at 46px maximum (never overflows screen width)
-        const damped = Math.min(46, Math.pow(absX, 0.72) * 2.2)
+        const sign = !isUserRef.current ? (deltaX > 0 ? 1 : 0) : (deltaX < 0 ? -1 : 0)
+        // Smooth elastic damping capped at 56px maximum (never overflows screen width or touches indicator)
+        const damped = Math.min(56, Math.pow(absX, 0.74) * 2.3)
         const finalOffset = sign * damped
         offsetXRef.current = finalOffset
         setOffsetX(finalOffset)
 
-        // Light haptic tick when crossing reply threshold (28px)
-        if (Math.abs(finalOffset) >= 28 && !hasTriggeredHapticRef.current) {
+        // Light haptic tick when crossing reply threshold (30px)
+        if (Math.abs(finalOffset) >= 30 && !hasTriggeredHapticRef.current) {
           hasTriggeredHapticRef.current = true
           triggerHaptic('light')
-        } else if (Math.abs(finalOffset) < 28) {
+        } else if (Math.abs(finalOffset) < 30) {
           hasTriggeredHapticRef.current = false
         }
       }
     }
 
     const handleTouchEnd = () => {
+      cleanupWindowListeners()
       if (pressTimerRef.current) {
         clearTimeout(pressTimerRef.current)
         pressTimerRef.current = null
@@ -743,60 +799,57 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
       }
       setIsPressed(false)
 
-      // If Tap-and-Hold triggered the action sheet, suppress swipe & double-tap!
       if (isLongPressTriggeredRef.current) {
-        isLongPressTriggeredRef.current = false
-        setIsAnimating(true)
-        offsetXRef.current = 0
-        setOffsetX(0)
-        isSwipingRef.current = false
+        resetSwipe()
         return
       }
 
-      if (isSwipingRef.current) {
-        const threshold = 28
-        if (Math.abs(offsetXRef.current) >= threshold) {
-          if (!hasTriggeredHapticRef.current) {
-            triggerHaptic('medium')
-          }
-          onSwipeReply?.(m)
-        }
-      } else if (!isVerticalScrollRef.current) {
+      const wasSwiping = isSwipingRef.current
+      const currentOffset = offsetXRef.current
+      const threshold = 30
+      const thresholdCrossed = wasSwiping && Math.abs(currentOffset) >= threshold
+
+      // Snap back immediately with spring animation
+      resetSwipe()
+
+      if (thresholdCrossed) {
+        triggerHaptic('medium')
+        // Dispatch reply on next animation frame so bubble snap-back starts cleanly
+        requestAnimationFrame(() => {
+          onSwipeReplyRef.current?.(mRef.current)
+        })
+      } else if (!isVerticalScrollRef.current && !wasSwiping) {
         // Double-tap detector for quick ❤️ reaction (smooth 340ms window)
         const now = Date.now()
         if (now - lastTapRef.current < 340) {
-          onDoubleTap?.(m)
+          onDoubleTapRef.current?.(mRef.current)
           lastTapRef.current = 0
           return
         }
         lastTapRef.current = now
       }
-
-      setIsAnimating(true)
-      offsetXRef.current = 0
-      setOffsetX(0)
-      isSwipingRef.current = false
-      isVerticalScrollRef.current = false
-      hasTriggeredHapticRef.current = false
     }
 
     el.addEventListener('touchstart', handleTouchStart, { passive: true })
-    el.addEventListener('touchmove', handleTouchMove, { passive: false })
-    el.addEventListener('touchend', handleTouchEnd, { passive: true })
-    el.addEventListener('touchcancel', handleTouchEnd, { passive: true })
+    window.addEventListener('blur', resetSwipe)
 
     return () => {
+      cleanupWindowListeners()
       if (pressTimerRef.current) clearTimeout(pressTimerRef.current)
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+      if (animTimerRef.current) clearTimeout(animTimerRef.current)
       el.removeEventListener('touchstart', handleTouchStart)
-      el.removeEventListener('touchmove', handleTouchMove)
-      el.removeEventListener('touchend', handleTouchEnd)
-      el.removeEventListener('touchcancel', handleTouchEnd)
+      window.removeEventListener('blur', resetSwipe)
+      offsetXRef.current = 0
+      setOffsetX(0)
+      setIsAnimating(false)
     }
-  }, [m, onSwipeReply, onDoubleTap, onLongPress])
+  }, [m?.id])
 
   const isSwipingRight = offsetX > 0
-  const isThresholdMet = Math.abs(offsetX) >= 28
+  const isThresholdMet = Math.abs(offsetX) >= 30
+  // ONLY show indicator when actively dragged (Math.abs(offsetX) >= 8). Never stuck on screen!
+  const showIndicator = Math.abs(offsetX) >= 8
 
   return (
     <div
@@ -805,7 +858,7 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
         // Desktop / Mouse Right-Click opens same Floating Action Menu
         e.preventDefault()
         const rect = containerRef.current ? containerRef.current.getBoundingClientRect() : null
-        onLongPress?.(m, rect)
+        onLongPressRef.current?.(mRef.current, rect)
       }}
       className="relative max-w-full select-none"
       style={{
@@ -816,29 +869,29 @@ function SwipeableMessageBubble({ children, isUser, onSwipeReply, onDoubleTap, o
         userSelect: 'none'
       }}
     >
-      {/* Reply Action Indicator: positioned OUTSIDE bubble in revealed gutter space */}
-      {Math.abs(offsetX) > 5 && (
+      {/* Reply Action Indicator: pinned in the gutter revealed by the swipe */}
+      {showIndicator && (
         <div
-          className="absolute top-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none z-0"
+          className="absolute top-1/2 flex items-center justify-center pointer-events-none z-0"
           style={{
             ...(isSwipingRight
               ? {
-                  left: '-34px',
-                  transform: `translateY(-50%) translateX(${Math.min(offsetX, 34)}px) scale(${isThresholdMet ? 1.15 : Math.min(1, Math.max(0.65, Math.abs(offsetX) / 26))})`
+                  left: '8px',
+                  transform: `translateY(-50%) scale(${isThresholdMet ? 1.12 : Math.min(1, Math.max(0.5, Math.abs(offsetX) / 30))})`
                 }
               : {
-                  right: '-34px',
-                  transform: `translateY(-50%) translateX(${Math.max(offsetX, -34)}px) scale(${isThresholdMet ? 1.15 : Math.min(1, Math.max(0.65, Math.abs(offsetX) / 26))})`
+                  right: '8px',
+                  transform: `translateY(-50%) scale(${isThresholdMet ? 1.12 : Math.min(1, Math.max(0.5, Math.abs(offsetX) / 30))})`
                 }),
-            opacity: Math.min(1, Math.max(0, (Math.abs(offsetX) - 5) / 18)),
-            transition: isAnimating ? 'all 0.22s cubic-bezier(0.175, 0.885, 0.32, 1.275)' : 'none'
+            opacity: Math.min(1, Math.max(0, (Math.abs(offsetX) - 6) / 20)),
+            transition: isAnimating ? 'transform 0.18s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.15s ease' : 'none'
           }}
         >
           <div
             className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
               isThresholdMet
                 ? 'bg-[#facc15] text-[#09090b] shadow-md shadow-yellow-500/40 ring-2 ring-yellow-400/40'
-                : 'bg-[#facc15]/25 text-[#facc15]'
+                : 'bg-[#facc15]/30 text-[#facc15] ring-1 ring-yellow-400/30'
             }`}
           >
             <Reply className={`w-3.5 h-3.5 stroke-[2.5] ${isSwipingRight ? '' : 'scale-x-[-1]'}`} />
@@ -971,6 +1024,18 @@ function getChatAttachmentKind(m) {
   if (AUDIO_EXTENSIONS.has(ext)) return 'audio'
   if (DOCUMENT_EXTENSIONS.has(ext)) return 'document'
   return 'image'
+}
+
+/**
+ * XSS & Scheme injection sanitizer for URLs (allows only http, https, blob, or root-relative paths).
+ */
+function sanitizeSafeUrl(url, fallback = '#') {
+  if (!url || typeof url !== 'string') return fallback
+  const trimmed = url.trim()
+  if (/^(https?:\/\/|blob:|\/)/i.test(trimmed)) {
+    return trimmed
+  }
+  return fallback
 }
 
 // ── DISAPPEARING MESSAGES DURATIONS & AUTO-DELETE CONFIGURATION ──
@@ -1128,47 +1193,96 @@ export default function ChatConversation() {
   const [isEditingNote, setIsEditingNote] = useState(false)
   const [noteDraft, setNoteDraft] = useState('')
 
+  const getContactKeys = useCallback((conv) => {
+    if (!conv) return []
+    const keys = []
+    const userId = conv.other_user?.id || conv.other_user_id || conv.contact_id || conv.friend_id
+    if (userId) keys.push(String(userId))
+    const rawUsername = conv.contact_username || conv.username
+    if (rawUsername) {
+      const cleanUname = String(rawUsername).toLowerCase().replace(/^@/, '').trim()
+      if (cleanUname) {
+        keys.push(cleanUname)
+        keys.push(`@${cleanUname}`)
+      }
+    }
+    if (conv.id) keys.push(String(conv.id))
+    return keys
+  }, [])
+
   const getContactKey = useCallback((conv) => {
     if (!conv) return ''
-    return String(conv.other_user?.id || conv.other_user_id || conv.contact_id || conv.id || '')
-  }, [])
+    const keys = getContactKeys(conv)
+    return keys[0] || String(conv.id || '')
+  }, [getContactKeys])
 
   const getContactCustomNickname = useCallback((conv) => {
     if (!conv) return ''
-    const key = getContactKey(conv)
-    return contactCustomData[key]?.nickname?.trim() || ''
-  }, [contactCustomData, getContactKey])
+    const keys = getContactKeys(conv)
+    for (const k of keys) {
+      const nick = contactCustomData[k]?.nickname?.trim()
+      if (nick) return nick
+    }
+    return ''
+  }, [contactCustomData, getContactKeys])
 
   const getContactDisplayName = useCallback((conv) => {
     if (!conv) return ''
     const custom = getContactCustomNickname(conv)
     if (custom) return custom
-    return conv.contact_name || conv.name || (conv.contact_username ? `@${conv.contact_username}` : 'Contact')
+    return conv.contact_name || conv.name || (conv.contact_username ? conv.contact_username : 'Contact')
   }, [getContactCustomNickname])
 
   const getContactPrivateNote = useCallback((conv) => {
     if (!conv) return ''
-    const key = getContactKey(conv)
-    return contactCustomData[key]?.note || ''
-  }, [contactCustomData, getContactKey])
+    const keys = getContactKeys(conv)
+    for (const k of keys) {
+      const note = contactCustomData[k]?.note
+      if (note !== undefined && note !== null && String(note).trim()) return note
+    }
+    return ''
+  }, [contactCustomData, getContactKeys])
 
   const saveContactCustomData = useCallback((conv, updates) => {
-    const key = getContactKey(conv)
-    if (!key) return
+    const keys = getContactKeys(conv)
+    if (keys.length === 0) return
     setContactCustomData((prev) => {
-      const current = prev[key] || {}
-      const nextForContact = { ...current, ...updates, updatedAt: new Date().toISOString() }
-      if (!nextForContact.nickname?.trim() && !nextForContact.note?.trim()) {
-        const next = { ...prev }
-        delete next[key]
-        try { localStorage.setItem('jdlx_chat_contact_custom_data', JSON.stringify(next)) } catch {}
-        return next
+      let current = {}
+      for (const k of keys) {
+        if (prev[k]) {
+          current = { ...prev[k] }
+          break
+        }
       }
-      const next = { ...prev, [key]: nextForContact }
-      try { localStorage.setItem('jdlx_chat_contact_custom_data', JSON.stringify(next)) } catch {}
+      const sanitizedUpdates = { ...updates }
+      if (typeof sanitizedUpdates.nickname === 'string') {
+        sanitizedUpdates.nickname = sanitizedUpdates.nickname
+          .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+          .trim()
+          .slice(0, 32)
+      }
+      if (typeof sanitizedUpdates.note === 'string') {
+        sanitizedUpdates.note = sanitizedUpdates.note
+          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '')
+          .trim()
+          .slice(0, 500)
+      }
+      const nextForContact = { ...current, ...sanitizedUpdates, updatedAt: new Date().toISOString() }
+      const isCleared = !nextForContact.nickname?.trim() && !nextForContact.note?.trim() && !nextForContact.wallpaper?.trim()
+      const next = { ...prev }
+      for (const k of keys) {
+        if (isCleared) {
+          delete next[k]
+        } else {
+          next[k] = nextForContact
+        }
+      }
+      try {
+        localStorage.setItem('jdlx_chat_contact_custom_data', JSON.stringify(next))
+      } catch {}
       return next
     })
-  }, [getContactKey])
+  }, [getContactKeys])
 
   useEffect(() => {
     if (showContactInfoModal && activeConversation) {
@@ -1219,14 +1333,43 @@ export default function ChatConversation() {
     }
   }, [activeConversation, getContactDisplayName])
 
+  // ── UNIFIED ONLINE PRESENCE ACROSS ALL SOURCES ──
+  const isContactOnline = useMemo(() => {
+    if (!activeConversation) return false
+    // 1. Live socket / polling peer online flag
+    if (peerOnline) return true
+    // 2. Direct flags on active conversation
+    if (activeConversation.contact_online || activeConversation.other_user?.is_online) return true
+    // 3. Match from friends list (which updates globally)
+    const otherId = activeConversation.other_user?.id || activeConversation.contact_id || activeConversation.user_id
+    const otherUsername = (activeConversation.other_user?.username || activeConversation.contact_username || '').toLowerCase()
+    if (friends && friends.length > 0) {
+      const match = friends.find((f) => 
+        (otherId && (sameId(f.friend_id, otherId) || sameId(f.id, otherId))) ||
+        (otherUsername && f.username && f.username.toLowerCase() === otherUsername)
+      )
+      if (match?.is_online) return true
+    }
+    // 4. Match from conversations list
+    if (conversations && conversations.length > 0) {
+      const matchConv = conversations.find((c) => sameId(c.id, activeRoomId))
+      if (matchConv && (matchConv.contact_online || matchConv.other_user?.is_online)) return true
+    }
+    return false
+  }, [peerOnline, activeConversation, activeRoomId, friends, conversations])
+
   // ── CUSTOM CHAT WALLPAPER PER CONTACT (Item 2.7) ──
   const [showWallpaperModal, setShowWallpaperModal] = useState(false)
 
   const getContactWallpaper = useCallback((conv) => {
     if (!conv) return 'default'
-    const key = getContactKey(conv)
-    return contactCustomData[key]?.wallpaper || 'default'
-  }, [contactCustomData, getContactKey])
+    const keys = getContactKeys(conv)
+    for (const k of keys) {
+      const wp = contactCustomData[k]?.wallpaper
+      if (wp) return wp
+    }
+    return 'default'
+  }, [contactCustomData, getContactKeys])
 
   const setContactWallpaper = useCallback((conv, wallpaperId) => {
     if (!conv) return
@@ -1372,8 +1515,9 @@ export default function ChatConversation() {
     return () => { cancelled = true }
   }, [showSafetyVerificationModal, activeConversation, chatUser?.public_key, chatUser?.id])
 
-  // Disappearing Messages & Auto-Delete After Seen State
+  // Disappearing Messages & Per-Friend Auto-Delete After Seen State
   const [showDisappearingModal, setShowDisappearingModal] = useState(false)
+  const [disappearingModalContact, setDisappearingModalContact] = useState(null)
   const [disappearingSettings, setDisappearingSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('jdlx_chat_disappearing_settings')
@@ -1383,23 +1527,183 @@ export default function ChatConversation() {
     }
   })
 
-  const currentDisappearingMode = activeRoomId ? (disappearingSettings[activeRoomId] || 'off') : 'off'
+  // Per-friend disappearing mode resolver (checks room id, friend_id, user id, and username)
+  const getDisappearingMode = useCallback((convOrFriendOrRoomId) => {
+    if (!convOrFriendOrRoomId) return 'off'
+    if (typeof convOrFriendOrRoomId === 'object') {
+      const keys = getContactKeys(convOrFriendOrRoomId)
+      for (const k of keys) {
+        if (disappearingSettings[k]) return disappearingSettings[k]
+      }
+      if (convOrFriendOrRoomId.friend_id && disappearingSettings[String(convOrFriendOrRoomId.friend_id)]) {
+        return disappearingSettings[String(convOrFriendOrRoomId.friend_id)]
+      }
+      if (convOrFriendOrRoomId.id && disappearingSettings[String(convOrFriendOrRoomId.id)]) {
+        return disappearingSettings[String(convOrFriendOrRoomId.id)]
+      }
+      return 'off'
+    }
+    const str = String(convOrFriendOrRoomId)
+    if (disappearingSettings[str]) return disappearingSettings[str]
+    if (activeConversation) {
+      const keys = getContactKeys(activeConversation)
+      if (keys.includes(str) || String(activeRoomId) === str || String(activeConversation.id) === str) {
+        for (const k of keys) {
+          if (disappearingSettings[k]) return disappearingSettings[k]
+        }
+      }
+    }
+    return 'off'
+  }, [disappearingSettings, getContactKeys, activeConversation, activeRoomId])
 
-  const setRoomDisappearingMode = useCallback((roomId, mode) => {
-    if (!roomId) return
+  const currentDisappearingMode = useMemo(() => {
+    if (activeConversation) return getDisappearingMode(activeConversation)
+    if (activeRoomId) return getDisappearingMode(activeRoomId)
+    return 'off'
+  }, [activeConversation, activeRoomId, getDisappearingMode])
+
+  const setRoomDisappearingMode = useCallback((targetConvOrFriendOrRoomId, mode) => {
+    let conv = null
+    let fallbackId = null
+    if (typeof targetConvOrFriendOrRoomId === 'object' && targetConvOrFriendOrRoomId !== null) {
+      conv = targetConvOrFriendOrRoomId
+    } else if (typeof targetConvOrFriendOrRoomId === 'string' || typeof targetConvOrFriendOrRoomId === 'number') {
+      fallbackId = String(targetConvOrFriendOrRoomId)
+      if (activeConversation && (String(activeConversation.id) === fallbackId || String(activeRoomId) === fallbackId)) {
+        conv = activeConversation
+      }
+    } else if (activeConversation) {
+      conv = activeConversation
+    }
+
+    const keys = conv ? getContactKeys(conv) : (fallbackId ? [fallbackId] : [])
+    if (conv?.friend_id && !keys.includes(String(conv.friend_id))) keys.push(String(conv.friend_id))
+    if (fallbackId && !keys.includes(fallbackId)) keys.push(fallbackId)
+    if (activeRoomId && conv && activeConversation && conv === activeConversation && !keys.includes(String(activeRoomId))) {
+      keys.push(String(activeRoomId))
+    }
+    if (keys.length === 0) return
+
     triggerHaptic('medium')
     setDisappearingSettings((prev) => {
-      const next = { ...prev, [roomId]: mode }
+      const next = { ...prev }
+      for (const k of keys) {
+        if (mode === 'off') {
+          delete next[k]
+        } else {
+          next[k] = mode
+        }
+      }
       try {
         localStorage.setItem('jdlx_chat_disappearing_settings', JSON.stringify(next))
       } catch {}
       return next
     })
+
     const opt = DISAPPEARING_OPTIONS.find((o) => o.id === mode)
-    toast.success(`Disappearing messages: ${opt ? opt.label : mode}`, {
+    const targetName = conv ? getContactDisplayName(conv) : 'this chat'
+    toast.success(`Auto-delete for ${targetName}: ${opt ? opt.label : mode}`, {
       icon: mode === 'seen' ? '⚡' : mode === 'off' ? '⭕' : '⏱️',
     })
+  }, [activeConversation, activeRoomId, getContactKeys, getContactDisplayName])
+
+  // Friends Bar Custom Settings & Sorting State
+  const [friendsSortMode, setFriendsSortMode] = useState('online')
+  const [showFriendsMenu, setShowFriendsMenu] = useState(false)
+  const friendsMenuRef = useRef(null)
+
+  // Friend Quick Actions Bottom Sheet (Mobile Tap & Hold / Desktop 3-dot)
+  const [friendQuickActionsTarget, setFriendQuickActionsTarget] = useState(null)
+  const touchTimerRef = useRef(null)
+  const isLongPressTriggeredRef = useRef(false)
+
+  const handleFriendTouchStart = useCallback((fr) => {
+    isLongPressTriggeredRef.current = false
+    if (touchTimerRef.current) clearTimeout(touchTimerRef.current)
+    touchTimerRef.current = setTimeout(() => {
+      isLongPressTriggeredRef.current = true
+      triggerHaptic('heavy')
+      setFriendQuickActionsTarget(fr)
+    }, 480)
   }, [])
+
+  const handleFriendTouchEnd = useCallback((e) => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = null
+    }
+    if (isLongPressTriggeredRef.current) {
+      if (e?.cancelable) e.preventDefault()
+      e?.stopPropagation()
+      setTimeout(() => {
+        isLongPressTriggeredRef.current = false
+      }, 120)
+    }
+  }, [])
+
+  const handleFriendTouchMove = useCallback(() => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = null
+    }
+  }, [])
+
+  // Clean up any pending touch timer on unmount
+  useEffect(() => () => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!showFriendsMenu) return
+    const handleOutside = (e) => {
+      if (friendsMenuRef.current && !friendsMenuRef.current.contains(e.target)) {
+        setShowFriendsMenu(false)
+      }
+    }
+    document.addEventListener('pointerdown', handleOutside)
+    return () => document.removeEventListener('pointerdown', handleOutside)
+  }, [showFriendsMenu])
+
+  const getConversationForFriend = useCallback((fr) => {
+    if (!fr) return null
+    const friendId = fr.friend_id || fr.id
+    return (conversations || []).find((c) =>
+      (friendId && (sameId(c.other_user?.id, friendId) || sameId(c.user_two_id, friendId) || sameId(c.contact_id, friendId))) ||
+      (fr.username && c.contact_username && c.contact_username.toLowerCase() === fr.username.toLowerCase())
+    ) || null
+  }, [conversations])
+
+  const sortedFriends = useMemo(() => {
+    if (!friends || !friends.length) return []
+    const list = [...friends]
+    if (friendsSortMode === 'online') {
+      return list.sort((a, b) => {
+        const aOnline = Boolean(
+          a.is_online || 
+          (activeConversation && (sameId(a.friend_id, activeConversation.other_user?.id) || sameId(a.friend_id, activeConversation.contact_id)) && isContactOnline)
+        )
+        const bOnline = Boolean(
+          b.is_online || 
+          (activeConversation && (sameId(b.friend_id, activeConversation.other_user?.id) || sameId(b.friend_id, activeConversation.contact_id)) && isContactOnline)
+        )
+        if (aOnline !== bOnline) return aOnline ? -1 : 1
+        const aName = getContactDisplayName(a) || a.name || a.username || ''
+        const bName = getContactDisplayName(b) || b.name || b.username || ''
+        return aName.localeCompare(bName)
+      })
+    }
+    if (friendsSortMode === 'alphabetical') {
+      return list.sort((a, b) => {
+        const aName = getContactDisplayName(a) || a.name || a.username || ''
+        const bName = getContactDisplayName(b) || b.name || b.username || ''
+        return aName.localeCompare(bName)
+      })
+    }
+    return list
+  }, [friends, friendsSortMode, activeConversation, isContactOnline, getContactDisplayName])
 
   // Auto-Delete & "Auto-Delete After Seen" Engine
   const seenTimestampRef = useRef({})
@@ -1512,6 +1816,7 @@ export default function ChatConversation() {
       targetMsg.is_read
     )
     const isPeerOnline = Boolean(
+      isContactOnline ||
       peerOnline || 
       activeConversation?.contact_online || 
       activeConversation?.other_user?.is_online
@@ -1528,7 +1833,7 @@ export default function ChatConversation() {
       return (
         <span 
           title="Seen" 
-          className="inline-flex items-center ml-0.5 select-none"
+          className="inline-flex items-center ml-0.5 select-none animate-tick-pop"
         >
           {isFloatingDark ? (
             <CheckCheck className="w-3.5 h-3.5 text-sky-400 drop-shadow-sm stroke-[2.4]" />
@@ -1544,7 +1849,7 @@ export default function ChatConversation() {
       return (
         <span 
           title="Delivered" 
-          className="inline-flex items-center ml-0.5 select-none"
+          className="inline-flex items-center ml-0.5 select-none animate-tick-pop"
         >
           {isFloatingDark ? (
             <CheckCheck className="w-3.5 h-3.5 text-white/70 stroke-[2]" />
@@ -1804,6 +2109,14 @@ export default function ChatConversation() {
       setEditGender(chatUser.gender || 'prefer_not_to_say')
     }
   }, [showProfileDrawer, chatUser])
+
+  // Reset contact rename & note draft states when modal closes
+  useEffect(() => {
+    if (!showContactInfoModal) {
+      setIsEditingNickname(false)
+      setIsEditingNote(false)
+    }
+  }, [showContactInfoModal])
 
   const handleToggleEnterToSend = (enabled) => {
     setEnterToSend(enabled)
@@ -2309,6 +2622,7 @@ export default function ChatConversation() {
   }
 
   const textareaRef = useRef(null)
+  const footerRef = useRef(null)
   const messagesContainerRef = useRef(null)
   const messagesEndRef = useRef(null)
   const lastRenderedMessageIdRef = useRef(null)
@@ -2338,6 +2652,42 @@ export default function ChatConversation() {
     }
   }, [])
 
+  // ── SMART CHAT LOAD: SEAMLESS AUTO-PAGINATION & SCROLL ANCHORING ──
+  const scrollAnchorRef = useRef(null)
+  const isAutoLoadingOlderRef = useRef(false)
+
+  const handleSmartLoadOlder = useCallback(async () => {
+    if (!messagesHasMore || loadingOlderMessages || isAutoLoadingOlderRef.current) return
+    isAutoLoadingOlderRef.current = true
+    const el = messagesContainerRef.current
+    if (el) {
+      scrollAnchorRef.current = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop
+      }
+    }
+    try {
+      await loadOlderMessages()
+    } finally {
+      setTimeout(() => {
+        isAutoLoadingOlderRef.current = false
+      }, 400)
+    }
+  }, [messagesHasMore, loadingOlderMessages, loadOlderMessages])
+
+  // Preserve viewport anchor smoothly when older messages are prepended to top
+  useLayoutEffect(() => {
+    const el = messagesContainerRef.current
+    const anchor = scrollAnchorRef.current
+    if (el && anchor) {
+      const heightDelta = el.scrollHeight - anchor.scrollHeight
+      if (heightDelta > 0) {
+        el.scrollTop = anchor.scrollTop + heightDelta
+      }
+      scrollAnchorRef.current = null
+    }
+  }, [messages])
+
   const handleMessagesScroll = (e) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
     const distanceToBottom = scrollHeight - scrollTop - clientHeight
@@ -2349,6 +2699,11 @@ export default function ChatConversation() {
     } else {
       setUnreadBelowCount(0)
     }
+
+    // Smart Chat Load: auto-trigger earlier messages when scrolled near top (< 140px)
+    if (scrollTop < 140 && messagesHasMore && !loadingOlderMessages) {
+      handleSmartLoadOlder()
+    }
   }
 
   const handleJumpToBottom = () => {
@@ -2357,13 +2712,35 @@ export default function ChatConversation() {
     setUnreadBelowCount(0)
   }
 
-  const handleDoubleTapReaction = (m) => {
+  const handleDoubleTapReaction = useCallback((m) => {
     if (!m || m.deleted || m.message_type === 'deleted') return
     triggerHaptic('double')
     setFloatingHeartId(m.id)
     setTimeout(() => setFloatingHeartId(null), 700)
     toggleReaction(m.id, '❤️')
-  }
+  }, [toggleReaction])
+
+  const handleSwipeReply = useCallback((msg) => {
+    setReplyTo(msg)
+    if (textareaRef.current) {
+      textareaRef.current.focus()
+    }
+    // Auto-scroll slightly if at bottom so the reply bar doesn't push latest message out of view
+    setTimeout(() => {
+      const el = messagesContainerRef.current
+      if (el) {
+        const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+        if (distanceToBottom < 220) {
+          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+        }
+      }
+    }, 80)
+  }, [])
+
+  const handleLongPressMessage = useCallback((msg, rect) => {
+    triggerHaptic('heavy')
+    handleOpenActionMenu(msg, rect)
+  }, [handleOpenActionMenu])
 
   const adjustTextareaHeight = useCallback(() => {
     if (textareaRef.current) {
@@ -2907,6 +3284,9 @@ export default function ChatConversation() {
     backHandlerStateRef.current = {
       confirmDialog,
       selectedPreviewImage,
+      friendQuickActionsTarget,
+      showFriendsMenu,
+      showDisappearingModal,
       showContactInfoModal,
       showMuteModal,
       showWallpaperModal,
@@ -2935,6 +3315,9 @@ export default function ChatConversation() {
           const s = backHandlerStateRef.current
           if (s.confirmDialog) { setConfirmDialog(null); return }
           if (s.selectedPreviewImage) { handleClosePreview(); return }
+          if (s.friendQuickActionsTarget) { setFriendQuickActionsTarget(null); return }
+          if (s.showFriendsMenu) { setShowFriendsMenu(false); return }
+          if (s.showDisappearingModal) { setShowDisappearingModal(false); return }
           if (s.showStarredModal) { setShowStarredModal(false); return }
           if (s.showMuteModal) { setShowMuteModal(false); return }
           if (s.showWallpaperModal) { setShowWallpaperModal(false); return }
@@ -4523,9 +4906,11 @@ export default function ChatConversation() {
         matches.forEach((rawUrl, uIdx) => {
           let domain = ''
           try {
-            domain = new URL(rawUrl).hostname.replace(/^www\./, '')
+            const parsed = new URL(rawUrl)
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return
+            domain = parsed.hostname.replace(/^www\./, '')
           } catch {
-            domain = rawUrl.slice(0, 25)
+            return
           }
           links.push({
             id: `${m.id}-${uIdx}`,
@@ -4660,42 +5045,59 @@ export default function ChatConversation() {
           ? 'bg-white border-slate-200 shadow-sm text-slate-900' 
           : 'bg-[#121215] border-[#27272a] shadow-md text-white'
       }`}>
-        {/* Left: App Brand */}
+        {/* Left: User Profile & Identity (Clickable to open Profile & Settings) */}
         <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-tr from-[#eab308] to-[#facc15] p-0.5 shadow-md shadow-yellow-500/10 shrink-0">
-              <div className={`w-full h-full rounded-[14px] flex items-center justify-center font-black text-xs overflow-hidden ${
-                isLight ? 'bg-white text-amber-700' : 'bg-[#09090b] text-[#facc15]'
-              }`}>
-                <img
-                  src="/logo192.png"
-                  alt={chatBrandName || "JDLX Chat"}
-                  className="w-full h-full object-contain rounded-[14px]"
-                />
+          <div 
+            onClick={() => setShowProfileDrawer(true)}
+            className="flex items-center gap-2.5 min-w-0 cursor-pointer group select-none"
+            title="Open Profile & Settings"
+          >
+            {/* User Avatar with luxury aura */}
+            <div className="relative shrink-0">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-tr from-[#eab308] to-[#facc15] p-0.5 shadow-md shadow-yellow-500/15 group-hover:scale-105 transition-transform duration-200">
+                <div className={`w-full h-full rounded-[14px] flex items-center justify-center font-black text-xs sm:text-sm overflow-hidden ${
+                  isLight ? 'bg-amber-100 text-amber-800' : 'bg-[#18181b] text-[#facc15]'
+                }`}>
+                  {(chatUser?.profile_image || chatUser?.avatar) ? (
+                    <img
+                      src={resolveMediaUrl(chatUser.profile_image || chatUser.avatar)}
+                      alt={chatUser?.name || chatUser?.username || 'Profile'}
+                      loading="lazy"
+                      decoding="async"
+                      className="w-full h-full object-cover rounded-[14px]"
+                    />
+                  ) : (
+                    <span>
+                      {chatUser?.name?.[0]?.toUpperCase() || chatUser?.username?.[0]?.toUpperCase() || 'U'}
+                    </span>
+                  )}
+                </div>
               </div>
+              {/* Subtle online beacon dot on user avatar */}
+              <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center pointer-events-none">
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#121215]" />
+              </span>
             </div>
-            <div 
-              onClick={() => setShowProfileDrawer(true)}
-              className="min-w-0 cursor-pointer group"
-              title="Open Profile & Settings"
-            >
-              <div className="flex items-center gap-1.5">
+
+            {/* User Name & Handle */}
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 min-w-0">
                 <h1 className={`text-sm sm:text-base font-black truncate tracking-tight group-hover:text-amber-500 transition-colors ${
                   isLight ? 'text-slate-900' : 'text-white'
                 }`}>
-                  {chatBrandName}
+                  {chatUser?.name || chatUser?.full_name || chatBrandName}
                 </h1>
-                <span className={`hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                <span className={`hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase shrink-0 ${
                   isLight ? 'bg-amber-100 text-amber-800' : 'bg-yellow-500/15 text-[#facc15] border border-yellow-500/30'
                 }`}>
                   <Lock className="w-2.5 h-2.5" />
-                  Encrypted Chat
+                  Encrypted
                 </span>
               </div>
-              <p className={`text-[10px] sm:text-[11px] font-mono truncate group-hover:underline ${
+              <p className={`text-[10px] sm:text-[11px] font-mono truncate group-hover:underline flex items-center gap-1 ${
                 isLight ? 'text-amber-700' : 'text-[#facc15]'
               }`}>
-                {chatUser?.username ? `@${chatUser.username}` : (chatUser?.name || 'My Account')}
+                {chatUser?.username ? `@${chatUser.username}` : '@member'}
               </p>
             </div>
           </div>
@@ -4717,7 +5119,7 @@ export default function ChatConversation() {
             }`}
           >
             <UserPlus className="w-4 h-4" />
-            <span className="hidden xs:inline">Add Friend</span>
+            <span className="hidden sm:inline">Add Friend</span>
             {pendingRequestsCount > 0 && (
               <span className="w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center">
                 {pendingRequestsCount}
@@ -4783,155 +5185,6 @@ export default function ChatConversation() {
               </span>
             )}
           </button>
-
-          {/* More Menu Toggle */}
-          <div className="relative">
-            <button
-              onClick={() => setShowMenu(!showMenu)}
-              className={`p-2 rounded-xl transition-all border active:scale-95 cursor-pointer ${
-                isLight
-                  ? 'text-slate-600 hover:text-amber-700 hover:bg-slate-100 border-transparent hover:border-slate-200'
-                  : 'text-[#a1a1aa] hover:text-[#facc15] hover:bg-[#18181b] border-transparent hover:border-[#27272a]'
-              }`}
-            >
-              <MoreVertical className="w-5 h-5" />
-            </button>
-
-            {showMenu && (
-              <div className={`absolute right-0 top-12 w-56 rounded-2xl border shadow-2xl py-1.5 z-40 animate-in fade-in zoom-in-95 duration-150 ${
-                isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-200' : 'bg-[#18181b] border-[#27272a] text-[#f4f4f5]'
-              }`}>
-                {/* Install PWA item */}
-                {!isPwaInstalled && (
-                  <button
-                    onClick={() => {
-                      triggerPwaInstall()
-                      setShowMenu(false)
-                    }}
-                    className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors ${
-                      isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
-                    }`}
-                  >
-                    <Download className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-                    <span>Install JDLX App</span>
-                  </button>
-                )}
-
-                {/* Profile item */}
-                <button
-                  onClick={() => {
-                    setShowProfileDrawer(true)
-                    setShowMenu(false)
-                  }}
-                  className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors ${
-                    isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
-                  }`}
-                >
-                  <Palette className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-                  <span>Profile &amp; Appearance</span>
-                </button>
-
-                {/* Add Friend item */}
-                <button
-                  onClick={() => {
-                    setShowAddFriendModal(true)
-                    setShowMenu(false)
-                  }}
-                  className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors ${
-                    isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
-                  }`}
-                >
-                  <UserPlus className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-                  <span>Add Friend by @username</span>
-                </button>
-
-                {/* Safety actions for direct chats */}
-                {activeConversation?.other_user?.id && (
-                  <button
-                    onClick={async () => {
-                      const targetId = activeConversation.other_user.id
-                      const wasBlocked = Boolean(activeConversation.blocked_by_me)
-                      setShowMenu(false)
-                      triggerHaptic('medium')
-                      const ok = wasBlocked ? await unblockUser(targetId) : await blockUser(targetId)
-                      if (ok) toast.success(wasBlocked ? 'User unblocked' : 'User blocked')
-                      else toast.error(wasBlocked ? 'Could not unblock user' : 'Could not block user')
-                    }}
-                    className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors ${
-                      isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
-                    }`}
-                  >
-                    <Ban className={`w-4 h-4 ${isLight ? 'text-rose-600' : 'text-rose-400'}`} />
-                    <span>{activeConversation.blocked_by_me ? 'Unblock User' : 'Block User'}</span>
-                  </button>
-                )}
-                {activeConversation?.other_user?.id && (
-                  <button
-                    onClick={() => {
-                      setShowReportModal(true)
-                      setShowMenu(false)
-                    }}
-                    className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors ${
-                      isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
-                    }`}
-                  >
-                    <Flag className={`w-4 h-4 ${isLight ? 'text-rose-600' : 'text-rose-400'}`} />
-                    <span>Report User</span>
-                  </button>
-                )}
-
-                {/* Pin / Unpin Active Chat */}
-                {activeRoomId && (
-                  <button
-                    onClick={(e) => {
-                      togglePinConversation(e, activeRoomId)
-                      setShowMenu(false)
-                    }}
-                    className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors cursor-pointer ${
-                      isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
-                    }`}
-                  >
-                    <Pin className={`w-4 h-4 ${pinnedRoomIds.includes(activeRoomId) ? 'text-[#facc15] fill-[#facc15]' : isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-                    <span>{pinnedRoomIds.includes(activeRoomId) ? 'Unpin Conversation' : 'Pin Conversation to Top'}</span>
-                  </button>
-                )}
-
-                {/* Clear Active Chat */}
-                <button
-                  onClick={() => {
-                    requestConfirm({
-                      title: 'Clear conversation?',
-                      message: 'Clear all messages in this conversation? This cannot be undone.',
-                      confirmLabel: 'Clear',
-                      destructive: true,
-                      onConfirm: async () => {
-                        const cleared = await clearChatHistory()
-                        setShowMenu(false)
-                        if (cleared) toast.success('Conversation cleared')
-                        else toast.error('Could not clear this conversation')
-                      },
-                    })
-                  }}
-                  className={`w-full px-4 py-2.5 text-left text-xs font-bold flex items-center gap-2.5 transition-colors ${
-                    isLight ? 'hover:bg-slate-50 text-slate-800' : 'hover:bg-[#202024] text-[#f4f4f5]'
-                  }`}
-                >
-                  <RotateCcw className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-                  <span>Clear Conversation</span>
-                </button>
-
-                <div className={`h-px my-1 ${isLight ? 'bg-slate-200' : 'bg-[#27272a]'}`}></div>
-
-                <button
-                  onClick={handleLogout}
-                  className="w-full px-4 py-2.5 text-left text-xs font-bold text-rose-500 hover:bg-rose-500/10 flex items-center gap-2.5 transition-colors"
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span>Sign Out</span>
-                </button>
-              </div>
-            )}
-          </div>
         </div>
       </header>
 
@@ -5123,56 +5376,288 @@ export default function ChatConversation() {
           {friends && friends.length > 0 && (
             <div className={`p-3 border-b ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#121215]'}`}>
               <div className="flex items-center justify-between mb-2">
-                <span className={`text-[10px] font-black uppercase tracking-wider ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-                  Friends ({friends.length})
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddFriendModal(true)
-                    setFriendModalTab('search')
-                  }}
-                  className={`text-[10px] font-black ${isLight ? 'text-amber-700' : 'text-[#facc15]'}`}
-                >
-                  + Add
-                </button>
-              </div>
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {friends.map((fr) => (
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[10px] font-black uppercase tracking-wider ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                    Friends ({friends.length})
+                  </span>
+                  {friendsSortMode !== 'online' && (
+                    <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded-full bg-amber-500/15 text-amber-500">
+                      {friendsSortMode === 'alphabetical' ? 'A-Z' : 'Recent'}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5">
                   <button
-                    key={fr.friend_id}
                     type="button"
-                    onClick={() => handleDirectChatStart({ id: fr.friend_id, username: fr.username, name: fr.name })}
-                    title={`Chat with @${fr.username || fr.name}`}
-                    className={`shrink-0 w-20 p-2 rounded-2xl border flex flex-col items-center gap-1 active:scale-95 transition-all cursor-pointer ${
-                      isLight
-                        ? 'bg-slate-50 border-slate-200 hover:border-amber-300'
-                        : 'bg-[#18181b] border-[#27272a] hover:border-[#facc15]/40'
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setShowAddFriendModal(true)
+                      setFriendModalTab('search')
+                    }}
+                    className={`text-[10px] font-black px-2 py-0.5 rounded-lg border transition-all active:scale-95 cursor-pointer flex items-center gap-1 ${
+                      isLight 
+                        ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200' 
+                        : 'bg-yellow-500/10 hover:bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
                     }`}
                   >
-                    <div className="relative shrink-0">
-                      <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs overflow-hidden ${
-                        isLight ? 'bg-amber-100 text-amber-700' : 'bg-yellow-500/20 text-[#facc15]'
-                      }`}>
-                        {fr.profile_image ? (
-                          <img src={resolveMediaUrl(fr.profile_image)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
-                        ) : (
-                          (fr.name?.[0] || fr.username?.[0] || 'U').toUpperCase()
-                        )}
-                      </span>
-                      {fr.is_online ? (
-                        <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center pointer-events-none" title="Online">
-                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-[#18181b]" />
-                        </span>
-                      ) : null}
-                    </div>
-                    <span className={`text-[10px] font-bold truncate w-full text-center ${isLight ? 'text-slate-800' : 'text-white'}`}>
-                      @{fr.username || fr.name}
-                    </span>
-                    <span className="text-[9px] font-black text-emerald-500 uppercase">Message</span>
+                    <Plus className="w-3 h-3" />
+                    <span>Add</span>
                   </button>
-                ))}
+
+                  {/* 3-Dot Kebab Menu Button (Desktop & Touch) */}
+                  <div className="relative" ref={friendsMenuRef}>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        triggerHaptic('light')
+                        setShowFriendsMenu((prev) => !prev)
+                      }}
+                      className={`p-1 rounded-lg border transition-all active:scale-90 cursor-pointer ${
+                        showFriendsMenu
+                          ? isLight ? 'bg-amber-100 border-amber-300 text-amber-900 shadow-xs' : 'bg-yellow-500/20 border-yellow-500/40 text-[#facc15] shadow-xs'
+                          : isLight ? 'hover:bg-slate-100 text-slate-600 border-transparent hover:border-slate-200' : 'hover:bg-[#1f1f24] text-zinc-400 border-transparent hover:border-[#2f2f38]'
+                      }`}
+                      title="Friends Options & Settings"
+                      aria-label="Friends options and settings"
+                    >
+                      <MoreVertical className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Dropdown Menu */}
+                    {showFriendsMenu && (
+                      <div 
+                        onClick={(e) => e.stopPropagation()}
+                        className={`absolute right-0 top-full mt-1.5 w-60 rounded-2xl border shadow-2xl p-1.5 z-40 animate-popover-spring origin-top-right ${
+                          isLight 
+                            ? 'bg-white/95 backdrop-blur-md border-slate-200 text-slate-900 shadow-slate-300/60' 
+                            : 'bg-[#151518]/95 backdrop-blur-md border-[#2b2b32] text-white shadow-black/90'
+                        }`}
+                      >
+                        <div className="px-2.5 py-1.5 border-b border-amber-500/15 mb-1 flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
+                            <Users className="w-3 h-3" />
+                            Friends &amp; Chat Tools
+                          </span>
+                          <span className="text-[9.5px] font-mono opacity-50">{friends.length} friends</span>
+                        </div>
+
+                        {/* Add Friend */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic('light')
+                            setShowFriendsMenu(false)
+                            setShowAddFriendModal(true)
+                            setFriendModalTab('search')
+                          }}
+                          className={`w-full px-2.5 py-1.5 text-left rounded-xl text-xs font-bold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                            isLight ? 'hover:bg-amber-50 text-slate-800' : 'hover:bg-yellow-500/10 text-zinc-200'
+                          }`}
+                        >
+                          <UserPlus className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Add New Friend</span>
+                        </button>
+
+                        {/* Friend Requests */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic('light')
+                            setShowFriendsMenu(false)
+                            setShowAddFriendModal(true)
+                            setFriendModalTab('requests')
+                          }}
+                          className={`w-full px-2.5 py-1.5 text-left rounded-xl text-xs font-bold flex items-center justify-between transition-colors cursor-pointer ${
+                            isLight ? 'hover:bg-amber-50 text-slate-800' : 'hover:bg-yellow-500/10 text-zinc-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Users className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Friend Requests</span>
+                          </div>
+                          {pendingRequestsCount > 0 && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-black text-[9px] font-mono font-black">
+                              {pendingRequestsCount} new
+                            </span>
+                          )}
+                        </button>
+
+                        {/* Disappearing Messages Quick Action */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic('light')
+                            setShowFriendsMenu(false)
+                            setDisappearingModalContact(activeConversation)
+                            setShowDisappearingModal(true)
+                          }}
+                          className={`w-full px-2.5 py-1.5 text-left rounded-xl text-xs font-bold flex items-center justify-between transition-colors cursor-pointer ${
+                            isLight ? 'hover:bg-amber-50 text-slate-800' : 'hover:bg-yellow-500/10 text-zinc-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500/30" />
+                            <span>Auto-Delete (SMS Seen)</span>
+                          </div>
+                          <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-400">
+                            {currentDisappearingMode === 'seen' ? 'Seen ⚡' : currentDisappearingMode === 'off' ? 'Off' : currentDisappearingMode}
+                          </span>
+                        </button>
+
+                        {/* Sort Friends Submenu / Toggles */}
+                        <div className="pt-1 mt-1 border-t border-amber-500/10 space-y-0.5">
+                          <span className="px-2.5 py-1 text-[9px] font-black uppercase tracking-wider opacity-50 block">
+                            Sort Friends By
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              triggerHaptic('light')
+                              setFriendsSortMode('online')
+                            }}
+                            className={`w-full px-2.5 py-1 text-left rounded-lg text-[11px] font-bold flex items-center justify-between cursor-pointer ${
+                              friendsSortMode === 'online'
+                                ? isLight ? 'bg-amber-100 text-amber-900' : 'bg-yellow-500/20 text-[#facc15]'
+                                : isLight ? 'hover:bg-slate-100 text-slate-600' : 'hover:bg-white/5 text-zinc-400'
+                            }`}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Active / Online First
+                            </span>
+                            {friendsSortMode === 'online' && <Check className="w-3 h-3 text-amber-500" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              triggerHaptic('light')
+                              setFriendsSortMode('alphabetical')
+                            }}
+                            className={`w-full px-2.5 py-1 text-left rounded-lg text-[11px] font-bold flex items-center justify-between cursor-pointer ${
+                              friendsSortMode === 'alphabetical'
+                                ? isLight ? 'bg-amber-100 text-amber-900' : 'bg-yellow-500/20 text-[#facc15]'
+                                : isLight ? 'hover:bg-slate-100 text-slate-600' : 'hover:bg-white/5 text-zinc-400'
+                            }`}
+                          >
+                            <span>Alphabetical (A - Z)</span>
+                            {friendsSortMode === 'alphabetical' && <Check className="w-3 h-3 text-amber-500" />}
+                          </button>
+                        </div>
+
+                        {/* All Settings Shortcut */}
+                        <div className="pt-1 mt-1 border-t border-amber-500/10">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              triggerHaptic('light')
+                              setShowFriendsMenu(false)
+                              setShowProfileDrawer(true)
+                            }}
+                            className={`w-full px-2.5 py-1.5 text-left rounded-xl text-xs font-bold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                              isLight ? 'hover:bg-amber-50 text-slate-800' : 'hover:bg-yellow-500/10 text-zinc-200'
+                            }`}
+                          >
+                            <Settings className="w-3.5 h-3.5 text-amber-500" />
+                            <span>All Chat &amp; App Settings</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Friends Horizontal Scroll List (Tap to Chat, Tap & Hold on Mobile / 3-Dot on Desktop for Settings) */}
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none overscroll-x-contain">
+                {sortedFriends.map((fr) => {
+                  const friendDisappearing = getDisappearingMode(fr)
+                  const isOnline = Boolean(
+                    fr.is_online || 
+                    (activeConversation && (sameId(fr.friend_id, activeConversation.other_user?.id) || sameId(fr.friend_id, activeConversation.contact_id)) && isContactOnline)
+                  )
+
+                  return (
+                    <div key={fr.friend_id} className="relative group shrink-0">
+                      <button
+                        type="button"
+                        onTouchStart={() => handleFriendTouchStart(fr)}
+                        onTouchEnd={(e) => handleFriendTouchEnd(e, fr)}
+                        onTouchMove={handleFriendTouchMove}
+                        onContextMenu={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          triggerHaptic('medium')
+                          setFriendQuickActionsTarget(fr)
+                        }}
+                        onClick={(e) => {
+                          if (isLongPressTriggeredRef.current) {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            return
+                          }
+                          handleDirectChatStart({ id: fr.friend_id, username: fr.username, name: fr.name })
+                        }}
+                        title={`Chat with @${fr.username || fr.name}\n• Mobile: Tap & hold for friend settings\n• Desktop: Click 3-dot or right-click`}
+                        className={`w-20 p-2 rounded-2xl border flex flex-col items-center gap-1 active:scale-95 tap-bounce transition-all cursor-pointer select-none ${
+                          isLight
+                            ? 'bg-slate-50 border-slate-200 hover:border-amber-300'
+                            : 'bg-[#18181b] border-[#27272a] hover:border-[#facc15]/40'
+                        }`}
+                      >
+                        <div className="relative shrink-0">
+                          <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs overflow-hidden ${
+                            isLight ? 'bg-amber-100 text-amber-700' : 'bg-yellow-500/20 text-[#facc15]'
+                          }`}>
+                            {fr.profile_image ? (
+                              <img src={resolveMediaUrl(fr.profile_image)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover pointer-events-none" />
+                            ) : (
+                              (fr.name?.[0] || fr.username?.[0] || 'U').toUpperCase()
+                            )}
+                          </span>
+                          {isOnline ? (
+                            <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center pointer-events-none" title="Online">
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-[#18181b] animate-presence-beacon" />
+                            </span>
+                          ) : null}
+                          {friendDisappearing !== 'off' && (
+                            <span 
+                              className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-black text-[8px] font-black pointer-events-none shadow-xs border border-white dark:border-black" 
+                              title={`Auto-delete: ${friendDisappearing === 'seen' ? 'After seen' : friendDisappearing}`}
+                            >
+                              ⚡
+                            </span>
+                          )}
+                        </div>
+                        <span className={`text-[10px] font-bold truncate w-full text-center ${isLight ? 'text-slate-800' : 'text-white'}`}>
+                          {getContactDisplayName(fr) || fr.name || (fr.username ? `@${fr.username}` : 'Friend')}
+                        </span>
+                        <span className="text-[9px] font-black text-emerald-500 uppercase">Message</span>
+                      </button>
+
+                      {/* Desktop Only 3-Dot Options Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          triggerHaptic('light')
+                          setFriendQuickActionsTarget(fr)
+                        }}
+                        className={`hidden md:flex absolute top-1 right-1 p-0.5 rounded-md border opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xs ${
+                          isLight 
+                            ? 'bg-white/95 hover:bg-white text-slate-700 border-slate-300' 
+                            : 'bg-[#18181b]/95 hover:bg-[#25252c] text-zinc-300 border-[#2f2f38]'
+                        }`}
+                        title={`Settings for ${fr.name || fr.username}`}
+                        aria-label={`Settings for ${fr.name || fr.username}`}
+                      >
+                        <MoreVertical className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -5183,7 +5668,7 @@ export default function ChatConversation() {
             onScroll={() => {
               if (openSwipeId) setOpenSwipeId(null)
             }}
-            className="flex-1 overflow-y-auto divide-y divide-transparent overscroll-y-contain relative"
+            className="flex-1 overflow-y-auto divide-y divide-transparent overscroll-y-contain relative pb-24 md:pb-4"
           >
             {/* Pull-to-Refresh Visual Spring Indicator */}
             {(pullY > 0 || isPullRefreshing) && (
@@ -5332,7 +5817,12 @@ export default function ChatConversation() {
               <>
                 {filteredConversations.map((conv) => {
                   const isSelected = sameId(activeRoomId, conv.id)
-                  const isOnline = Boolean((sameId(activeRoomId, conv.id) && peerOnline) || conv.contact_online)
+                  const isOnline = Boolean(
+                    (sameId(activeRoomId, conv.id) && isContactOnline) || 
+                    conv.contact_online ||
+                    conv.other_user?.is_online ||
+                    (friends && friends.some((f) => (sameId(f.friend_id, conv.other_user?.id) || sameId(f.friend_id, conv.contact_id)) && f.is_online))
+                  )
                   const roomDraft = drafts[conv.id]?.trim()
                   const hasDraft = Boolean(roomDraft && !isSelected)
                   const isSentByMe = Boolean(chatUser?.id && sameId(conv.last_message_user_id, chatUser.id))
@@ -5410,7 +5900,12 @@ export default function ChatConversation() {
                             }`}>
                               <span className="truncate">{getContactDisplayName(conv)}</span>
                               {getContactCustomNickname(conv) && (
-                                <Tag className="w-2.5 h-2.5 text-amber-500 shrink-0 opacity-70" title={`Alias (Original: ${conv.contact_name})`} />
+                                <Tag className="w-2.5 h-2.5 text-amber-500 shrink-0 opacity-70" title={`Custom device name (Original: ${conv.contact_name})`} />
+                              )}
+                              {conv.contact_public_key && (
+                                <span title="Text messages are end-to-end encrypted" className="inline-flex items-center text-emerald-500/80 shrink-0">
+                                  <Lock className="w-2.5 h-2.5" />
+                                </span>
                               )}
                             </h4>
 
@@ -5531,22 +6026,10 @@ export default function ChatConversation() {
 
                               {/* Unread badge pill */}
                               {conv.unread_count > 0 && (
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black shadow-xs ${
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black shadow-xs animate-badge-bounce ${
                                   isLight ? 'bg-amber-500 text-white' : 'bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] shadow-yellow-500/20'
                                 }`}>
                                   {conv.unread_count}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Username & E2EE text-message indicator */}
-                          <div className={`text-[10px] font-mono mt-0.5 flex items-center justify-between ${isLight ? 'text-amber-700/80' : 'text-[#facc15]/80'}`}>
-                            <div className="flex items-center gap-1">
-                              <span>@{conv.contact_username}</span>
-                              {conv.contact_public_key && (
-                                <span title="Text messages are end-to-end encrypted" className="inline-flex items-center opacity-70">
-                                  <Lock className="w-2.5 h-2.5" />
                                 </span>
                               )}
                             </div>
@@ -5581,7 +6064,7 @@ export default function ChatConversation() {
           </div>
 
           {/* Floating Action Button (FAB) for Mobile Chat List (WhatsApp / Telegram style New Chat FAB) */}
-          <div className="md:hidden fixed right-5 bottom-6 z-40">
+          <div className="md:hidden fixed right-5 bottom-[max(1.5rem,env(safe-area-inset-bottom,1.5rem))] z-40">
             <button
               type="button"
               onClick={() => {
@@ -5590,7 +6073,7 @@ export default function ChatConversation() {
                 setShowAddFriendModal(true)
               }}
               title="Start new chat or add friend"
-              className="w-14 h-14 rounded-full bg-gradient-to-tr from-[#eab308] to-[#facc15] text-[#09090b] shadow-2xl shadow-yellow-500/40 flex items-center justify-center hover:scale-105 active:scale-95 transition-all cursor-pointer"
+              className="w-14 h-14 rounded-full bg-gradient-to-tr from-[#eab308] to-[#facc15] text-[#09090b] shadow-2xl shadow-yellow-500/40 flex items-center justify-center hover:scale-105 active:scale-95 animate-fab-spring tap-bounce transition-all cursor-pointer"
             >
               <UserPlus className="w-6 h-6 stroke-[2.2]" />
             </button>
@@ -5656,11 +6139,11 @@ export default function ChatConversation() {
                   >
                     <div className="relative shrink-0">
                       {/* Subtle Ambient Aura when Online */}
-                      {peerOnline && (
+                      {isContactOnline && (
                         <div className="absolute -inset-1 rounded-2xl bg-emerald-500/25 blur-md pointer-events-none -z-10 animate-ambient-glow" />
                       )}
                       <div className={`p-0.5 rounded-2xl bg-gradient-to-tr transition-all ${
-                        peerOnline
+                        isContactOnline
                           ? 'from-[#facc15] via-emerald-400/50 to-[#eab308]'
                           : isLight 
                             ? 'from-amber-200 to-amber-300' 
@@ -5683,7 +6166,7 @@ export default function ChatConversation() {
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
                           <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-500 border-2 border-white dark:border-[#121215]" />
                         </span>
-                      ) : peerOnline ? (
+                      ) : isContactOnline ? (
                         <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center pointer-events-none" title="Online">
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                           <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-[#121215] presence-beacon" />
@@ -5692,18 +6175,18 @@ export default function ChatConversation() {
                     </div>
 
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <h3 className={`text-sm font-black truncate group-hover:underline flex items-center gap-1.5 ${
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <h3 className={`text-sm font-black truncate group-hover:underline flex items-center gap-1.5 min-w-0 ${
                           isLight ? 'text-slate-900' : 'text-white'
                         }`}>
-                          <span>{getContactDisplayName(activeConversation)}</span>
+                          <span className="truncate">{getContactDisplayName(activeConversation)}</span>
                           {getContactCustomNickname(activeConversation) && (
-                            <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-amber-500/15 text-amber-500 dark:text-[#facc15] font-bold shrink-0 border border-amber-500/25" title={`Alias (Original: ${activeConversation.contact_name})`}>
-                              alias
+                            <span className="hidden sm:inline-block text-[9px] font-mono px-1 py-0.2 rounded bg-amber-500/15 text-amber-500 dark:text-[#facc15] font-bold shrink-0 border border-amber-500/25" title={`Custom device name (Original: ${activeConversation.contact_name})`}>
+                              custom
                             </span>
                           )}
                         </h3>
-                        <ShieldCheck className={`w-4 h-4 shrink-0 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
+                        <ShieldCheck className={`w-3.5 h-3.5 shrink-0 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                         {isRoomMuted(activeRoomId) && (
                           <button
                             type="button"
@@ -5712,11 +6195,11 @@ export default function ChatConversation() {
                               triggerHaptic('light')
                               setShowMuteModal(true)
                             }}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-rose-500/15 text-rose-500 border border-rose-500/30 hover:bg-rose-500/25 transition-all cursor-pointer"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-rose-500/15 text-rose-500 border border-rose-500/30 hover:bg-rose-500/25 transition-all cursor-pointer shrink-0"
                             title={`Notifications muted (${getMuteRemainingLabel(activeRoomId)}). Click to manage.`}
                           >
                             <VolumeX className="w-3 h-3 shrink-0" />
-                            <span>{getMuteRemainingLabel(activeRoomId)}</span>
+                            <span className="hidden sm:inline">{getMuteRemainingLabel(activeRoomId)}</span>
                           </button>
                         )}
                         {currentDisappearingMode !== 'off' && (
@@ -5727,7 +6210,7 @@ export default function ChatConversation() {
                               triggerHaptic('light')
                               setShowDisappearingModal(true)
                             }}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-amber-500/15 text-amber-500 dark:text-[#facc15] border border-amber-500/30 hover:bg-amber-500/25 transition-all cursor-pointer"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-amber-500/15 text-amber-500 dark:text-[#facc15] border border-amber-500/30 hover:bg-amber-500/25 transition-all cursor-pointer shrink-0"
                             title={`Disappearing messages: ${currentDisappearingMode === 'seen' ? 'Auto-delete after seen' : currentDisappearingMode}`}
                           >
                             {currentDisappearingMode === 'seen' ? (
@@ -5739,17 +6222,23 @@ export default function ChatConversation() {
                           </button>
                         )}
                       </div>
-                      <p className="text-[11px] font-mono flex items-center gap-1.5">
-                        <span className={isLight ? 'text-amber-700 font-bold' : 'text-[#facc15] font-bold'}>
-                          @{activeConversation.contact_username}
+                      <p className="text-[11px] font-medium flex items-center gap-1.5">
+                        <span className={`text-[10.5px] font-bold flex items-center gap-1.5 ${
+                          peerTyping 
+                            ? 'text-amber-500 animate-pulse' 
+                            : isContactOnline 
+                              ? 'text-emerald-500' 
+                              : isLight ? 'text-slate-400' : 'text-zinc-500'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            peerTyping ? 'bg-amber-400 animate-ping' : isContactOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' : 'bg-zinc-500/50'
+                          }`} />
+                          <span>{peerTyping ? 'typing…' : (isContactOnline ? 'Online' : 'Offline')}</span>
                         </span>
-                        <span className={`opacity-40 ${isLight ? 'text-slate-400' : 'text-[#71717a]'}`}>•</span>
-                        <span className={`text-[10px] font-bold ${peerTyping ? 'text-amber-500' : peerOnline ? 'text-emerald-500' : 'opacity-50'}`}>
-                          {peerTyping ? 'typing…' : (peerOnline ? 'Online' : 'Offline')}
-                        </span>
-                        <span className={`opacity-40 ${isLight ? 'text-slate-400' : 'text-[#71717a]'}`}>•</span>
-                        <span className="text-[10px] text-emerald-500 font-bold flex items-center gap-0.5">
-                          <Lock className="w-2.5 h-2.5" /> {activeConversation?.contact_public_key ? 'Text E2EE' : 'Encrypted text (legacy)'}
+                        <span className={`opacity-30 ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>•</span>
+                        <span className="text-[10px] text-emerald-500 font-mono font-bold flex items-center gap-1" title="End-to-End Encrypted Messaging">
+                          <Lock className="w-2.5 h-2.5" />
+                          <span>{activeConversation?.contact_public_key ? 'Text E2EE' : 'Encrypted text'}</span>
                         </span>
                       </p>
                     </div>
@@ -5935,9 +6424,9 @@ export default function ChatConversation() {
                   </div>
                 </div>
 
-                {/* Older-history pagination (loads one 200-message page) */}
+                {/* Smart Chat Load pagination banner */}
                 {messagesHasMore && (
-                  <div className="text-center py-2">
+                  <div className="text-center py-2 animate-in fade-in duration-200">
                     {loadingOlderMessages ? (
                       <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-yellow-500/30 text-[#facc15] text-[11px] font-mono font-bold shadow-xs animate-pulse">
                         <RotateCw className="w-3.5 h-3.5 animate-spin text-[#facc15]" />
@@ -5951,15 +6440,16 @@ export default function ChatConversation() {
                     ) : (
                       <button
                         type="button"
-                        onClick={loadOlderMessages}
+                        onClick={handleSmartLoadOlder}
                         className={`px-3 py-1.5 rounded-xl border text-[11px] font-bold transition-all active:scale-95 cursor-pointer inline-flex items-center gap-1.5 ${
                           isLight
                             ? 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 shadow-xs'
                             : 'bg-[#18181b] border-[#27272a] text-zinc-300 hover:bg-[#202026]'
                         }`}
+                        title="Scroll up or click to load earlier messages"
                       >
                         <Clock className="w-3.5 h-3.5 opacity-60" />
-                        <span>Load older messages</span>
+                        <span>Scroll up or click to load earlier messages</span>
                       </button>
                     )}
                   </div>
@@ -6246,6 +6736,10 @@ export default function ChatConversation() {
                       <div
                         key={item.id}
                         id={`chat-msg-${m.id}`}
+                        style={{
+                          contentVisibility: 'auto',
+                          containIntrinsicSize: '64px'
+                        }}
                         className={`chat-message-row w-full flex flex-col transition-all duration-300 rounded-2xl ${
                           isSearchingChat && chatSearchQuery.trim() && sameId(m.id, chatSearchMatches[chatSearchMatchIndex])
                             ? 'ring-2 ring-amber-400 bg-amber-400/15 p-1 -m-1 shadow-[0_0_24px_rgba(250,204,21,0.35)]'
@@ -6272,21 +6766,15 @@ export default function ChatConversation() {
                           className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[85%] sm:max-w-[70%] ${
                             isUser ? 'ml-auto' : 'mr-auto'
                           } ${isFirstInGroup ? 'mt-2.5 sm:mt-3' : 'mt-1'} ${isLastInGroup ? 'mb-2' : 'mb-0.5'} ${
-                            m._pending ? 'animate-message-pop' : 'animate-message-entrance'
+                            m._pending ? 'animate-message-pop' : (isUser ? 'animate-bubble-user' : 'animate-bubble-peer')
                           }`}
                         >
                           <SwipeableMessageBubble
                             isUser={isUser}
                             m={m}
-                            onSwipeReply={(msg) => {
-                              setReplyTo(msg)
-                              if (textareaRef.current) textareaRef.current.focus()
-                            }}
+                            onSwipeReply={handleSwipeReply}
                             onDoubleTap={handleDoubleTapReaction}
-                            onLongPress={(msg, rect) => {
-                              triggerHaptic('heavy')
-                              handleOpenActionMenu(msg, rect)
-                            }}
+                            onLongPress={handleLongPressMessage}
                           >
                             <div
                               id={`msg-${m.id}`}
@@ -6616,7 +7104,7 @@ export default function ChatConversation() {
                                   {/* Document (PDF) Attachment */}
                                   {m.media_url && getChatAttachmentKind(m) === 'document' && (
                                     <a
-                                      href={resolveMediaUrl(m.media_url)}
+                                      href={sanitizeSafeUrl(resolveMediaUrl(m.media_url))}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className={`mb-2 p-2.5 rounded-xl border flex items-center gap-3 transition-all ${
@@ -6712,7 +7200,7 @@ export default function ChatConversation() {
                                               key={r.emoji}
                                               type="button"
                                               onClick={() => toggleReaction(m.id, r.emoji)}
-                                              className={`px-1.5 py-0.5 rounded-full text-[11px] border active:scale-95 transition ${
+                                              className={`px-1.5 py-0.5 rounded-full text-[11px] border active:scale-95 transition animate-reaction-pop ${
                                                 r.mine
                                                   ? 'bg-amber-500/20 border-amber-500/50'
                                                   : isUser
@@ -6782,35 +7270,50 @@ export default function ChatConversation() {
                   })
                 )}
 
+                {/* Modern iMessage/Telegram 3-Dot Wave Typing Indicator */}
+                {peerTyping && (
+                  <div className="flex items-center gap-2 mb-2 animate-bubble-peer">
+                    <div className={`px-4 py-2.5 rounded-2xl rounded-bl-sm border flex items-center gap-1.5 shadow-xs ${
+                      isLight ? 'bg-white border-slate-200 text-slate-700' : 'bg-[#18181b] border-[#27272a] text-zinc-300'
+                    }`}>
+                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-typing-dot-1" />
+                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-typing-dot-2" />
+                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-typing-dot-3" />
+                    </div>
+                  </div>
+                )}
+
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Jump to latest message Floating Action Button (FAB) */}
-              {showScrollBottomFab && (
-                <button
-                  type="button"
-                  onClick={handleJumpToBottom}
-                  className="absolute right-4 sm:right-7 bottom-20 z-30 p-2.5 sm:p-3 rounded-full bg-gradient-to-tr from-[#facc15] to-[#eab308] text-[#09090b] shadow-xl shadow-yellow-500/25 hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 font-black cursor-pointer animate-in fade-in slide-in-from-bottom-3"
-                  title="Jump to latest message"
-                  aria-label="Jump to latest message"
-                >
-                  <ChevronDown className="w-5 h-5 stroke-[2.5]" />
-                  {unreadBelowCount > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-[#09090b] text-[#facc15] shadow-xs">
-                      {unreadBelowCount}
-                    </span>
-                  )}
-                </button>
-              )}
-
               {/* Active Chat Message Input Bar */}
-              <footer className={`relative shrink-0 border-t p-2.5 sm:p-3 ${
-                isKeyboardOpen ? 'pb-2' : 'pb-[max(0.75rem,env(safe-area-inset-bottom,0px))]'
-              } z-20 transition-colors backdrop-blur-2xl ${
-                isLight
-                  ? 'bg-white/95 border-slate-200/80 shadow-[0_-4px_24px_rgba(0,0,0,0.03)]'
-                  : 'bg-[#0f0f12]/95 border-white/5 shadow-[0_-4px_30px_rgba(0,0,0,0.5)]'
-              }`}>
+              <footer
+                ref={footerRef}
+                className={`relative shrink-0 border-t p-2.5 sm:p-3 ${
+                  isKeyboardOpen ? 'pb-2' : 'pb-[max(0.75rem,env(safe-area-inset-bottom,0px))]'
+                } z-20 transition-colors backdrop-blur-2xl ${
+                  isLight
+                    ? 'bg-white/95 border-slate-200/80 shadow-[0_-4px_24px_rgba(0,0,0,0.03)]'
+                    : 'bg-[#0f0f12]/95 border-white/5 shadow-[0_-4px_30px_rgba(0,0,0,0.5)]'
+                }`}
+              >
+                {/* Jump to latest message Floating Action Button (FAB) - dynamically anchored above footer */}
+                {showScrollBottomFab && (
+                  <button
+                    type="button"
+                    onClick={handleJumpToBottom}
+                    className="absolute right-4 sm:right-7 bottom-full mb-3 z-30 p-2.5 sm:p-3 rounded-full bg-gradient-to-tr from-[#facc15] to-[#eab308] text-[#09090b] shadow-xl shadow-yellow-500/25 hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 font-black cursor-pointer animate-fab-spring"
+                    title="Jump to latest message"
+                    aria-label="Jump to latest message"
+                  >
+                    <ChevronDown className="w-5 h-5 stroke-[2.5]" />
+                    {unreadBelowCount > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-[#09090b] text-[#facc15] shadow-xs">
+                        {unreadBelowCount}
+                      </span>
+                    )}
+                  </button>
+                )}
                 {/* ── ATTACHMENT TRAY POPOVER (WhatsApp / Telegram 4-Tile Luxury Drawer) ── */}
                 {showAttachmentTray && !isBlockedConversation && (
                   <>
@@ -6818,7 +7321,7 @@ export default function ChatConversation() {
                       className="fixed inset-0 z-30"
                       onClick={() => setShowAttachmentTray(false)}
                     />
-                    <div className={`absolute bottom-full left-2 sm:left-4 mb-3 p-3.5 rounded-3xl border shadow-2xl z-40 grid grid-cols-3 gap-3.5 sm:gap-5 animate-in fade-in zoom-in-95 duration-150 backdrop-blur-2xl ${
+                    <div className={`absolute bottom-full left-2 sm:left-4 mb-3 p-3.5 rounded-3xl border shadow-2xl z-40 grid grid-cols-3 gap-3.5 sm:gap-5 animate-popover-spring origin-bottom-left backdrop-blur-2xl ${
                       isLight
                         ? 'bg-white/95 border-slate-200 shadow-slate-300/70'
                         : 'bg-[#18181b]/95 border-white/10 shadow-black/80'
@@ -6896,7 +7399,7 @@ export default function ChatConversation() {
                       className="fixed inset-0 z-30"
                       onClick={() => setShowEmojiPicker(false)}
                     />
-                    <div className={`absolute bottom-full left-2 sm:left-14 mb-3 w-[320px] sm:w-[360px] max-w-[calc(100vw-1rem)] p-3 rounded-3xl border shadow-2xl z-40 animate-in fade-in zoom-in-95 duration-150 backdrop-blur-2xl ${
+                    <div className={`absolute bottom-full left-2 sm:left-14 mb-3 w-[320px] sm:w-[360px] max-w-[calc(100vw-1rem)] p-3 rounded-3xl border shadow-2xl z-40 animate-popover-spring origin-bottom-left backdrop-blur-2xl ${
                       isLight
                         ? 'bg-white/95 border-slate-200 shadow-slate-300/70'
                         : 'bg-[#18181b]/95 border-white/10 shadow-black/80'
@@ -6950,23 +7453,38 @@ export default function ChatConversation() {
                 )}
 
                 {replyTo && (
-                  <div className={`max-w-4xl mx-auto mb-2 px-3 py-2 rounded-xl border-l-4 flex items-center justify-between gap-2 backdrop-blur-md transition-all ${
+                  <div className={`max-w-4xl mx-auto mb-2 px-3 py-2 rounded-xl flex items-center justify-between gap-2.5 transition-all shadow-md animate-in fade-in slide-in-from-bottom-2 duration-150 overflow-hidden relative border ${
                     isLight
-                      ? 'bg-amber-50/80 border-amber-500 text-slate-700'
-                      : 'bg-[#18181b]/80 border-[#facc15] text-zinc-200'
+                      ? 'bg-amber-50/95 border-amber-200/80 text-slate-800 shadow-slate-200/50'
+                      : 'bg-[#18181b] border-white/5 text-zinc-100 shadow-black/40'
                   }`}>
-                    <div className="min-w-0">
-                      <p className={`text-[10px] font-black truncate ${isLight ? 'text-amber-700' : 'text-[#facc15]'}`}>
-                        Replying to {replyTo.sender_name || 'message'}
-                      </p>
-                      <p className="text-[11px] truncate opacity-85">
-                        {replyTo.deleted ? 'This message was deleted' : replyTo.message}
-                      </p>
+                    {/* Solid accent bar on left - 100% immune to WebKit asymmetric border distortion */}
+                    <div className={`absolute left-0 top-0 bottom-0 w-1 ${isLight ? 'bg-amber-500' : 'bg-[#facc15]'}`} />
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1 pl-1">
+                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                        isLight ? 'bg-amber-100 text-amber-800' : 'bg-yellow-500/15 text-[#facc15]'
+                      }`}>
+                        <Reply className="w-3.5 h-3.5 stroke-[2.2]" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-[10px] font-black truncate uppercase tracking-wider ${isLight ? 'text-amber-700' : 'text-[#facc15]'}`}>
+                          Replying to {replyTo.sender_name || 'Message'}
+                        </p>
+                        <p className="text-[11px] truncate opacity-90 font-medium">
+                          {replyTo.deleted || replyTo.message_type === 'deleted'
+                            ? 'This message was deleted'
+                            : (replyTo.message || (replyTo.media_url ? 'Attachment' : 'Message'))}
+                        </p>
+                      </div>
                     </div>
                     <button
                       type="button"
                       onClick={() => setReplyTo(null)}
-                      className="p-1 shrink-0 opacity-70 hover:opacity-100 cursor-pointer"
+                      className={`p-1.5 rounded-lg shrink-0 transition-colors cursor-pointer ${
+                        isLight ? 'hover:bg-slate-200/70 text-slate-500 hover:text-slate-800' : 'hover:bg-white/10 text-zinc-400 hover:text-white'
+                      }`}
+                      title="Cancel reply"
+                      aria-label="Cancel reply"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -6974,19 +7492,27 @@ export default function ChatConversation() {
                 )}
 
                 {editingId && (
-                  <div className={`max-w-4xl mx-auto mb-2 px-3 py-2 rounded-xl border-l-4 flex items-center justify-between gap-2 backdrop-blur-md transition-all ${
+                  <div className={`max-w-4xl mx-auto mb-2 px-3 py-2 rounded-xl flex items-center justify-between gap-2.5 transition-all shadow-md animate-in fade-in slide-in-from-bottom-2 duration-150 overflow-hidden relative border ${
                     isLight
-                      ? 'bg-amber-50/80 border-amber-500 text-slate-700'
-                      : 'bg-[#18181b]/80 border-[#facc15] text-zinc-200'
+                      ? 'bg-amber-50/95 border-amber-200/80 text-slate-800 shadow-slate-200/50'
+                      : 'bg-[#18181b] border-white/5 text-zinc-100 shadow-black/40'
                   }`}>
-                    <div className="min-w-0">
-                      <p className={`text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 ${isLight ? 'text-amber-700' : 'text-[#facc15]'}`}>
-                        <Edit3 className="w-3.5 h-3.5" />
-                        Editing message
-                      </p>
-                      <p className="text-[11px] truncate opacity-85">
-                        Press Enter or Send to save changes
-                      </p>
+                    {/* Solid accent bar on left */}
+                    <div className={`absolute left-0 top-0 bottom-0 w-1 ${isLight ? 'bg-amber-500' : 'bg-[#facc15]'}`} />
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1 pl-1">
+                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                        isLight ? 'bg-amber-100 text-amber-800' : 'bg-yellow-500/15 text-[#facc15]'
+                      }`}>
+                        <Edit3 className="w-3.5 h-3.5 stroke-[2.2]" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-[10px] font-black uppercase tracking-wider ${isLight ? 'text-amber-700' : 'text-[#facc15]'}`}>
+                          Editing message
+                        </p>
+                        <p className="text-[11px] truncate opacity-90 font-medium">
+                          Press Enter or Send to save changes
+                        </p>
+                      </div>
                     </div>
                     <button
                       type="button"
@@ -6995,7 +7521,9 @@ export default function ChatConversation() {
                         setInputText('')
                         if (textareaRef.current) textareaRef.current.style.height = 'auto'
                       }}
-                      className="p-1 shrink-0 opacity-70 hover:opacity-100 cursor-pointer"
+                      className={`p-1.5 rounded-lg shrink-0 transition-colors cursor-pointer ${
+                        isLight ? 'hover:bg-slate-200/70 text-slate-500 hover:text-slate-800' : 'hover:bg-white/10 text-zinc-400 hover:text-white'
+                      }`}
                       title="Cancel edit"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -7166,7 +7694,7 @@ export default function ChatConversation() {
                       <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
                         <span className="relative flex h-3.5 w-3.5 shrink-0">
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-500 shadow-xs shadow-rose-500/50"></span>
+                          <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-500 shadow-xs shadow-rose-500/50 animate-mic-recording"></span>
                         </span>
                         <span className="text-xs font-mono font-black text-rose-500 tracking-wider shrink-0">
                           {formatRecordingDuration(recordingDuration)}
@@ -7248,7 +7776,7 @@ export default function ChatConversation() {
                       <textarea
                         ref={textareaRef}
                         rows={1}
-                        placeholder={enterToSend ? "Type a message (Shift+Enter for new line)..." : "Type a message (Enter for new line)..."}
+                        placeholder={mobileView === 'chat' ? "Type a message…" : (enterToSend ? "Type a message (Shift+Enter for new line)…" : "Type a message (Enter for new line)…")}
                         value={inputText}
                         enterKeyHint={enterToSend ? "send" : "enter"}
                         onFocus={() => {
@@ -7460,7 +7988,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Add friend"
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88vh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 ${
+            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88vh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-[#f4f4f5]'
             }`}
           >
@@ -7901,7 +8429,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="My profile"
             tabIndex={-1}
-            className={`w-full max-w-lg rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90vh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 ${
+            className={`w-full max-w-lg rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90vh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
             }`}
           >
@@ -7929,19 +8457,36 @@ export default function ChatConversation() {
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHaptic('light')
-                  setShowProfileDrawer(false)
-                }}
-                className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                  isLight ? 'hover:bg-slate-200 text-slate-500' : 'hover:bg-[#27272a] text-zinc-400 hover:text-white'
-                }`}
-                title="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setProfileTab(profileTab === 'settings' || profileTab === 'preferences' ? 'profile' : 'settings')
+                  }}
+                  className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                    profileTab === 'settings' || profileTab === 'preferences'
+                      ? isLight ? 'bg-amber-100 text-amber-800' : 'bg-yellow-500/20 text-[#facc15]'
+                      : isLight ? 'hover:bg-slate-200 text-slate-500' : 'hover:bg-[#27272a] text-zinc-400 hover:text-white'
+                  }`}
+                  title={profileTab === 'settings' || profileTab === 'preferences' ? 'Back to Profile' : 'Open Settings'}
+                >
+                  <Settings className="w-5 h-5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setShowProfileDrawer(false)
+                  }}
+                  className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                    isLight ? 'hover:bg-slate-200 text-slate-500' : 'hover:bg-[#27272a] text-zinc-400 hover:text-white'
+                  }`}
+                  title="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Segmented Tab Bar */}
@@ -7950,10 +8495,10 @@ export default function ChatConversation() {
             }`}>
               {[
                 { id: 'profile', label: 'Profile', Icon: User },
-                { id: 'preferences', label: 'Preferences', Icon: Sliders },
+                { id: 'settings', label: 'Settings', Icon: Settings },
                 { id: 'security', label: 'Security & Data', Icon: ShieldCheck }
               ].map(({ id, label, Icon }) => {
-                const active = profileTab === id
+                const active = profileTab === id || (id === 'settings' && profileTab === 'preferences')
                 return (
                   <button
                     key={id}
@@ -7993,7 +8538,29 @@ export default function ChatConversation() {
                       accept="image/png,image/jpeg,image/webp,image/gif"
                       className="hidden"
                     />
-                    <div className="relative group cursor-pointer" onClick={() => avatarFileInputRef.current?.click()}>
+                    <div
+                      className="relative group cursor-pointer"
+                      onClick={() => {
+                        if (chatUser?.profile_image) {
+                          triggerHaptic('light')
+                          openLightbox(
+                            resolveMediaUrl(chatUser.profile_image),
+                            [{
+                              url: resolveMediaUrl(chatUser.profile_image),
+                              id: 'my-avatar',
+                              caption: '',
+                              sender_name: chatUser?.name || 'My Profile',
+                              subtitle: chatUser?.username ? `@${chatUser.username}` : '',
+                              title: 'Profile Photo',
+                              is_avatar: true
+                            }]
+                          )
+                        } else {
+                          avatarFileInputRef.current?.click()
+                        }
+                      }}
+                      title={chatUser?.profile_image ? "Click to view full photo" : "Click to upload photo"}
+                    >
                       <div className={`w-24 h-24 rounded-3xl overflow-hidden flex items-center justify-center font-black text-3xl border-2 transition-all shadow-xl ${
                         isLight
                           ? 'bg-amber-100 text-amber-800 border-amber-300 ring-4 ring-amber-100/60'
@@ -8011,7 +8578,14 @@ export default function ChatConversation() {
                           <span>{chatUser?.name?.[0]?.toUpperCase() || 'U'}</span>
                         )}
                       </div>
-                      <div className="absolute -bottom-1 -right-1 p-2 rounded-xl bg-gradient-to-tr from-[#facc15] to-[#eab308] text-black shadow-lg shadow-yellow-500/30 group-hover:scale-110 active:scale-95 transition-all">
+                      <div 
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          avatarFileInputRef.current?.click()
+                        }}
+                        className="absolute -bottom-1 -right-1 p-2 rounded-xl bg-gradient-to-tr from-[#facc15] to-[#eab308] text-black shadow-lg shadow-yellow-500/30 group-hover:scale-110 active:scale-95 transition-all"
+                        title="Upload new photo"
+                      >
                         <Camera className="w-4 h-4" />
                       </div>
                     </div>
@@ -8029,6 +8603,45 @@ export default function ChatConversation() {
                     <p className={`text-[10px] mt-0.5 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
                       Supports JPG, PNG or WebP up to 8MB
                     </p>
+                  </div>
+
+                  {/* Prominent Settings Button inside Profile Page */}
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light')
+                        setProfileTab('settings')
+                      }}
+                      className={`w-full p-3.5 rounded-2xl border flex items-center justify-between transition-all cursor-pointer group active:scale-[0.99] ${
+                        isLight
+                          ? 'bg-gradient-to-r from-amber-50 to-amber-100/60 hover:from-amber-100 hover:to-amber-200/70 border-amber-200 text-slate-900 shadow-xs'
+                          : 'bg-gradient-to-r from-[#18181b] to-[#202025] hover:from-[#202025] hover:to-[#27272a] border-[#facc15]/30 hover:border-[#facc15]/60 text-white shadow-md shadow-yellow-500/5'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black transition-transform group-hover:rotate-45 duration-300 ${
+                          isLight ? 'bg-amber-500 text-white shadow-md shadow-amber-500/20' : 'bg-gradient-to-tr from-[#facc15] to-[#eab308] text-black shadow-md shadow-yellow-500/20'
+                        }`}>
+                          <Settings className="w-5 h-5" />
+                        </div>
+                        <div className="text-left">
+                          <div className="text-xs font-black flex items-center gap-1.5">
+                            <span>App Settings</span>
+                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-yellow-500/20 text-[#facc15] border border-yellow-500/30">
+                              All Settings
+                            </span>
+                          </div>
+                          <div className={`text-[10.5px] font-medium mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                            Themes, notifications, sounds, wallpaper &amp; security
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 text-xs font-bold text-amber-600 dark:text-[#facc15]">
+                        <span>Open</span>
+                        <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+                      </div>
+                    </button>
                   </div>
 
                   {/* Display Name */}
@@ -8233,15 +8846,15 @@ export default function ChatConversation() {
                 </form>
               )}
 
-              {/* TAB 2: PREFERENCES (THEME, CHAT EXPERIENCE, SOUNDS) */}
-              {profileTab === 'preferences' && (
-                <div className="space-y-5">
-                  {/* Appearance Theme Selector */}
+              {/* TAB 2: COMPREHENSIVE SETTINGS HUB */}
+              {(profileTab === 'settings' || profileTab === 'preferences') && (
+                <div className="space-y-5 animate-in fade-in duration-150">
+                  {/* 1. Appearance Theme Selector */}
                   <div className="space-y-2.5">
                     <div className="flex items-center gap-1.5">
                       <Palette className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                       <h4 className={`text-xs font-black uppercase tracking-wider ${isLight ? 'text-slate-900' : 'text-white'}`}>
-                        Color Theme
+                        Color Theme &amp; Appearance
                       </h4>
                     </div>
 
@@ -8261,7 +8874,10 @@ export default function ChatConversation() {
                           <button
                             key={id}
                             type="button"
-                            onClick={() => setChatTheme(id)}
+                            onClick={() => {
+                              triggerHaptic('light')
+                              setChatTheme(id)
+                            }}
                             className={`w-full p-3 rounded-2xl border flex items-center gap-3 text-left transition-all cursor-pointer ${
                               selected
                                 ? isLight
@@ -8294,7 +8910,7 @@ export default function ChatConversation() {
                     </div>
                   </div>
 
-                  {/* Chat Experience Toggles */}
+                  {/* 2. Chat Controls & Behaviors */}
                   <div className="space-y-3 pt-2 border-t border-inherit">
                     <div className="flex items-center gap-1.5">
                       <Sliders className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
@@ -8379,7 +8995,45 @@ export default function ChatConversation() {
                       </button>
                     </div>
 
-                    {/* Push Notifications Setup */}
+                    {/* Chat Wallpaper Customizer */}
+                    <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                    }`}>
+                      <div className="min-w-0">
+                        <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                          <Palette className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Chat Wallpapers</span>
+                        </div>
+                        <div className={`text-[10px] font-medium mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                          {activeConversation ? `Active Chat: ${activeWallpaperPreset?.name || 'Default'}` : 'Customize background presets per conversation'}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (activeConversation) {
+                            setShowProfileDrawer(false)
+                            setShowWallpaperModal(true)
+                          } else {
+                            toast('Open any chat conversation to customize its wallpaper', { icon: '🎨' })
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-black text-xs font-black cursor-pointer active:scale-95 transition-all shadow-sm shrink-0"
+                      >
+                        {activeConversation ? 'Change' : 'Open'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 3. Push Notifications Setup */}
+                  <div className="space-y-3 pt-2 border-t border-inherit">
+                    <div className="flex items-center gap-1.5">
+                      <Bell className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
+                      <h4 className={`text-xs font-black uppercase tracking-wider ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                        Notifications &amp; Alerts
+                      </h4>
+                    </div>
+
                     <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
                       isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
                     }`}>
@@ -8404,6 +9058,247 @@ export default function ChatConversation() {
                         Enable
                       </button>
                     </div>
+                  </div>
+
+                  {/* 4. App Installation (PWA) */}
+                  {!isPwaInstalled && !isCapacitorNative() && (
+                    <div className="space-y-3 pt-2 border-t border-inherit">
+                      <div className="flex items-center gap-1.5">
+                        <Download className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
+                        <h4 className={`text-xs font-black uppercase tracking-wider ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                          App Installation
+                        </h4>
+                      </div>
+
+                      <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
+                        isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                      }`}>
+                        <div className="min-w-0">
+                          <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                            <Download className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Install JDLX App</span>
+                          </div>
+                          <div className={`text-[10px] font-medium mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                            Install JDLX Chat on your phone or desktop home screen
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerPwaInstall()
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-black text-xs font-black cursor-pointer active:scale-95 transition-all shadow-sm shrink-0"
+                        >
+                          Install
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 5. Active Chat Actions (If user has an active chat open) */}
+                  {activeRoomId && activeConversation && (
+                    <div className="space-y-3 pt-2 border-t border-inherit">
+                      <div className="flex items-center gap-1.5">
+                        <Sparkles className={`w-4 h-4 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
+                        <h4 className={`text-xs font-black uppercase tracking-wider ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                          Active Chat: {getContactDisplayName(activeConversation)}
+                        </h4>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {/* Pin Active Chat */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            togglePinConversation(e, activeRoomId)
+                          }}
+                          className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
+                            isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-[#27272a] hover:bg-[#202025] text-zinc-300'
+                          }`}
+                        >
+                          <Pin className={`w-4 h-4 shrink-0 ${pinnedRoomIds.includes(activeRoomId) ? 'text-[#facc15] fill-[#facc15]' : 'text-amber-500'}`} />
+                          <div className="min-w-0">
+                            <div className="text-xs font-black">{pinnedRoomIds.includes(activeRoomId) ? 'Unpin Conversation' : 'Pin to Top'}</div>
+                            <div className="text-[10px] text-zinc-400 truncate">{pinnedRoomIds.includes(activeRoomId) ? 'Pinned chat' : 'Keep at top'}</div>
+                          </div>
+                        </button>
+
+                        {/* Clear Active Chat */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            requestConfirm({
+                              title: 'Clear conversation?',
+                              message: 'Clear all messages in this conversation? This cannot be undone.',
+                              confirmLabel: 'Clear',
+                              destructive: true,
+                              onConfirm: async () => {
+                                const cleared = await clearChatHistory()
+                                if (cleared) toast.success('Conversation cleared')
+                                else toast.error('Could not clear this conversation')
+                              },
+                            })
+                          }}
+                          className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
+                            isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-[#27272a] hover:bg-[#202025] text-zinc-300'
+                          }`}
+                        >
+                          <RotateCcw className="w-4 h-4 text-amber-500 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-xs font-black">Clear Messages</div>
+                            <div className="text-[10px] text-zinc-400 truncate">Delete chat history</div>
+                          </div>
+                        </button>
+
+                        {/* Block / Unblock Contact */}
+                        {activeConversation?.other_user?.id && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const targetId = activeConversation.other_user.id
+                              const wasBlocked = Boolean(activeConversation.blocked_by_me)
+                              triggerHaptic('medium')
+                              const ok = wasBlocked ? await unblockUser(targetId) : await blockUser(targetId)
+                              if (ok) toast.success(wasBlocked ? 'User unblocked' : 'User blocked')
+                              else toast.error(wasBlocked ? 'Could not block user' : 'Could not block user')
+                            }}
+                            className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
+                              isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-[#27272a] hover:bg-[#202025] text-zinc-300'
+                            }`}
+                          >
+                            <Ban className="w-4 h-4 text-rose-500 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-black">{activeConversation.blocked_by_me ? 'Unblock User' : 'Block User'}</div>
+                              <div className="text-[10px] text-zinc-400 truncate">{activeConversation.blocked_by_me ? 'Restore messaging' : 'Block messages'}</div>
+                            </div>
+                          </button>
+                        )}
+
+                        {/* Report User */}
+                        {activeConversation?.other_user?.id && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowProfileDrawer(false)
+                              setShowReportModal(true)
+                            }}
+                            className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
+                              isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-[#27272a] hover:bg-[#202025] text-zinc-300'
+                            }`}
+                          >
+                            <Flag className="w-4 h-4 text-rose-500 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-black">Report User</div>
+                              <div className="text-[10px] text-zinc-400 truncate">Flag abuse or spam</div>
+                            </div>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 6. Security, Encryption & Recovery PIN Shortcut */}
+                  <div className="space-y-3 pt-2 border-t border-inherit">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                        <h4 className={`text-xs font-black uppercase tracking-wider ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                          Security &amp; Encryption
+                        </h4>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerHaptic('light')
+                          setProfileTab('security')
+                        }}
+                        className="text-[10px] font-black text-amber-500 hover:underline cursor-pointer"
+                      >
+                        View Full Details →
+                      </button>
+                    </div>
+
+                    <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                    }`}>
+                      <div className="min-w-0">
+                        <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
+                          <Key className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Encrypted Key Recovery PIN</span>
+                        </div>
+                        <div className={`text-[10px] font-medium mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                          Restore your encrypted chats securely on any device
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowProfileDrawer(false)
+                          openRecoverySetup()
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-black text-xs font-black cursor-pointer active:scale-95 transition-all shadow-sm shrink-0"
+                      >
+                        Set PIN
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 7. Storage & Maintenance */}
+                  <div className="space-y-3 pt-2 border-t border-inherit">
+                    <div className="flex items-center gap-1.5">
+                      <Database className="w-4 h-4 text-blue-500" />
+                      <h4 className={`text-xs font-black uppercase tracking-wider ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                        Storage &amp; Data
+                      </h4>
+                    </div>
+
+                    <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                    }`}>
+                      <div>
+                        <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                          <span>Clear App Cache</span>
+                        </div>
+                        <div className={`text-[10px] font-medium mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                          Free up device storage and refresh chat media cache
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleClearCache}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer shrink-0 active:scale-95 ${
+                          isLight
+                            ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                            : 'bg-[#27272a] border-[#3f3f46] text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        Clear Cache
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 8. Sign Out Section */}
+                  <div className="pt-2 border-t border-inherit">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        requestConfirm({
+                          title: 'Log out?',
+                          message: 'Are you sure you want to log out of JDLX Chat?',
+                          confirmLabel: 'Log out',
+                          destructive: true,
+                          icon: 'logout',
+                          onConfirm: () => {
+                            chatLogout(true)
+                            setShowProfileDrawer(false)
+                          },
+                        })
+                      }}
+                      className="w-full py-2.5 rounded-2xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-xs font-black flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span>Log Out of JDLX Chat</span>
+                    </button>
                   </div>
                 </div>
               )}
@@ -8621,7 +9516,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Notifications"
             tabIndex={-1}
-            className={`w-full sm:max-w-sm max-h-[85vh] sm:max-h-full rounded-t-[32px] sm:rounded-none border-t sm:border-t-0 sm:border-l flex flex-col shadow-2xl animate-in slide-in-from-bottom-8 sm:slide-in-from-right duration-200 sm:duration-250 transition-colors pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full sm:max-w-sm max-h-[85vh] sm:max-h-full rounded-t-[32px] sm:rounded-none border-t sm:border-t-0 sm:border-l flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-drawer-spring-right transition-colors pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
             }`}
           >
@@ -8808,9 +9703,9 @@ export default function ChatConversation() {
         const anchor = actionMessageAnchor
         const hasAnchor = Boolean(anchor && anchor.top !== undefined && anchor.bottom !== undefined)
 
-        // Safe screen bounds (status header & bottom bar)
+        // Safe screen bounds (status header & dynamic footer height)
         const headerSafeTop = 64
-        const footerSafeBottom = 76
+        const footerSafeBottom = footerRef.current?.offsetHeight ? footerRef.current.offsetHeight + 10 : 76
 
         const bubbleTop = hasAnchor ? Math.max(headerSafeTop, anchor.top) : vh / 2
         const bubbleBottom = hasAnchor ? Math.min(vh - footerSafeBottom, anchor.bottom) : vh / 2
@@ -8859,7 +9754,7 @@ export default function ChatConversation() {
                 ),
                 ...emojiHorizontalStyle,
               }}
-              className={`z-50 p-1 sm:p-1.5 rounded-full border shadow-2xl backdrop-blur-2xl flex items-center gap-0.5 sm:gap-1 animate-in zoom-in-75 duration-200 ease-out origin-center ${
+              className={`z-50 p-1 sm:p-1.5 rounded-full border shadow-2xl backdrop-blur-2xl flex items-center gap-0.5 sm:gap-1 animate-popover-spring origin-center ${
                 isLight 
                   ? 'bg-white/95 border-slate-200/90 shadow-slate-400/30 text-slate-800' 
                   : 'bg-[#1e1e24]/95 border-[#32323a] shadow-black/90 text-white'
@@ -8895,7 +9790,7 @@ export default function ChatConversation() {
                 ),
                 ...horizontalStyle,
               }}
-              className={`z-50 w-52 sm:w-56 p-1.5 rounded-2xl border shadow-2xl backdrop-blur-2xl transition-all animate-in zoom-in-95 duration-150 space-y-0.5 ${
+              className={`z-50 w-52 sm:w-56 max-h-[calc(100vh-140px)] overflow-y-auto p-1.5 rounded-2xl border shadow-2xl backdrop-blur-2xl transition-all animate-popover-spring space-y-0.5 custom-scrollbar ${
                 isLight 
                   ? 'bg-white/95 border-slate-200/90 text-slate-800 shadow-slate-400/40' 
                   : 'bg-[#18181d]/95 border-[#2c2c34] text-white shadow-black/90'
@@ -9061,7 +9956,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Report user"
             tabIndex={-1}
-            className={`w-full max-w-sm rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b p-5 sm:p-6 space-y-4 animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
+            className={`w-full max-w-sm rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b p-5 sm:p-6 space-y-4 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
               isLight ? 'bg-white border-slate-200' : 'bg-[#121214] border-[#27272a]'
             }`}
           >
@@ -9353,19 +10248,22 @@ export default function ChatConversation() {
               <div className="min-w-0 flex flex-col">
                 <div className="flex items-center gap-2">
                   <span className="text-white text-sm sm:text-base font-bold truncate">
-                    {previewImages.length > 1
+                    {previewImages[previewIndex]?.title || (previewImages.length > 1
                       ? `${previewIndex + 1} of ${previewImages.length}`
-                      : 'Photo'}
+                      : 'Photo')}
                   </span>
                   <div className="w-1.5 h-1.5 rounded-full bg-[#facc15] shrink-0" />
-                  <span className="text-zinc-400 text-xs font-medium truncate hidden xs:inline">
-                    JDLX Chat
+                  <span className="text-zinc-400 text-xs font-medium truncate">
+                    {previewImages[previewIndex]?.sender_name || 'JDLX Chat'}
                   </span>
                 </div>
                 {previewImages[previewIndex] && (
                   <p className="text-[11px] text-zinc-400 font-medium truncate">
-                    {previewImages[previewIndex].sender_name ? `${previewImages[previewIndex].sender_name} • ` : ''}
-                    {previewImages[previewIndex].created_at ? formatMessageTime(previewImages[previewIndex].created_at) : ''}
+                    {previewImages[previewIndex].subtitle || (
+                      previewImages[previewIndex].created_at
+                        ? `${previewImages[previewIndex].sender_name ? `${previewImages[previewIndex].sender_name} • ` : ''}${formatMessageTime(previewImages[previewIndex].created_at)}`
+                        : (previewImages[previewIndex].sender_name ? `${previewImages[previewIndex].sender_name}` : '')
+                    )}
                   </p>
                 )}
               </div>
@@ -9515,102 +10413,126 @@ export default function ChatConversation() {
               </>
             )}
 
-            <div
-              className={`relative flex items-center justify-center max-w-full max-h-full ${
-                isClosingPreview ? 'animate-viewer-image-exit' : 'animate-viewer-image'
-              }`}
-            >
-              <img
-                key={selectedPreviewImage}
-                src={selectedPreviewImage}
-                alt="Enlarged Attachment"
-                style={{
-                  transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${previewZoom}) rotate(${previewRotation}deg)`,
-                  cursor: previewZoom > 1 ? 'grab' : 'zoom-in'
-                }}
-                onPointerDown={(e) => {
-                  if (previewZoom > 1) {
-                    isPanningRef.current = true
-                    panStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y }
-                    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
-                  }
-                }}
-                onPointerMove={(e) => {
-                  if (isPanningRef.current && previewZoom > 1) {
-                    setPanOffset({
-                      x: e.clientX - panStartRef.current.x,
-                      y: e.clientY - panStartRef.current.y
-                    })
-                  }
-                }}
-                onPointerUp={(e) => {
-                  isPanningRef.current = false
-                  try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
-                }}
-                onPointerCancel={(e) => {
-                  isPanningRef.current = false
-                  try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
-                }}
-                onDoubleClick={() => {
-                  if (previewZoom > 1) {
-                    setPreviewZoom(1)
-                    setPanOffset({ x: 0, y: 0 })
-                  } else {
-                    setPreviewZoom(2)
-                  }
-                }}
-                onTouchStart={(e) => {
-                  if (e.touches.length === 1 && previewZoom === 1) {
-                    swipeTouchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
-                  }
-                  if (e.touches.length === 2) {
-                    const dist = Math.hypot(
-                      e.touches[0].clientX - e.touches[1].clientX,
-                      e.touches[0].clientY - e.touches[1].clientY
-                    )
-                    touchDistRef.current = dist
-                  }
-                }}
-                onTouchMove={(e) => {
-                  if (e.touches.length === 2 && touchDistRef.current) {
-                    const dist = Math.hypot(
-                      e.touches[0].clientX - e.touches[1].clientX,
-                      e.touches[0].clientY - e.touches[1].clientY
-                    )
-                    const diff = dist - touchDistRef.current
-                    if (Math.abs(diff) > 8) {
-                      setPreviewZoom((z) => {
-                        const next = Math.max(1, Math.min(3.5, +(z + (diff > 0 ? 0.08 : -0.08)).toFixed(2)))
-                        if (next === 1) setPanOffset({ x: 0, y: 0 })
-                        return next
-                      })
-                      touchDistRef.current = dist
-                    }
-                  }
-                }}
-                onTouchEnd={(e) => {
-                  touchDistRef.current = null
-                  if (e.changedTouches.length === 1 && previewZoom === 1) {
-                    const diffX = e.changedTouches[0].clientX - swipeTouchStartRef.current.x
-                    const diffY = e.changedTouches[0].clientY - swipeTouchStartRef.current.y
-                    // Swipe down to dismiss gesture (Telegram / WhatsApp standard)
-                    if (diffY > 70 && Math.abs(diffY) > Math.abs(diffX) * 1.5) {
-                      handleClosePreview()
-                      return
-                    }
-                    // Swipe left / right navigation
-                    if (Math.abs(diffX) > 40 && Math.abs(diffX) > Math.abs(diffY) * 1.5) {
-                      if (diffX < 0) {
-                        handleNextPreview()
-                      } else {
-                        handlePrevPreview()
+            {(() => {
+              const currentPreview = previewImages[previewIndex]
+              const isAvatarPreview = Boolean(
+                currentPreview?.is_avatar ||
+                currentPreview?.id === 'avatar' ||
+                currentPreview?.id === 'contact-avatar' ||
+                currentPreview?.id === 'my-avatar' ||
+                currentPreview?.title === 'Profile Photo' ||
+                currentPreview?.url === resolveMediaUrl(activeConversation?.contact_avatar) ||
+                (chatUser?.profile_image && currentPreview?.url === resolveMediaUrl(chatUser.profile_image))
+              )
+
+              return (
+                <div
+                  className={`relative flex items-center justify-center max-w-full max-h-full ${
+                    isClosingPreview ? 'animate-viewer-image-exit' : 'animate-viewer-image'
+                  }`}
+                >
+                  {/* Luxury Ambient Halo Glow behind Profile Photos */}
+                  {isAvatarPreview && (
+                    <div className="absolute -inset-6 sm:-inset-12 rounded-[50px] bg-gradient-to-tr from-[#facc15]/30 via-amber-500/20 to-yellow-600/10 blur-3xl pointer-events-none -z-10 animate-ambient-glow" />
+                  )}
+
+                  <img
+                    key={selectedPreviewImage}
+                    src={selectedPreviewImage}
+                    alt={isAvatarPreview ? "Profile Photo" : "Enlarged Attachment"}
+                    style={{
+                      transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${previewZoom}) rotate(${previewRotation}deg)`,
+                      cursor: previewZoom > 1 ? 'grab' : 'zoom-in'
+                    }}
+                    onPointerDown={(e) => {
+                      if (previewZoom > 1) {
+                        isPanningRef.current = true
+                        panStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y }
+                        try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
                       }
+                    }}
+                    onPointerMove={(e) => {
+                      if (isPanningRef.current && previewZoom > 1) {
+                        setPanOffset({
+                          x: e.clientX - panStartRef.current.x,
+                          y: e.clientY - panStartRef.current.y
+                        })
+                      }
+                    }}
+                    onPointerUp={(e) => {
+                      isPanningRef.current = false
+                      try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+                    }}
+                    onPointerCancel={(e) => {
+                      isPanningRef.current = false
+                      try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+                    }}
+                    onDoubleClick={() => {
+                      if (previewZoom > 1) {
+                        setPreviewZoom(1)
+                        setPanOffset({ x: 0, y: 0 })
+                      } else {
+                        setPreviewZoom(2)
+                      }
+                    }}
+                    onTouchStart={(e) => {
+                      if (e.touches.length === 1 && previewZoom === 1) {
+                        swipeTouchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+                      }
+                      if (e.touches.length === 2) {
+                        const dist = Math.hypot(
+                          e.touches[0].clientX - e.touches[1].clientX,
+                          e.touches[0].clientY - e.touches[1].clientY
+                        )
+                        touchDistRef.current = dist
+                      }
+                    }}
+                    onTouchMove={(e) => {
+                      if (e.touches.length === 2 && touchDistRef.current) {
+                        const dist = Math.hypot(
+                          e.touches[0].clientX - e.touches[1].clientX,
+                          e.touches[0].clientY - e.touches[1].clientY
+                        )
+                        const diff = dist - touchDistRef.current
+                        if (Math.abs(diff) > 8) {
+                          setPreviewZoom((z) => {
+                            const next = Math.max(1, Math.min(3.5, +(z + (diff > 0 ? 0.08 : -0.08)).toFixed(2)))
+                            if (next === 1) setPanOffset({ x: 0, y: 0 })
+                            return next
+                          })
+                          touchDistRef.current = dist
+                        }
+                      }
+                    }}
+                    onTouchEnd={(e) => {
+                      touchDistRef.current = null
+                      if (e.changedTouches.length === 1 && previewZoom === 1) {
+                        const diffX = e.changedTouches[0].clientX - swipeTouchStartRef.current.x
+                        const diffY = e.changedTouches[0].clientY - swipeTouchStartRef.current.y
+                        // Swipe down to dismiss gesture (Telegram / WhatsApp standard)
+                        if (diffY > 70 && Math.abs(diffY) > Math.abs(diffX) * 1.5) {
+                          handleClosePreview()
+                          return
+                        }
+                        // Swipe left / right navigation
+                        if (Math.abs(diffX) > 40 && Math.abs(diffX) > Math.abs(diffY) * 1.5) {
+                          if (diffX < 0) {
+                            handleNextPreview()
+                          } else {
+                            handlePrevPreview()
+                          }
+                        }
+                      }
+                    }}
+                    className={
+                      isAvatarPreview
+                        ? "w-[min(88vw,420px)] h-[min(88vw,420px)] sm:w-[min(80vw,520px)] sm:h-[min(80vw,520px)] max-h-[75vh] sm:max-h-[80vh] aspect-square rounded-[36px] sm:rounded-[44px] object-cover shadow-2xl border-2 sm:border-4 border-yellow-500/30 ring-4 sm:ring-8 ring-black/60 transition-transform duration-75 select-none touch-none"
+                        : "max-h-[78vh] sm:max-h-[82vh] max-w-[92vw] min-w-[min(88vw,340px)] sm:min-w-[min(70vw,480px)] w-auto h-auto rounded-2xl object-contain shadow-2xl border border-white/10 transition-transform duration-75 select-none touch-none"
                     }
-                  }
-                }}
-                className="max-h-[75vh] sm:max-h-[80vh] max-w-full rounded-2xl object-contain shadow-2xl border border-white/10 transition-transform duration-75 select-none touch-none"
-              />
-            </div>
+                  />
+                </div>
+              )
+            })()}
           </div>
 
           {/* Caption Bar (if present on the photo) */}
@@ -9669,7 +10591,7 @@ export default function ChatConversation() {
             onClick={(e) => e.stopPropagation()}
             ref={contactDialogRef}
             tabIndex={-1}
-            className={`w-full max-w-md md:max-w-[420px] lg:max-w-[450px] md:h-full max-h-[92dvh] md:max-h-full rounded-t-[36px] md:rounded-none md:rounded-l-3xl border-t md:border-t-0 md:border-l shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 md:slide-in-from-right duration-300 flex flex-col ${
+            className={`w-full max-w-md md:max-w-[420px] lg:max-w-[450px] md:h-full max-h-[92dvh] md:max-h-full rounded-t-[36px] md:rounded-none md:rounded-l-3xl border-t md:border-t-0 md:border-l shadow-2xl overflow-hidden animate-sheet-spring-up md:animate-drawer-spring-right flex flex-col ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-400/30' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
             }`}
           >
@@ -9681,21 +10603,40 @@ export default function ChatConversation() {
                   <User className="w-3.5 h-3.5" />
                   Contact Info
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    triggerHaptic('light')
-                    setShowContactInfoModal(false)
-                  }}
-                  className={`p-1.5 rounded-full border transition-all cursor-pointer ${
-                    isLight 
-                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200' 
-                      : 'bg-[#1a1a20] hover:bg-[#25252c] text-zinc-300 border-[#2f2f38]'
-                  }`}
-                  title="Close (Esc)"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      const el = document.getElementById('contact-chat-settings-section')
+                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    }}
+                    className={`p-1.5 rounded-full border transition-all cursor-pointer ${
+                      isLight 
+                        ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200' 
+                        : 'bg-[#1a1a20] hover:bg-[#25252c] text-zinc-300 border-[#2f2f38]'
+                    }`}
+                    title="Friend & Chat Settings"
+                    aria-label="Friend and chat settings"
+                  >
+                    <Settings className="w-4 h-4 text-amber-500" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setShowContactInfoModal(false)
+                    }}
+                    className={`p-1.5 rounded-full border transition-all cursor-pointer ${
+                      isLight 
+                        ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200' 
+                        : 'bg-[#1a1a20] hover:bg-[#25252c] text-zinc-300 border-[#2f2f38]'
+                    }`}
+                    title="Close (Esc)"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -9707,7 +10648,18 @@ export default function ChatConversation() {
                   onClick={() => {
                     if (activeConversation.contact_avatar) {
                       triggerHaptic('light')
-                      openLightbox(resolveMediaUrl(activeConversation.contact_avatar))
+                      openLightbox(
+                        resolveMediaUrl(activeConversation.contact_avatar),
+                        [{
+                          url: resolveMediaUrl(activeConversation.contact_avatar),
+                          id: 'contact-avatar',
+                          caption: '',
+                          sender_name: getContactDisplayName(activeConversation),
+                          subtitle: activeConversation.contact_username ? `@${activeConversation.contact_username}` : '',
+                          title: 'Profile Photo',
+                          is_avatar: true
+                        }]
+                      )
                     }
                   }}
                   className={`relative group cursor-pointer ${activeConversation.contact_avatar ? 'hover:scale-[1.03] active:scale-95' : ''} transition-all duration-300`}
@@ -9718,7 +10670,7 @@ export default function ChatConversation() {
                     className={`absolute -inset-3 sm:-inset-4 rounded-[42px] blur-2xl pointer-events-none -z-10 animate-ambient-glow transition-all duration-700 ${
                       peerTyping
                         ? 'bg-gradient-to-tr from-amber-500/40 via-yellow-400/40 to-amber-600/30'
-                        : peerOnline
+                        : isContactOnline
                           ? 'bg-gradient-to-tr from-emerald-500/35 via-yellow-400/30 to-amber-500/25'
                           : isLight
                             ? 'bg-gradient-to-tr from-amber-400/20 to-yellow-300/25'
@@ -9730,7 +10682,7 @@ export default function ChatConversation() {
                   <div className={`p-1 rounded-[34px] bg-gradient-to-tr transition-all duration-300 shadow-2xl ${
                     peerTyping
                       ? 'from-amber-400 via-yellow-400 to-amber-600 shadow-amber-500/20'
-                      : peerOnline
+                      : isContactOnline
                         ? 'from-[#facc15] via-emerald-400/70 to-[#eab308] shadow-emerald-500/15'
                         : isLight
                           ? 'from-amber-200 via-amber-300 to-amber-400 shadow-amber-500/20'
@@ -9763,7 +10715,7 @@ export default function ChatConversation() {
                         ✏️
                       </span>
                     </span>
-                  ) : peerOnline ? (
+                  ) : isContactOnline ? (
                     <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center pointer-events-none z-10" title="Online now">
                       <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                       <span className="relative inline-flex h-4.5 w-4.5 rounded-full bg-emerald-500 border-2 border-white dark:border-[#121215] shadow-md presence-beacon ring-2 ring-emerald-500/30" />
@@ -9793,13 +10745,13 @@ export default function ChatConversation() {
                               triggerHaptic('light')
                               saveContactCustomData(activeConversation, { nickname: nicknameDraft.trim() })
                               setIsEditingNickname(false)
-                              toast.success(nicknameDraft.trim() ? 'Custom nickname saved!' : 'Nickname reset to default')
+                              toast.success(nicknameDraft.trim() ? 'Custom name saved on this device!' : 'Name reset to original')
                             } else if (e.key === 'Escape') {
                               setIsEditingNickname(false)
                               setNicknameDraft(getContactCustomNickname(activeConversation))
                             }
                           }}
-                          placeholder={`Nickname for ${activeConversation.contact_name}…`}
+                          placeholder={`Custom name for ${activeConversation.contact_name || 'friend'}…`}
                           autoFocus
                           maxLength={32}
                           className={`w-full px-3 py-1.5 text-xs sm:text-sm font-bold rounded-xl border focus:outline-hidden focus:ring-2 transition-all ${
@@ -9815,10 +10767,10 @@ export default function ChatConversation() {
                           triggerHaptic('light')
                           saveContactCustomData(activeConversation, { nickname: nicknameDraft.trim() })
                           setIsEditingNickname(false)
-                          toast.success(nicknameDraft.trim() ? 'Custom nickname saved!' : 'Nickname reset to default')
+                          toast.success(nicknameDraft.trim() ? 'Custom name saved on this device!' : 'Name reset to original')
                         }}
                         className="p-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-bold transition cursor-pointer shadow-xs shrink-0"
-                        title="Save nickname"
+                        title="Save custom name"
                       >
                         <Check className="w-4 h-4" />
                       </button>
@@ -9839,26 +10791,37 @@ export default function ChatConversation() {
                     </div>
                   ) : (
                     <div className="flex flex-col items-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <h3 className="text-lg sm:text-xl font-black tracking-tight">
+                      <div className="flex items-center justify-center gap-2">
+                        <h3 
+                          onClick={() => {
+                            triggerHaptic('light')
+                            setNicknameDraft(getContactCustomNickname(activeConversation) || activeConversation.contact_name || '')
+                            setIsEditingNickname(true)
+                          }}
+                          className="text-lg sm:text-xl font-black tracking-tight cursor-pointer hover:opacity-85 transition-opacity"
+                          title="Click to edit name on this device"
+                        >
                           {getContactDisplayName(activeConversation)}
                         </h3>
                         {verifiedContacts[activeConversation.id] ? (
-                          <ShieldCheck className="w-5 h-5 text-emerald-500" title="Security Code Verified" />
+                          <ShieldCheck className="w-5 h-5 text-emerald-500 shrink-0" title="Security Code Verified" />
                         ) : (
-                          <ShieldCheck className={`w-5 h-5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} title="Verified JDLX Contact" />
+                          <ShieldCheck className={`w-5 h-5 shrink-0 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} title="Verified JDLX Contact" />
                         )}
                         <button
                           type="button"
                           onClick={() => {
                             triggerHaptic('light')
-                            setNicknameDraft(getContactCustomNickname(activeConversation))
+                            setNicknameDraft(getContactCustomNickname(activeConversation) || activeConversation.contact_name || '')
                             setIsEditingNickname(true)
                           }}
-                          className={`p-1 rounded-lg opacity-60 hover:opacity-100 transition cursor-pointer ${
-                            isLight ? 'hover:bg-amber-100 text-amber-800' : 'hover:bg-yellow-500/20 text-[#facc15]'
+                          className={`p-1.5 rounded-xl border transition-all cursor-pointer shadow-xs active:scale-95 ${
+                            isLight 
+                              ? 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-800' 
+                              : 'bg-yellow-500/10 hover:bg-yellow-500/20 border-yellow-500/30 text-[#facc15]'
                           }`}
-                          title={getContactCustomNickname(activeConversation) ? "Edit custom nickname" : "Set custom nickname"}
+                          title={getContactCustomNickname(activeConversation) ? "Edit custom nickname" : "Set custom name on this device"}
+                          aria-label="Edit contact name"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
@@ -9929,7 +10892,7 @@ export default function ChatConversation() {
                     <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border transition-all shadow-xs ${
                       peerTyping
                         ? 'bg-amber-500/15 text-amber-500 border-amber-500/30 ring-2 ring-amber-400/20 animate-pulse'
-                        : peerOnline
+                        : isContactOnline
                           ? isLight
                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-emerald-500/5'
                             : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-emerald-500/10'
@@ -9938,18 +10901,18 @@ export default function ChatConversation() {
                             : 'bg-[#18181b] text-zinc-400 border-[#27272a]'
                     }`}>
                       <span className="relative flex h-2 w-2 shrink-0">
-                        {peerOnline && !peerTyping && (
+                        {isContactOnline && !peerTyping && (
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                         )}
                         {peerTyping && (
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
                         )}
                         <span className={`relative inline-flex rounded-full h-2 w-2 ${
-                          peerTyping ? 'bg-amber-400' : peerOnline ? 'bg-emerald-500' : 'bg-zinc-400 opacity-60'
+                          peerTyping ? 'bg-amber-400' : isContactOnline ? 'bg-emerald-500' : 'bg-zinc-400 opacity-60'
                         }`} />
                       </span>
                       <span className="tracking-tight">
-                        {peerTyping ? 'typing a message…' : (peerOnline ? 'Active now' : 'Offline')}
+                        {peerTyping ? 'typing a message…' : (isContactOnline ? 'Active now' : 'Offline')}
                       </span>
                     </div>
                   </div>
@@ -10245,157 +11208,257 @@ export default function ChatConversation() {
                 )}
               </div>
 
-              {/* ── DISAPPEARING MESSAGES CARD (Item 2.4 + Auto-delete after seen) ── */}
-              <div 
-                onClick={() => {
-                  triggerHaptic('light')
-                  setShowDisappearingModal(true)
-                }}
-                className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xs ${
-                  currentDisappearingMode !== 'off'
-                    ? isLight 
-                      ? 'bg-amber-50/90 border-amber-300 text-amber-950 shadow-amber-500/10' 
-                      : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
-                    : isLight
-                      ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                      : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
-                }`}
-                title="Configure disappearing messages"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
-                    currentDisappearingMode === 'seen'
-                      ? 'bg-amber-500/25 text-amber-400 border-amber-500/50 shadow-xs'
-                      : currentDisappearingMode !== 'off'
-                        ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/40'
-                        : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
-                  }`}>
-                    {currentDisappearingMode === 'seen' ? (
-                      <Zap className="w-4.5 h-4.5 fill-amber-400" />
-                    ) : (
-                      <Timer className="w-4.5 h-4.5" />
-                    )}
+              {/* ── DEDICATED FRIEND & CHAT SETTINGS HUB ── */}
+              <div id="contact-chat-settings-section" className="space-y-3 pt-2">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5" />
+                    Friend &amp; Chat Settings
+                  </span>
+                  <span className="text-[9.5px] font-mono opacity-50">Saved for this friend</span>
+                </div>
+
+                {/* ── DISAPPEARING MESSAGES CARD (Auto-delete after seen / View Once / Timers) ── */}
+                <div 
+                  className={`p-3.5 rounded-2xl border transition-all shadow-xs space-y-2.5 ${
+                    currentDisappearingMode !== 'off'
+                      ? isLight 
+                        ? 'bg-amber-50/90 border-amber-300 text-amber-950 shadow-amber-500/10' 
+                        : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
+                      : isLight
+                        ? 'bg-slate-50 border-slate-200 text-slate-800'
+                        : 'bg-[#18181b] border-[#27272a] text-zinc-200'
+                  }`}
+                >
+                  <div 
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setDisappearingModalContact(activeConversation)
+                      setShowDisappearingModal(true)
+                    }}
+                    className="flex items-center justify-between gap-3 cursor-pointer group"
+                    title="Configure disappearing messages timer"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
+                        currentDisappearingMode === 'seen'
+                          ? 'bg-amber-500/25 text-amber-400 border-amber-500/50 shadow-xs'
+                          : currentDisappearingMode !== 'off'
+                            ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/40'
+                            : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
+                      }`}>
+                        {currentDisappearingMode === 'seen' ? (
+                          <Zap className="w-4.5 h-4.5 fill-amber-400" />
+                        ) : (
+                          <Timer className="w-4.5 h-4.5" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-xs font-bold block truncate">
+                          Auto-Delete Messages (Seen Mode)
+                        </span>
+                        <span className="text-[11px] opacity-70 block truncate">
+                          {currentDisappearingMode === 'seen'
+                            ? '⚡ Auto-delete after seen (View Once)'
+                            : currentDisappearingMode === 'off'
+                              ? 'Off (Messages kept indefinitely)'
+                              : `Expires in ${currentDisappearingMode}`}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                        currentDisappearingMode === 'seen'
+                          ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                          : currentDisappearingMode !== 'off'
+                            ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
+                            : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                      }`}>
+                        {currentDisappearingMode === 'seen' ? 'Seen ⚡' : currentDisappearingMode === 'off' ? 'Off' : currentDisappearingMode}
+                      </span>
+                      <ChevronRight className="w-4 h-4 opacity-50 group-hover:translate-x-0.5 transition-transform" />
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <span className="text-xs font-bold block truncate">
-                      Disappearing Messages
-                    </span>
-                    <span className="text-[11px] opacity-70 block truncate">
-                      {currentDisappearingMode === 'seen'
-                        ? '⚡ Auto-delete after seen (View Once)'
-                        : currentDisappearingMode === 'off'
-                          ? 'Off'
-                          : `Expires in ${currentDisappearingMode}`}
-                    </span>
+
+                  {/* 4 One-Tap Direct Selectors */}
+                  <div className="grid grid-cols-4 gap-1.5 pt-1 border-t border-amber-500/10">
+                    {[
+                      { id: 'off', label: 'Off', icon: '⭕' },
+                      { id: 'seen', label: 'Seen ⚡', icon: '⚡' },
+                      { id: '1h', label: '1 Hour', icon: '⏱️' },
+                      { id: '24h', label: '24 Hours', icon: '⏳' },
+                    ].map((chip) => {
+                      const isCur = currentDisappearingMode === chip.id
+                      return (
+                        <button
+                          key={chip.id}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setRoomDisappearingMode(activeConversation, chip.id)
+                          }}
+                          className={`py-1.5 px-1 rounded-xl text-[10.5px] font-bold flex flex-col items-center justify-center gap-0.5 border transition-all cursor-pointer ${
+                            isCur
+                              ? isLight
+                                ? 'bg-amber-100 border-amber-400 text-amber-950 font-black shadow-xs ring-1 ring-amber-400/40'
+                                : 'bg-yellow-500/25 border-yellow-500/60 text-[#facc15] font-black shadow-xs ring-1 ring-yellow-500/40'
+                              : isLight
+                                ? 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700'
+                                : 'bg-[#141417] hover:bg-[#1f1f24] border-[#2b2b32] text-zinc-300'
+                          }`}
+                        >
+                          <span className="text-xs">{chip.icon}</span>
+                          <span className="truncate w-full text-center leading-tight">{chip.label}</span>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
-                    currentDisappearingMode === 'seen'
-                      ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
-                      : currentDisappearingMode !== 'off'
+
+                {/* ── CHAT WALLPAPER & THEME CARD (Item 2.7) ── */}
+                <div 
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setShowWallpaperModal(true)
+                  }}
+                  className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xs ${
+                    getContactWallpaper(activeConversation) !== 'default'
+                      ? isLight 
+                        ? 'bg-amber-50/90 border-amber-300 text-amber-950 shadow-amber-500/10' 
+                        : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
+                      : isLight
+                        ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
+                        : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                  }`}
+                  title="Change chat wallpaper & theme"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
+                      getContactWallpaper(activeConversation) !== 'default'
+                        ? 'bg-amber-500/20 text-[#facc15] border-yellow-500/40 shadow-xs'
+                        : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
+                    }`}>
+                      <Palette className="w-4.5 h-4.5 text-amber-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold block truncate">
+                        Chat Wallpaper &amp; Theme
+                      </span>
+                      <span className="text-[11px] opacity-70 block truncate">
+                        {CHAT_WALLPAPER_PRESETS.find((p) => p.id === getContactWallpaper(activeConversation))?.label || 'Default Theme'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                      getContactWallpaper(activeConversation) !== 'default'
                         ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
                         : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
-                  }`}>
-                    {currentDisappearingMode === 'seen' ? 'Seen ⚡' : currentDisappearingMode === 'off' ? 'Off' : currentDisappearingMode}
-                  </span>
-                  <ChevronRight className="w-4 h-4 opacity-50" />
-                </div>
-              </div>
-
-              {/* ── CHAT WALLPAPER & THEME CARD (Item 2.7) ── */}
-              <div 
-                onClick={() => {
-                  triggerHaptic('light')
-                  setShowWallpaperModal(true)
-                }}
-                className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xs ${
-                  getContactWallpaper(activeConversation) !== 'default'
-                    ? isLight 
-                      ? 'bg-amber-50/90 border-amber-300 text-amber-950 shadow-amber-500/10' 
-                      : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
-                    : isLight
-                      ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                      : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
-                }`}
-                title="Change chat wallpaper & theme"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
-                    getContactWallpaper(activeConversation) !== 'default'
-                      ? 'bg-amber-500/20 text-[#facc15] border-yellow-500/40 shadow-xs'
-                      : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
-                  }`}>
-                    <Palette className="w-4.5 h-4.5 text-amber-500" />
-                  </div>
-                  <div className="min-w-0">
-                    <span className="text-xs font-bold block truncate">
-                      Chat Wallpaper &amp; Theme
-                    </span>
-                    <span className="text-[11px] opacity-70 block truncate">
-                      {CHAT_WALLPAPER_PRESETS.find((p) => p.id === getContactWallpaper(activeConversation))?.label || 'Default Theme'}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
-                    getContactWallpaper(activeConversation) !== 'default'
-                      ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
-                      : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
-                  }`}>
-                    {CHAT_WALLPAPER_PRESETS.find((p) => p.id === getContactWallpaper(activeConversation))?.label || 'Default'}
-                  </span>
-                  <ChevronRight className="w-4 h-4 opacity-50" />
-                </div>
-              </div>
-
-              {/* ── STARRED / SAVED MESSAGES CARD (Item 2.8) ── */}
-              <div 
-                onClick={() => {
-                  triggerHaptic('light')
-                  setShowStarredModal(true)
-                }}
-                className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xs ${
-                  activeRoomStarredMessages.length > 0
-                    ? isLight 
-                      ? 'bg-amber-50/90 border-amber-300 text-amber-950 shadow-amber-500/10' 
-                      : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
-                    : isLight
-                      ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                      : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
-                }`}
-                title="View starred / saved messages"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
-                    activeRoomStarredMessages.length > 0
-                      ? 'bg-amber-500/20 text-[#facc15] border-yellow-500/40 shadow-xs'
-                      : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
-                  }`}>
-                    <Star className={`w-4.5 h-4.5 ${activeRoomStarredMessages.length > 0 ? 'text-amber-400 fill-amber-400' : 'text-amber-500'}`} />
-                  </div>
-                  <div className="min-w-0">
-                    <span className="text-xs font-bold block truncate">
-                      Starred Messages
-                    </span>
-                    <span className="text-[11px] opacity-70 block truncate">
-                      {activeRoomStarredMessages.length === 0 
-                        ? 'No starred messages' 
-                        : `${activeRoomStarredMessages.length} saved message${activeRoomStarredMessages.length === 1 ? '' : 's'}`}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {activeRoomStarredMessages.length > 0 && (
-                    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
-                      isLight 
-                        ? 'bg-amber-100 text-amber-800 border-amber-300' 
-                        : 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
                     }`}>
-                      {activeRoomStarredMessages.length}
+                      {CHAT_WALLPAPER_PRESETS.find((p) => p.id === getContactWallpaper(activeConversation))?.label || 'Default'}
                     </span>
-                  )}
-                  <ChevronRight className="w-4 h-4 opacity-50" />
+                    <ChevronRight className="w-4 h-4 opacity-50" />
+                  </div>
+                </div>
+
+                {/* ── NOTIFICATIONS & MUTE CARD ── */}
+                <div 
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setShowMuteModal(true)
+                  }}
+                  className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xs ${
+                    isRoomMuted(activeRoomId)
+                      ? isLight 
+                        ? 'bg-rose-50/90 border-rose-300 text-rose-950 shadow-rose-500/10' 
+                        : 'bg-rose-500/10 border-rose-500/30 text-rose-200 shadow-rose-500/10'
+                      : isLight
+                        ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
+                        : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                  }`}
+                  title="Configure notification sounds & mute"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
+                      isRoomMuted(activeRoomId)
+                        ? 'bg-rose-500/20 text-rose-400 border-rose-500/40 ring-1 ring-rose-500/30'
+                        : 'bg-emerald-500/15 text-emerald-500 border-emerald-500/25'
+                    }`}>
+                      {isRoomMuted(activeRoomId) ? (
+                        <VolumeX className="w-4.5 h-4.5 text-rose-500" />
+                      ) : (
+                        <Volume2 className="w-4.5 h-4.5 text-emerald-500" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold block truncate">
+                        Notifications &amp; Sound Alerts
+                      </span>
+                      <span className="text-[11px] opacity-70 block truncate">
+                        {isRoomMuted(activeRoomId) ? `Muted until ${getMuteRemainingLabel(activeRoomId)}` : 'Alerts enabled with sound'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                      isRoomMuted(activeRoomId)
+                        ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                        : 'bg-emerald-500/15 text-emerald-500 border-emerald-500/25'
+                    }`}>
+                      {isRoomMuted(activeRoomId) ? getMuteRemainingLabel(activeRoomId) : 'Unmuted'}
+                    </span>
+                    <ChevronRight className="w-4 h-4 opacity-50" />
+                  </div>
+                </div>
+
+                {/* ── STARRED / SAVED MESSAGES CARD (Item 2.8) ── */}
+                <div 
+                  onClick={() => {
+                    triggerHaptic('light')
+                    setShowStarredModal(true)
+                  }}
+                  className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xs ${
+                    activeRoomStarredMessages.length > 0
+                      ? isLight 
+                        ? 'bg-amber-50/90 border-amber-300 text-amber-950 shadow-amber-500/10' 
+                        : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
+                      : isLight
+                        ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
+                        : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                  }`}
+                  title="View starred / saved messages"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
+                      activeRoomStarredMessages.length > 0
+                        ? 'bg-amber-500/20 text-[#facc15] border-yellow-500/40 shadow-xs'
+                        : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
+                    }`}>
+                      <Star className={`w-4.5 h-4.5 ${activeRoomStarredMessages.length > 0 ? 'text-amber-400 fill-amber-400' : 'text-amber-500'}`} />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold block truncate">
+                        Starred Messages
+                      </span>
+                      <span className="text-[11px] opacity-70 block truncate">
+                        {activeRoomStarredMessages.length === 0 
+                          ? 'No starred messages' 
+                          : `${activeRoomStarredMessages.length} saved message${activeRoomStarredMessages.length === 1 ? '' : 's'}`}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {activeRoomStarredMessages.length > 0 && (
+                      <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                        isLight 
+                          ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                          : 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
+                      }`}>
+                        {activeRoomStarredMessages.length}
+                      </span>
+                    )}
+                    <ChevronRight className="w-4 h-4 opacity-50" />
+                  </div>
                 </div>
               </div>
 
@@ -10508,7 +11571,8 @@ export default function ChatConversation() {
                                   setShowContactInfoModal(false)
                                   openLightbox(mItem.url, allChatImages, imgIdx >= 0 ? imgIdx : 0)
                                 } else if (mItem.type === 'video') {
-                                  window.open(mItem.url, '_blank', 'noopener,noreferrer')
+                                  const safeUrl = sanitizeSafeUrl(mItem.url)
+                                  if (safeUrl !== '#') window.open(safeUrl, '_blank', 'noopener,noreferrer')
                                 }
                               }}
                               className="group/item relative aspect-square rounded-xl overflow-hidden border border-white/10 cursor-pointer hover:scale-105 active:scale-95 transition-all shadow-xs bg-black/20"
@@ -10595,7 +11659,7 @@ export default function ChatConversation() {
                                 <Copy className="w-3.5 h-3.5" />
                               </button>
                               <a
-                                href={doc.url}
+                                href={sanitizeSafeUrl(doc.url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 download
@@ -10678,7 +11742,7 @@ export default function ChatConversation() {
                                 <Copy className="w-3.5 h-3.5" />
                               </button>
                               <a
-                                href={linkItem.url}
+                                href={sanitizeSafeUrl(linkItem.url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 onClick={() => triggerHaptic('light')}
@@ -10909,7 +11973,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Safety number verification"
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 max-h-[92dvh] flex flex-col ${
+            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
             }`}
           >
@@ -11054,35 +12118,164 @@ export default function ChatConversation() {
       )}
 
       {/* ── DISAPPEARING MESSAGES SELECTOR MODAL (Telegram / WhatsApp Standard) ── */}
-      {showDisappearingModal && activeConversation && (
+      {showDisappearingModal && (disappearingModalContact || activeConversation) && (() => {
+        const targetContact = disappearingModalContact || activeConversation
+        const currentMode = getDisappearingMode(targetContact)
+
+        return (
+          <div
+            onClick={() => setShowDisappearingModal(false)}
+            className="fixed inset-0 bg-black/85 backdrop-blur-xl z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              ref={disappearingDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Disappearing messages"
+              tabIndex={-1}
+              className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+                isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+              }`}
+            >
+              {/* Modal Header */}
+              <div className="relative pt-3 pb-2 px-5 sm:px-6 bg-gradient-to-b from-amber-500/15 via-yellow-500/5 to-transparent shrink-0">
+                <SheetGrabHandle onDismiss={() => setShowDisappearingModal(false)} />
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
+                    <Timer className="w-4 h-4" />
+                    Disappearing Messages
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setShowDisappearingModal(false)
+                    }}
+                    className={`p-1.5 rounded-full border transition-all cursor-pointer ${
+                      isLight 
+                        ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200' 
+                        : 'bg-[#1a1a20] hover:bg-[#25252c] text-zinc-300 border-[#2f2f38]'
+                    }`}
+                    title="Close"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Content & Options */}
+              <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-4 space-y-4 custom-scrollbar">
+                {/* Hero explanation */}
+                <div className="space-y-1 text-center">
+                  <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                    <Timer className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-base font-black tracking-tight pt-1">
+                    Message Privacy &amp; Auto-Delete
+                  </h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed max-w-xs mx-auto">
+                    Set messages in your chat with <span className="font-bold text-amber-400">{getContactDisplayName(targetContact)}</span> to automatically vanish.
+                  </p>
+                </div>
+
+                {/* Radio Options List */}
+                <div className="space-y-2">
+                  {DISAPPEARING_OPTIONS.map((opt) => {
+                    const isSelected = currentMode === opt.id
+                    return (
+                      <div
+                        key={opt.id}
+                        onClick={() => {
+                          setRoomDisappearingMode(targetContact, opt.id)
+                          setTimeout(() => setShowDisappearingModal(false), 200)
+                        }}
+                        className={`p-3 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer transition-all active:scale-[0.98] ${
+                          isSelected
+                            ? isLight 
+                              ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/40 text-amber-950 shadow-xs' 
+                              : 'bg-yellow-500/15 border-yellow-500/60 ring-2 ring-yellow-500/30 text-white shadow-xs'
+                            : isLight
+                              ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
+                              : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+                            isSelected
+                              ? 'bg-amber-500 text-black border-amber-400'
+                              : 'bg-black/10 dark:bg-white/10 text-zinc-400 border-transparent'
+                          }`}>
+                            {opt.id === 'seen' ? (
+                              <Zap className="w-4 h-4 fill-current" />
+                            ) : opt.id === 'off' ? (
+                              <X className="w-4 h-4" />
+                            ) : (
+                              <Timer className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold leading-tight flex items-center gap-1.5">
+                              <span>{opt.label}</span>
+                              {opt.id === 'seen' && (
+                                <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                  View Once
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-[11px] opacity-70 leading-tight pt-0.5">
+                              {opt.subtitle}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Radio Circle */}
+                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
+                          isSelected
+                            ? 'border-amber-400 bg-amber-400'
+                            : 'border-zinc-500/40 bg-transparent'
+                        }`}>
+                          {isSelected && <div className="w-2 h-2 rounded-full bg-black" />}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── FRIEND QUICK ACTIONS & SETTINGS SHEET (Mobile Tap & Hold / Desktop 3-Dot) ── */}
+      {friendQuickActionsTarget && (
         <div
-          onClick={() => setShowDisappearingModal(false)}
-          className="fixed inset-0 bg-black/85 backdrop-blur-xl z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          onClick={() => setFriendQuickActionsTarget(null)}
+          className="fixed inset-0 bg-black/75 md:bg-black/50 backdrop-blur-xs z-[75] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            ref={disappearingDialogRef}
             role="dialog"
             aria-modal="true"
-            aria-label="Disappearing messages"
+            aria-label={`Settings for ${friendQuickActionsTarget.name || friendQuickActionsTarget.username}`}
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 max-h-[92dvh] flex flex-col ${
+            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
             }`}
           >
-            {/* Modal Header */}
+            {/* Grab Handle & Header */}
             <div className="relative pt-3 pb-2 px-5 sm:px-6 bg-gradient-to-b from-amber-500/15 via-yellow-500/5 to-transparent shrink-0">
-              <SheetGrabHandle onDismiss={() => setShowDisappearingModal(false)} />
+              <SheetGrabHandle onDismiss={() => setFriendQuickActionsTarget(null)} />
               <div className="flex items-center justify-between mt-1">
                 <span className="text-[11px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
-                  <Timer className="w-4 h-4" />
-                  Disappearing Messages
+                  <Sliders className="w-3.5 h-3.5" />
+                  Friend Settings
                 </span>
                 <button
                   type="button"
                   onClick={() => {
                     triggerHaptic('light')
-                    setShowDisappearingModal(false)
+                    setFriendQuickActionsTarget(null)
                   }}
                   className={`p-1.5 rounded-full border transition-all cursor-pointer ${
                     isLight 
@@ -11096,82 +12289,299 @@ export default function ChatConversation() {
               </div>
             </div>
 
-            {/* Content & Options */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-4 space-y-4 custom-scrollbar">
-              {/* Hero explanation */}
-              <div className="space-y-1 text-center">
-                <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                  <Timer className="w-6 h-6" />
+            {/* Friend Profile Summary Card */}
+            <div className="p-4 sm:p-5 flex items-center gap-3.5 border-b border-amber-500/10">
+              <div className="relative shrink-0">
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center font-black text-lg border overflow-hidden ${
+                  isLight ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-yellow-500/15 text-[#facc15] border-yellow-500/30'
+                }`}>
+                  {friendQuickActionsTarget.profile_image ? (
+                    <img src={resolveMediaUrl(friendQuickActionsTarget.profile_image)} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    (friendQuickActionsTarget.name?.[0] || friendQuickActionsTarget.username?.[0] || 'U').toUpperCase()
+                  )}
                 </div>
-                <h3 className="text-base font-black tracking-tight pt-1">
-                  Message Privacy &amp; Auto-Delete
-                </h3>
-                <p className="text-xs text-zinc-400 leading-relaxed max-w-xs mx-auto">
-                  Set messages in your chat with <span className="font-bold text-amber-400">{getContactDisplayName(activeConversation)}</span> to automatically vanish.
-                </p>
+                {friendQuickActionsTarget.is_online ? (
+                  <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-[#121215]" />
+                  </span>
+                ) : null}
               </div>
 
-              {/* Radio Options List */}
-              <div className="space-y-2">
-                {DISAPPEARING_OPTIONS.map((opt) => {
-                  const isSelected = currentDisappearingMode === opt.id
-                  return (
-                    <div
-                      key={opt.id}
-                      onClick={() => {
-                        setRoomDisappearingMode(activeRoomId, opt.id)
-                        setTimeout(() => setShowDisappearingModal(false), 200)
-                      }}
-                      className={`p-3 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer transition-all active:scale-[0.98] ${
-                        isSelected
-                          ? isLight 
-                            ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/40 text-amber-950 shadow-xs' 
-                            : 'bg-yellow-500/15 border-yellow-500/60 ring-2 ring-yellow-500/30 text-white shadow-xs'
-                          : isLight
-                            ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                            : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
-                          isSelected
-                            ? 'bg-amber-500 text-black border-amber-400'
-                            : 'bg-black/10 dark:bg-white/10 text-zinc-400 border-transparent'
-                        }`}>
-                          {opt.id === 'seen' ? (
-                            <Zap className="w-4 h-4 fill-current" />
-                          ) : opt.id === 'off' ? (
-                            <X className="w-4 h-4" />
-                          ) : (
-                            <Timer className="w-4 h-4" />
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold leading-tight flex items-center gap-1.5">
-                            <span>{opt.label}</span>
-                            {opt.id === 'seen' && (
-                              <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                                View Once
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-[11px] opacity-70 leading-tight pt-0.5">
-                            {opt.subtitle}
-                          </p>
-                        </div>
-                      </div>
+              <div className="min-w-0 flex-1">
+                <h4 className="text-base font-black tracking-tight truncate">
+                  {getContactDisplayName(friendQuickActionsTarget) || friendQuickActionsTarget.name || `@${friendQuickActionsTarget.username}`}
+                </h4>
+                <p className="text-xs font-mono opacity-65 truncate">
+                  @{friendQuickActionsTarget.username}
+                </p>
+                <div className="flex items-center gap-2 pt-1">
+                  <span className={`text-[10px] font-bold px-2 py-0.2 rounded-full border ${
+                    friendQuickActionsTarget.is_online 
+                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' 
+                      : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                  }`}>
+                    {friendQuickActionsTarget.is_online ? 'Active now' : 'Offline'}
+                  </span>
+                  <span className={`text-[10px] font-mono font-bold px-2 py-0.2 rounded-full border ${
+                    getDisappearingMode(friendQuickActionsTarget) === 'seen'
+                      ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                      : getDisappearingMode(friendQuickActionsTarget) !== 'off'
+                        ? 'bg-yellow-500/15 text-[#facc15] border-yellow-500/25'
+                        : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                  }`}>
+                    {getDisappearingMode(friendQuickActionsTarget) === 'seen' 
+                      ? '⚡ Auto-delete seen' 
+                      : getDisappearingMode(friendQuickActionsTarget) === 'off' 
+                        ? 'Auto-delete: Off' 
+                        : `Expires ${getDisappearingMode(friendQuickActionsTarget)}`}
+                  </span>
+                </div>
+              </div>
+            </div>
 
-                      {/* Radio Circle */}
-                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
-                        isSelected
-                          ? 'border-amber-400 bg-amber-400'
-                          : 'border-zinc-500/40 bg-transparent'
-                      }`}>
-                        {isSelected && <div className="w-2 h-2 rounded-full bg-black" />}
-                      </div>
+            {/* Scrollable Actions List */}
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+              {/* Primary Direct Chat Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('medium')
+                  const target = friendQuickActionsTarget
+                  setFriendQuickActionsTarget(null)
+                  handleDirectChatStart({
+                    id: target.friend_id,
+                    username: target.username,
+                    name: target.name
+                  })
+                }}
+                className="w-full py-2.5 px-4 rounded-2xl bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-black font-black text-xs flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all"
+              >
+                <MessageSquare className="w-4 h-4" />
+                <span>Open Direct Conversation</span>
+              </button>
+
+              {/* ── Auto-Delete / Disappearing Messages Quick Picker for this Friend ── */}
+              <div className={`p-3.5 rounded-2xl border space-y-2.5 ${
+                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center">
+                      <Zap className="w-4 h-4 fill-amber-400/40" />
                     </div>
-                  )
-                })}
+                    <div>
+                      <span className="text-xs font-bold block">Auto-Delete After Seen</span>
+                      <span className="text-[10px] opacity-60 block">Vanishing messages for this friend</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setDisappearingModalContact(friendQuickActionsTarget)
+                      setShowDisappearingModal(true)
+                    }}
+                    className="text-[11px] font-bold text-amber-500 hover:underline cursor-pointer"
+                  >
+                    More timers →
+                  </button>
+                </div>
+
+                {/* 4 Quick Chips */}
+                <div className="grid grid-cols-4 gap-1.5 pt-1">
+                  {[
+                    { id: 'off', label: 'Off', icon: '⭕' },
+                    { id: 'seen', label: 'Seen ⚡', icon: '⚡' },
+                    { id: '1h', label: '1 Hour', icon: '⏱️' },
+                    { id: '24h', label: '24 Hours', icon: '⏳' },
+                  ].map((chip) => {
+                    const isCur = getDisappearingMode(friendQuickActionsTarget) === chip.id
+                    return (
+                      <button
+                        key={chip.id}
+                        type="button"
+                        onClick={() => {
+                          setRoomDisappearingMode(friendQuickActionsTarget, chip.id)
+                        }}
+                        className={`py-1.5 px-1 rounded-xl text-[11px] font-bold flex flex-col items-center justify-center gap-0.5 border transition-all cursor-pointer ${
+                          isCur
+                            ? isLight
+                              ? 'bg-amber-100 border-amber-400 text-amber-950 font-black shadow-xs ring-1 ring-amber-400/40'
+                              : 'bg-yellow-500/25 border-yellow-500/60 text-[#facc15] font-black shadow-xs ring-1 ring-yellow-500/40'
+                            : isLight
+                              ? 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700'
+                              : 'bg-[#121215] hover:bg-[#1f1f24] border-[#2b2b32] text-zinc-300'
+                        }`}
+                      >
+                        <span className="text-xs">{chip.icon}</span>
+                        <span className="truncate w-full text-center leading-tight">{chip.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Action List Grid */}
+              <div className={`rounded-2xl border divide-y overflow-hidden ${
+                isLight ? 'bg-slate-50 border-slate-200 divide-slate-200' : 'bg-[#18181b] border-[#27272a] divide-[#27272a]'
+              }`}>
+                {/* View Full Profile */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    const target = friendQuickActionsTarget
+                    const matchingConv = getConversationForFriend(target)
+                    setFriendQuickActionsTarget(null)
+                    if (matchingConv) {
+                      handleSelectConversation(matchingConv)
+                    } else {
+                      handleDirectChatStart({
+                        id: target.friend_id,
+                        username: target.username,
+                        name: target.name
+                      })
+                    }
+                    setTimeout(() => setShowContactInfoModal(true), 150)
+                  }}
+                  className={`w-full px-3.5 py-2.5 text-left text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
+                    isLight ? 'hover:bg-slate-100 text-slate-800' : 'hover:bg-[#202026] text-zinc-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <User className="w-4 h-4 text-amber-500" />
+                    <span>View Contact Profile &amp; Bio</span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 opacity-40" />
+                </button>
+
+                {/* Edit Device Nickname */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    const target = friendQuickActionsTarget
+                    const matchingConv = getConversationForFriend(target)
+                    setFriendQuickActionsTarget(null)
+                    if (matchingConv) {
+                      handleSelectConversation(matchingConv)
+                    } else {
+                      handleDirectChatStart({
+                        id: target.friend_id,
+                        username: target.username,
+                        name: target.name
+                      })
+                    }
+                    setTimeout(() => {
+                      setNicknameDraft(getContactCustomNickname(target) || target.name || '')
+                      setIsEditingNickname(true)
+                      setShowContactInfoModal(true)
+                    }, 150)
+                  }}
+                  className={`w-full px-3.5 py-2.5 text-left text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
+                    isLight ? 'hover:bg-slate-100 text-slate-800' : 'hover:bg-[#202026] text-zinc-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Edit3 className="w-4 h-4 text-amber-500" />
+                    <span>Edit Custom Name on this Device</span>
+                  </div>
+                  <span className="text-[10px] font-mono opacity-50 truncate max-w-[100px]">
+                    {getContactCustomNickname(friendQuickActionsTarget) || 'Default'}
+                  </span>
+                </button>
+
+                {/* Chat Wallpaper & Theme */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    const target = friendQuickActionsTarget
+                    const matchingConv = getConversationForFriend(target)
+                    setFriendQuickActionsTarget(null)
+                    if (matchingConv) {
+                      handleSelectConversation(matchingConv)
+                    } else {
+                      handleDirectChatStart({
+                        id: target.friend_id,
+                        username: target.username,
+                        name: target.name
+                      })
+                    }
+                    setTimeout(() => setShowWallpaperModal(true), 150)
+                  }}
+                  className={`w-full px-3.5 py-2.5 text-left text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
+                    isLight ? 'hover:bg-slate-100 text-slate-800' : 'hover:bg-[#202026] text-zinc-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Palette className="w-4 h-4 text-amber-500" />
+                    <span>Chat Wallpaper &amp; Theme</span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 opacity-40" />
+                </button>
+
+                {/* Mute Notifications */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    const target = friendQuickActionsTarget
+                    const matchingConv = getConversationForFriend(target)
+                    setFriendQuickActionsTarget(null)
+                    if (matchingConv) {
+                      handleSelectConversation(matchingConv)
+                    } else {
+                      handleDirectChatStart({
+                        id: target.friend_id,
+                        username: target.username,
+                        name: target.name
+                      })
+                    }
+                    setTimeout(() => setShowMuteModal(true), 150)
+                  }}
+                  className={`w-full px-3.5 py-2.5 text-left text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
+                    isLight ? 'hover:bg-slate-100 text-slate-800' : 'hover:bg-[#202026] text-zinc-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <VolumeX className="w-4 h-4 text-rose-500" />
+                    <span>Mute Chat Notifications</span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 opacity-40" />
+                </button>
+
+                {/* E2EE Safety Number & QR Verification */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    const target = friendQuickActionsTarget
+                    const matchingConv = getConversationForFriend(target)
+                    setFriendQuickActionsTarget(null)
+                    if (matchingConv) {
+                      handleSelectConversation(matchingConv)
+                    } else {
+                      handleDirectChatStart({
+                        id: target.friend_id,
+                        username: target.username,
+                        name: target.name
+                      })
+                    }
+                    setTimeout(() => setShowSafetyVerificationModal(true), 150)
+                  }}
+                  className={`w-full px-3.5 py-2.5 text-left text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
+                    isLight ? 'hover:bg-slate-100 text-slate-800' : 'hover:bg-[#202026] text-zinc-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                    <span>Verify Security Code &amp; QR</span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 opacity-40" />
+                </button>
               </div>
             </div>
           </div>
@@ -11189,7 +12599,7 @@ export default function ChatConversation() {
             role="dialog"
             aria-modal="true"
             aria-label="Mute notifications"
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 max-h-[92dvh] flex flex-col ${
+            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
             }`}
           >
@@ -11380,7 +12790,7 @@ export default function ChatConversation() {
             role="dialog"
             aria-modal="true"
             aria-label="Chat wallpaper"
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 max-h-[92dvh] flex flex-col ${
+            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
             }`}
           >
@@ -11511,17 +12921,19 @@ export default function ChatConversation() {
         <div
           role="presentation"
           onClick={() => setShowStarredModal(false)}
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-label="Starred Messages"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-lg max-h-[85vh] rounded-3xl border flex flex-col shadow-2xl animate-in zoom-in-95 duration-150 overflow-hidden ${
+            className={`w-full max-w-lg max-h-[85vh] rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 overflow-hidden pb-[max(1rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
             }`}
           >
+            <SheetGrabHandle onDismiss={() => setShowStarredModal(false)} />
+
             {/* Modal Header */}
             <div className={`p-4 sm:p-5 border-b flex items-center justify-between shrink-0 ${
               isLight ? 'border-slate-100 bg-slate-50/50' : 'border-[#202026] bg-[#16161a]/60'
@@ -11748,7 +13160,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Install app"
             tabIndex={-1}
-            className={`w-full max-w-sm rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl p-5 sm:p-6 space-y-4 animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
+            className={`w-full max-w-sm rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl p-5 sm:p-6 space-y-4 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
             }`}
           >
@@ -11848,7 +13260,7 @@ export default function ChatConversation() {
             ref={confirmDialogRef}
             tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-sm rounded-[28px] border p-5 sm:p-6 space-y-5 shadow-2xl animate-in zoom-in-95 duration-200 relative overflow-hidden ${
+            className={`w-full max-w-sm rounded-[28px] border p-5 sm:p-6 space-y-5 shadow-2xl animate-popover-spring origin-center relative overflow-hidden ${
               isLight 
                 ? 'bg-white/95 border-slate-200 text-slate-900 shadow-slate-900/15' 
                 : 'bg-[#141418]/95 border-[#282830] text-white shadow-black/90'

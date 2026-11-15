@@ -1816,5 +1816,258 @@ html, body {
   contain-intrinsic-block-size: auto 72px;
 }
 
+/* ==============================================================================
+   LUXURY CHAT ANIMATION SYSTEM (Telegram / iOS Caliber Mobile & Desktop Physics)
+   ============================================================================== */
+
+/* 1. Mobile Bottom Sheet Spring-Up */
+@keyframes sheetSpringUp {
+  0% {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-sheet-spring-up {
+  animation: sheetSpringUp 0.34s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 2. Desktop Side Drawer Slide-Right */
+@keyframes drawerSlideRight {
+  0% {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-drawer-spring-right {
+  animation: drawerSlideRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 3. Popover / Dropdown Menu Spring Scale */
+@keyframes popoverSpringScale {
+  0% {
+    opacity: 0;
+    transform: scale(0.92) translateY(-6px);
+  }
+  70% {
+    transform: scale(1.02) translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-popover-spring {
+  animation: popoverSpringScale 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+  transform-origin: top right;
+}
+
+/* 4. Fluid Message Bubble Entrances */
+@keyframes bubbleUserEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96) translateX(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) translateX(0);
+  }
+}
+
+@keyframes bubblePeerEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96) translateX(-4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) translateX(0);
+  }
+}
+
+.animate-bubble-user {
+  animation: bubbleUserEntrance 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+.animate-bubble-peer {
+  animation: bubblePeerEntrance 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 5. Online Presence Radar Beacon */
+@keyframes presenceRadarBeacon {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.65);
+  }
+  70% {
+    transform: scale(1.06);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.animate-presence-beacon {
+  animation: presenceRadarBeacon 2.4s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 6. Voice Recording Microphone Pulse */
+@keyframes micRecordingPulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.animate-mic-recording {
+  animation: micRecordingPulse 1.5s infinite ease-in-out;
+}
+
+/* 7. Floating Action Button Spring Bounce */
+@keyframes fabSpringBounce {
+  0% {
+    opacity: 0;
+    transform: translateY(22px) scale(0.85);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-fab-spring {
+  animation: fabSpringBounce 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 8. Reaction Rubber Pop */
+@keyframes reactionRubberPop {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.18);
+  }
+  80% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-reaction-pop {
+  animation: reactionRubberPop 0.26s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 9. Modern 3-Dot Wave Typing Indicator */
+@keyframes typingWaveDot {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
+.animate-typing-dot-1 {
+  animation: typingWaveDot 1.2s infinite ease-in-out;
+}
+
+.animate-typing-dot-2 {
+  animation: typingWaveDot 1.2s infinite ease-in-out 0.2s;
+}
+
+.animate-typing-dot-3 {
+  animation: typingWaveDot 1.2s infinite ease-in-out 0.4s;
+}
+
+/* 10. Status Tick Pop */
+@keyframes tickPopIn {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.25);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-tick-pop {
+  animation: tickPopIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 11. Notification / Unread Badge Bounce */
+@keyframes badgeBounceIn {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-badge-bounce {
+  animation: badgeBounceIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 12. Tap Feedback Active Micro-Scale */
+.tap-bounce {
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+}
+
+.tap-bounce:active {
+  transform: scale(0.95);
+  opacity: 0.88;
+}
+
 
 

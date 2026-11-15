@@ -630,7 +630,7 @@ export default function ChatLogin() {
   }
 
   return (
-    <div className={`min-h-screen w-full flex flex-col justify-between p-3 sm:p-5 font-sans select-text transition-colors duration-200 ${
+    <div className={`min-h-[100dvh] w-full flex flex-col justify-between p-3 sm:p-5 font-sans select-text transition-colors duration-200 ${
       isLight ? 'bg-slate-50 text-slate-900' : 'official-chat-dark dark bg-[#09090b] text-white'
     }`}>
       {/* Top Bar: chat brand + theme switcher */}
@@ -694,7 +694,7 @@ export default function ChatLogin() {
 
       {/* Main Card */}
       <main className="w-full max-w-[420px] mx-auto my-auto py-2 sm:py-3">
-        <div className={`rounded-3xl p-4 sm:p-6 border shadow-2xl relative overflow-hidden transition-colors ${
+        <div className={`rounded-3xl p-4 sm:p-6 border shadow-2xl relative overflow-hidden transition-colors animate-popover-spring origin-center ${
           isLight
             ? 'bg-white border-slate-200 shadow-slate-200/50'
             : 'bg-[#121215] border-[#27272a]'

@@ -421,14 +421,19 @@ const clearUserChatCaches = (userId) => {
     `jdlx_chat_cache_active_room_${uid}`,
     `jdlx_chat_pubkey_synced_${uid}`,
     `jdlx_chat_recovery_pin_set_${uid}`,
-    `jdlx_chat_recovery_snoozed_${uid}`
+    `jdlx_chat_recovery_snoozed_${uid}`,
+    'jdlx_chat_contact_custom_data',
+    'jdlx_chat_drafts',
+    'jdlx_chat_disappearing_settings',
+    'jdlx_chat_starred_messages'
   ])
   const messagePrefix = `jdlx_chat_cache_msgs_${uid}_`
+  const deliveredPrefix = `jdlx_chat_delivered_${uid}_`
   try {
     const keys = []
     for (let i = 0; i < localStorage.length; i += 1) {
       const key = localStorage.key(i)
-      if (key && (exactKeys.has(key) || key.startsWith(messagePrefix))) {
+      if (key && (exactKeys.has(key) || key.startsWith(messagePrefix) || key.startsWith(deliveredPrefix))) {
         keys.push(key)
       }
     }
@@ -1569,7 +1574,9 @@ export const useChatStore = create((set, get) => ({
     const uid = get().chatUser?.id
     const savedDelivered = getStoredDeliveredId(uid, conv.id)
     const rawCachedMsgs = uid ? getCachedMessages(uid, conv.id) : []
-    const cachedMsgs = rawCachedMsgs.map((m) => {
+    // Smart Chat Load: slice to the most recent 35 cached messages for instantaneous 0ms initial paint
+    const recentCached = rawCachedMsgs.length > 35 ? rawCachedMsgs.slice(-35) : rawCachedMsgs
+    const cachedMsgs = recentCached.map((m) => {
       if (savedDelivered > 0 && m && m.id <= savedDelivered) {
         return { ...m, is_delivered: 1 }
       }
@@ -1581,9 +1588,9 @@ export const useChatStore = create((set, get) => ({
       activeRoomId: conv.id,
       messages: cachedMsgs,
       messagesLoading: cachedMsgs.length === 0,
-      messagesHasMore: false,
+      messagesHasMore: rawCachedMsgs.length > 35,
       peerTyping: false,
-      peerOnline: false,
+      peerOnline: Boolean(conv.contact_online || conv.other_user?.is_online),
       _peerPresenceKnown: false,
       peerLastReadId: 0,
       peerLastDeliveredId: savedDelivered,
@@ -1649,7 +1656,9 @@ export const useChatStore = create((set, get) => ({
     const existing = sameId(get().activeRoomId, targetRoomId) ? get().messages : []
     const hasLockedMessages = existing.some((m) => m && (m._locked || m.message === '🔒 [Encrypted Message]'))
     const newestId = (!hasLockedMessages && existing.length) ? Math.max(...existing.map((m) => m.id)) : null
-    const query = newestId ? `?after_id=${newestId}&limit=200` : '?limit=200'
+    // Smart Chat Load: 35 messages on initial load (fast & lightweight), 50 on incremental polling
+    const SMART_LIMIT = newestId ? 50 : 35
+    const query = newestId ? `?after_id=${newestId}&limit=${SMART_LIMIT}` : `?limit=${SMART_LIMIT}`
 
     if (existing.length === 0) {
       set({ messagesLoading: true, messagesError: null })
@@ -1671,9 +1680,20 @@ export const useChatStore = create((set, get) => ({
         const identity = await identityPromise
         if (identity) get().initE2EE().catch(() => {})
         const activeConv = get().activeConversation || get().conversations.find((c) => sameId(c.id, targetRoomId))
-        const decryptedMsgs = await Promise.all(
-          rawMsgs.map((m) => decryptStoredMessage(m, targetRoomId, activeConv, identity))
-        )
+        
+        // Progressive micro-batched WebCrypto decryption (prevents UI thread lockups)
+        const decryptedMsgs = []
+        const BATCH_SIZE = 12
+        for (let i = 0; i < rawMsgs.length; i += BATCH_SIZE) {
+          const chunk = rawMsgs.slice(i, i + BATCH_SIZE)
+          const chunkDecrypted = await Promise.all(
+            chunk.map((m) => decryptStoredMessage(m, targetRoomId, activeConv, identity))
+          )
+          decryptedMsgs.push(...chunkDecrypted)
+          if (i + BATCH_SIZE < rawMsgs.length) {
+            await new Promise((r) => setTimeout(r, 0))
+          }
+        }
         if (!sameId(get().activeRoomId, targetRoomId)) return
 
         let merged = []
@@ -1697,7 +1717,7 @@ export const useChatStore = create((set, get) => ({
             ...unreconciledOptimistic(confirmed, optimistic)
           ]
           merged.sort(sortChatMessages)
-          set({ messages: merged, messagesHasMore: rawMsgs.length >= 200, messagesLoading: false, messagesError: null })
+          set({ messages: merged, messagesHasMore: rawMsgs.length >= SMART_LIMIT, messagesLoading: false, messagesError: null })
         } else {
           // Re-decrypt any existing messages that were previously locked
           const redecryptedExisting = await Promise.all(
@@ -1804,7 +1824,7 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
-  // 3b. Load one older page (scroll-up pagination).
+  // 3b. Load one older page (smart scroll-up pagination).
   loadOlderMessages: async () => {
     const token = get().chatToken
     const targetRoomId = get().activeRoomId
@@ -1818,9 +1838,10 @@ export const useChatStore = create((set, get) => ({
     if (!realMsgs.length) return
     const oldestId = Math.min(...realMsgs.map((m) => m.id))
     set({ loadingOlderMessages: true })
+    const SMART_OLDER_LIMIT = 35
     try {
       const res = await apiFetch(
-        `/chat/rooms/${targetRoomId}/messages?before_id=${oldestId}&limit=200`,
+        `/chat/rooms/${targetRoomId}/messages?before_id=${oldestId}&limit=${SMART_OLDER_LIMIT}`,
         { headers: { Authorization: `Bearer ${token}` } }
       )
       const json = await res.json()
@@ -1829,9 +1850,20 @@ export const useChatStore = create((set, get) => ({
       const rawMsgs = json.data || []
       const activeConv = get().activeConversation || get().conversations.find((c) => sameId(c.id, targetRoomId))
       const identity = get().identityKeypair || await ensureLocalIdentity(get, set)
-      const decrypted = await Promise.all(
-        rawMsgs.map((m) => decryptStoredMessage(m, targetRoomId, activeConv, identity))
-      )
+      
+      // Progressive micro-batched decryption
+      const decrypted = []
+      const BATCH_SIZE = 12
+      for (let i = 0; i < rawMsgs.length; i += BATCH_SIZE) {
+        const chunk = rawMsgs.slice(i, i + BATCH_SIZE)
+        const chunkDecrypted = await Promise.all(
+          chunk.map((m) => decryptStoredMessage(m, targetRoomId, activeConv, identity))
+        )
+        decrypted.push(...chunkDecrypted)
+        if (i + BATCH_SIZE < rawMsgs.length) {
+          await new Promise((r) => setTimeout(r, 0))
+        }
+      }
 
       // The room or account may have changed while the page was in flight.
       // Never merge another room's history into the current conversation.
@@ -1846,7 +1878,7 @@ export const useChatStore = create((set, get) => ({
         mergedById.set(msg.id, msg)
       }
       const merged = Array.from(mergedById.values()).sort(sortChatMessages)
-      set({ messages: merged, messagesHasMore: rawMsgs.length >= 200 })
+      set({ messages: merged, messagesHasMore: rawMsgs.length >= SMART_OLDER_LIMIT })
     } catch (e) {
       console.warn('Load older messages error:', e)
     } finally {
@@ -2053,11 +2085,12 @@ export const useChatStore = create((set, get) => ({
             )
             if (!otherId) return
             const peerPresences = presenceState?.[`user_${otherId}`]
+            const isPeerInRoom = Array.isArray(peerPresences)
+              ? peerPresences.length > 0
+              : Boolean(peerPresences)
             set({
-              _peerPresenceKnown: true,
-              peerOnline: Array.isArray(peerPresences)
-                ? peerPresences.length > 0
-                : Boolean(peerPresences)
+              _peerPresenceKnown: isPeerInRoom,
+              peerOnline: isPeerInRoom || Boolean(activeConv?.contact_online || activeConv?.other_user?.is_online || get().peerOnline)
             })
           })
           .on('presence', { event: 'leave' }, ({ key }) => {
@@ -2070,7 +2103,7 @@ export const useChatStore = create((set, get) => ({
                 : convUserId
             )
             if (otherId && key === `user_${otherId}`) {
-              set({ _peerPresenceKnown: true, peerOnline: false })
+              set({ _peerPresenceKnown: false, peerOnline: Boolean(activeConv?.contact_online || activeConv?.other_user?.is_online) })
             }
           })
           .subscribe((status) => {
@@ -2181,9 +2214,12 @@ export const useChatStore = create((set, get) => ({
           const nextPeerTyping = Boolean(data.peer_typing)
           // After a presence leave, the server's 90-second last_seen window
           // can still report "online"; do not resurrect a false presence.
-          const nextPeerOnline = get()._peerPresenceKnown
-            ? get().peerOnline
-            : Boolean(data.peer_online)
+          const nextPeerOnline = Boolean(
+            (get()._peerPresenceKnown && get().peerOnline) ||
+            data.peer_online ||
+            get().activeConversation?.contact_online ||
+            get().activeConversation?.other_user?.is_online
+          )
           const nextPeerLastReadId = Number(data.peer_last_read_id) || 0
           set((state) => {
             const patch = {}
