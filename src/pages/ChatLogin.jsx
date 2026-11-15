@@ -658,8 +658,8 @@ export default function ChatLogin() {
           </a>
 
           <a
-            href="https://jdlxmobile.in/downloads/official-chat.apk"
-            download="jdlx-chat.apk"
+            href="/downloads/official-chat.apk"
+            download="official-chat.apk"
             className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-bold border transition-all active:scale-95 ${
               isLight
                 ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200 shadow-xs'

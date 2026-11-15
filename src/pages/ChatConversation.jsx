@@ -13229,7 +13229,7 @@ export default function ChatConversation() {
             ) : (
               <div className="space-y-2">
                 <a
-                  href={resolveMediaUrl('/static/downloads/official-chat.apk')}
+                  href="/downloads/official-chat.apk"
                   download="official-chat.apk"
                   className="w-full py-3 rounded-2xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] font-black text-xs shadow-md shadow-yellow-500/20 active:scale-98 transition flex items-center justify-center gap-2 cursor-pointer text-center"
                 >
