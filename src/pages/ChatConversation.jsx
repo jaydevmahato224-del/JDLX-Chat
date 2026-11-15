@@ -5825,7 +5825,7 @@ export default function ChatConversation() {
                   )
                   const roomDraft = drafts[conv.id]?.trim()
                   const hasDraft = Boolean(roomDraft && !isSelected)
-                  const isSentByMe = Boolean(chatUser?.id && sameId(conv.last_message_user_id, chatUser.id))
+                  const isSentByMe = Boolean(chatUser?.id && sameId(conv.last_message_user_id, chatUser.id) && conv.last_message)
                   const isPinned = pinnedRoomIds.some((id) => sameId(id, conv.id))
                   const isPeerTypingThisRoom = Boolean(sameId(activeRoomId, conv.id) && peerTyping)
 
@@ -5927,7 +5927,7 @@ export default function ChatConversation() {
                                     ? 'text-slate-400'
                                     : 'text-zinc-500'
                               }`}>
-                                {formatTime(conv.last_message_at)}
+                                {conv.last_message ? formatTime(conv.last_message_at) : ''}
                               </span>
                             </div>
                           </div>
@@ -5999,13 +5999,17 @@ export default function ChatConversation() {
                                     <Ban className="w-3 h-3 shrink-0" />
                                     <span>This message was deleted</span>
                                   </span>
-                                ) : (
+                                ) : conv.last_message ? (
                                   <p className={`text-xs truncate font-medium ${
                                     conv.unread_count > 0
                                       ? (isLight ? 'text-slate-900 font-bold' : 'text-white font-bold')
                                       : (isLight ? 'text-slate-500' : 'text-zinc-400')
                                   }`}>
                                     {conv.last_message}
+                                  </p>
+                                ) : (
+                                  <p className={`text-xs truncate italic ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
+                                    No messages yet
                                   </p>
                                 )}
                               </div>

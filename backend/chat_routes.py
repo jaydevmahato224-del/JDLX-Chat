@@ -2155,8 +2155,6 @@ def get_chat_conversations():
                    r.id AS room_id,
                    r.room_key,
                    r.e2e_secret,
-                   r.last_message,
-                   r.last_message_at,
                    r.created_at,
                    u.id AS other_id,
                    u.name AS contact_name,
@@ -2169,6 +2167,9 @@ def get_chat_conversations():
                    CASE WHEN b_me.blocker_id IS NOT NULL THEN 1 ELSE 0 END AS blocked_by_me,
                    CASE WHEN b_them.blocker_id IS NOT NULL THEN 1 ELSE 0 END AS blocked_me,
                    COALESCE(unread.cnt, 0) AS unread_count,
+                   last_msg.id AS last_msg_id,
+                   last_msg.message AS last_msg_text,
+                   last_msg.created_at AS last_msg_created_at,
                    last_msg.user_id AS last_msg_user_id,
                    CASE 
                        WHEN last_msg.deleted = 1 THEN 'deleted'
@@ -2180,6 +2181,7 @@ def get_chat_conversations():
                JOIN chat_users u ON u.id = CASE WHEN r.user_id = ? THEN r.user_two_id ELSE r.user_id END
                LEFT JOIN chat_blocks b_me ON b_me.blocker_id = ? AND b_me.blocked_id = u.id
                LEFT JOIN chat_blocks b_them ON b_them.blocker_id = u.id AND b_them.blocked_id = ?
+               LEFT JOIN official_chat_room_clears c_clear ON c_clear.room_id = r.id AND c_clear.user_id = ?
                LEFT JOIN (
                    SELECT room_id, COUNT(*) AS cnt
                    FROM official_chat_messages
@@ -2189,12 +2191,14 @@ def get_chat_conversations():
                LEFT JOIN official_chat_messages last_msg ON last_msg.id = (
                    SELECT id FROM official_chat_messages
                    WHERE room_id = r.id
+                     AND id > COALESCE(c_clear.cleared_upto_id, 0)
+                     AND id NOT IN (SELECT message_id FROM chat_message_hides WHERE user_id = ?)
                    ORDER BY id DESC LIMIT 1
                )
                WHERE r.user_two_id IS NOT NULL 
                  AND (r.user_id = ? OR r.user_two_id = ?)
-               ORDER BY COALESCE(r.last_message_at, r.created_at) DESC""",
-            (my_id, my_id, my_id, my_id, my_id, my_id)
+               ORDER BY COALESCE(last_msg.created_at, r.created_at) DESC""",
+            (my_id, my_id, my_id, my_id, my_id, my_id, my_id, my_id)
         )
         rows = cursor.fetchall()
         conversations = []
@@ -2211,6 +2215,10 @@ def get_chat_conversations():
 
             contact_name = r['contact_name'] or r['contact_username'] or 'Friend'
             contact_username = r['contact_username'] or f"user_{other_id}"
+
+            has_last_msg = r['last_msg_id'] is not None
+            raw_last_msg = r['last_msg_text'] if has_last_msg else ''
+            last_msg_time = r['last_msg_created_at'] if has_last_msg else r['created_at']
 
             conversations.append({
                 'id': room_id,
@@ -2236,11 +2244,11 @@ def get_chat_conversations():
                 'contact_joined_at': format_utc_iso(r['contact_joined_at']) if r['contact_joined_at'] else None,
                 'blocked_by_me': bool(r['blocked_by_me']),
                 'blocked_me': bool(r['blocked_me']),
-                'last_message': r['last_message'] or 'No messages yet',
-                'last_message_at': format_utc_iso(r['last_message_at'] or r['created_at']),
-                'last_message_user_id': r['last_msg_user_id'],
-                'last_message_type': r['last_msg_type'] or 'text',
-                'last_message_is_read': bool(r['last_msg_is_read']),
+                'last_message': raw_last_msg or '',
+                'last_message_at': format_utc_iso(last_msg_time) if last_msg_time else None,
+                'last_message_user_id': r['last_msg_user_id'] if has_last_msg else None,
+                'last_message_type': (r['last_msg_type'] or 'text') if has_last_msg else 'text',
+                'last_message_is_read': bool(r['last_msg_is_read']) if has_last_msg else False,
                 'unread_count': int(r['unread_count'])
             })
 

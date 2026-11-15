@@ -1748,6 +1748,52 @@ export const useChatStore = create((set, get) => ({
           merged.sort(sortChatMessages)
           set({ messages: merged, messagesLoading: false, messagesError: null })
         }
+
+        // Reconcile conversation preview snippet with verified confirmed messages
+        set((state) => {
+          if (merged.length === 0) {
+            return {
+              conversations: state.conversations.map((c) =>
+                sameId(c.id, targetRoomId)
+                  ? { ...c, last_message: '', last_message_user_id: null, last_message_type: 'text', last_message_is_read: false }
+                  : c
+              ),
+              activeConversation: state.activeConversation && sameId(state.activeConversation.id, targetRoomId)
+                ? { ...state.activeConversation, last_message: '', last_message_user_id: null, last_message_type: 'text', last_message_is_read: false }
+                : state.activeConversation
+            }
+          }
+          const latestMsg = merged[merged.length - 1]
+          if (latestMsg) {
+            const previewText = latestMsg.deleted ? 'This message was deleted' : latestMsg.message
+            return {
+              conversations: state.conversations.map((c) =>
+                sameId(c.id, targetRoomId)
+                  ? {
+                      ...c,
+                      last_message: previewText,
+                      last_message_at: latestMsg.created_at || c.last_message_at,
+                      last_message_type: latestMsg.deleted ? 'deleted' : (latestMsg.message_type || 'text'),
+                      last_message_user_id: latestMsg.user_id,
+                      last_message_is_read: Boolean(latestMsg.is_read)
+                    }
+                  : c
+              ),
+              activeConversation: state.activeConversation && sameId(state.activeConversation.id, targetRoomId)
+                ? {
+                    ...state.activeConversation,
+                    last_message: previewText,
+                    last_message_at: latestMsg.created_at || state.activeConversation.last_message_at,
+                    last_message_type: latestMsg.deleted ? 'deleted' : (latestMsg.message_type || 'text'),
+                    last_message_user_id: latestMsg.user_id,
+                    last_message_is_read: Boolean(latestMsg.is_read)
+                  }
+                : state.activeConversation
+            }
+          }
+          return {}
+        })
+
         const uid = get().chatUser?.id
         if (uid && merged.length > 0) {
           setCachedMessages(uid, targetRoomId, merged)
@@ -3418,6 +3464,16 @@ export const useChatStore = create((set, get) => ({
       }
       const uid = get().chatUser?.id
       if (uid && roomId) setCachedMessages(uid, roomId, [])
+      set((state) => ({
+        conversations: state.conversations.map((c) =>
+          sameId(c.id, roomId)
+            ? { ...c, last_message: '', last_message_user_id: null, last_message_type: 'text', last_message_is_read: false }
+            : c
+        ),
+        activeConversation: state.activeConversation && sameId(state.activeConversation.id, roomId)
+          ? { ...state.activeConversation, last_message: '', last_message_user_id: null, last_message_type: 'text', last_message_is_read: false }
+          : state.activeConversation
+      }))
       get().fetchConversations()
       get().fetchNotifications()
       get().fetchUnreadCount()
