@@ -630,45 +630,47 @@ export default function ChatLogin() {
   }
 
   return (
-    <div className={`min-h-[100dvh] w-full flex flex-col justify-between p-3 sm:p-5 font-sans select-text transition-colors duration-200 ${
-      isLight ? 'bg-slate-50 text-slate-900' : 'official-chat-dark dark bg-[#09090b] text-white'
+    <div className={`app-scroll-root w-full font-sans select-text transition-colors duration-200 ${
+      isLight ? 'bg-[#f6f7f9] text-slate-900' : 'official-chat-dark dark bg-[#090a0c] text-white'
     }`}>
+      <div className="mx-auto flex min-h-[100dvh] w-full max-w-[440px] flex-col px-4 sm:px-6">
       {/* Top Bar: chat brand + theme switcher */}
-      <header className="ios-safe-header w-full max-w-[420px] mx-auto flex items-center justify-between gap-2">
-        <div className="inline-flex items-center gap-1.5 px-1 min-w-0">
-          <Lock className={`w-4 h-4 shrink-0 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-          <span className={`text-xs font-black truncate ${isLight ? 'text-slate-800' : 'text-white'}`}>
-            {chatBrandName}
-          </span>
+      <header className="ios-safe-header flex items-center justify-between gap-3 pt-1">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className={`h-9 w-9 shrink-0 overflow-hidden rounded-xl border ${isLight ? 'border-slate-200 bg-white shadow-sm' : 'border-white/10 bg-[#14171b]'}`}>
+            <img src="/logo192.png" alt="" className="h-full w-full object-contain" />
+          </div>
+          <div className="min-w-0">
+            <p className={`truncate text-[13px] font-semibold leading-tight ${isLight ? 'text-slate-900' : 'text-white'}`}>
+              {chatBrandName}
+            </p>
+            <p className={`mt-0.5 flex items-center gap-1 text-[10px] font-medium ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+              <Lock className="h-2.5 w-2.5 shrink-0" />
+              End-to-end encrypted
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex shrink-0 items-center gap-1">
           <a
             href="https://jdlxmobile.in"
             target="_blank"
             rel="noopener noreferrer"
-            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-bold border transition-all active:scale-95 ${
-              isLight
-                ? 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-xs'
-                : 'bg-[#18181b] hover:bg-[#27272a] text-zinc-300 border-[#27272a]'
-            }`}
+            title="Open the JDLX store"
+            className={`ui-btn ui-btn-ghost h-9 min-h-0 gap-1.5 px-2.5 text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}
           >
-            <ExternalLink className="w-3 h-3 text-[#facc15]" />
-            <span>Store</span>
+            <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline">Store</span>
           </a>
 
           <a
             href="/downloads/official-chat.apk"
             download="official-chat.apk"
-            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-bold border transition-all active:scale-95 ${
-              isLight
-                ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200 shadow-xs'
-                : 'bg-yellow-500/10 hover:bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
-            }`}
-            title="Download JDLX Chat Android APK"
+            title="Download the JDLX Chat Android APK"
+            className={`ui-btn ui-btn-ghost h-9 min-h-0 gap-1.5 px-2.5 text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}
           >
-            <Download className="w-3 h-3" />
-            <span>APK</span>
+            <Download className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline">APK</span>
           </a>
 
           {/* Theme Switcher */}
@@ -677,128 +679,121 @@ export default function ChatLogin() {
             onClick={toggleChatTheme}
             title={`Theme: ${themeLabel} — click to change`}
             aria-label={`Theme: ${themeLabel}. Click to change.`}
-            className={`w-9 h-9 flex items-center justify-center rounded-full border transition-all active:scale-95 touch-manipulation ${
-              isLight
-                ? 'bg-white hover:bg-slate-100 text-amber-600 border-slate-200 shadow-sm'
-                : 'bg-[#18181b] hover:bg-[#27272a] text-[#facc15] border-[#27272a]'
-            }`}
+            className={`ui-icon-btn h-9 w-9 border ${isLight ? 'border-slate-200 bg-white shadow-sm' : 'border-white/10 bg-[#14171b]'}`}
           >
             {chatTheme === 'system'
-              ? <Monitor className="w-4 h-4" />
+              ? <Monitor className="h-4 w-4" />
               : chatTheme === 'light'
-                ? <Moon className="w-4 h-4" />
-                : <Sun className="w-4 h-4" />}
+                ? <Moon className="h-4 w-4" />
+                : <Sun className="h-4 w-4 text-amber-500" />}
           </button>
         </div>
       </header>
 
       {/* Main Card */}
-      <main className="w-full max-w-[420px] mx-auto my-auto py-2 sm:py-3">
-        <div className={`rounded-3xl p-4 sm:p-6 border shadow-2xl relative overflow-hidden transition-colors animate-popover-spring origin-center ${
+      <main className="flex w-full flex-1 flex-col justify-center py-6 sm:py-8">
+        <div className={`ui-card relative overflow-hidden p-5 transition-colors sm:p-6 ${
           isLight
-            ? 'bg-white border-slate-200 shadow-slate-200/50'
-            : 'bg-[#121215] border-[#27272a]'
+            ? 'border-slate-200/90 bg-white'
+            : 'border-white/[0.07] bg-[#0f1114]'
         }`}>
-          {/* Subtle Ambient Glow */}
-          <div className={`absolute -top-20 -right-20 w-44 h-44 rounded-full blur-3xl pointer-events-none ${
-            isLight ? 'bg-amber-400/10' : 'bg-yellow-500/10'
-          }`}></div>
-          <div className={`absolute -bottom-20 -left-20 w-44 h-44 rounded-full blur-3xl pointer-events-none ${
-            isLight ? 'bg-orange-400/10' : 'bg-amber-500/10'
-          }`}></div>
-
           {/* Emblem & Branding */}
-          <div className="flex flex-col items-center text-center mb-3 sm:mb-4">
-            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-tr from-[#eab308] to-[#facc15] p-0.5 shadow-md shadow-yellow-500/15 mb-2">
-              <div className={`w-full h-full rounded-[14px] flex items-center justify-center overflow-hidden ${
-                isLight ? 'bg-white' : 'bg-[#09090b]'
+          <div className="mb-5 flex items-start gap-3.5">
+            <div className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border ${
+              isLight ? 'border-slate-200 bg-white shadow-sm' : 'border-white/10 bg-[#14171b]'
+            }`}>
+              <img
+                src="/logo192.png"
+                alt={chatBrandName || "JDLX Chat"}
+                className="h-full w-full object-contain"
+              />
+            </div>
+            <div className="min-w-0 pt-0.5">
+              <div className={`mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                isLight ? 'text-amber-700' : 'text-amber-400'
               }`}>
-                <img
-                  src="/logo192.png"
-                  alt={chatBrandName || "JDLX Chat"}
-                  className="w-full h-full object-contain rounded-[14px]"
-                />
+                <Shield className="h-3 w-3" />
+                <span>Secure access</span>
               </div>
+              <h1 className={`text-[22px] font-semibold leading-tight tracking-tight ${
+                isLight ? 'text-slate-900' : 'text-white'
+              }`}>
+                {authMode === 'signin'
+                  ? 'Welcome back'
+                  : googleSignupTicket ? 'Finish Google sign-up' : 'Create your account'}
+              </h1>
             </div>
-            <div className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest mb-0.5 ${
-              isLight ? 'text-amber-600' : 'text-[#facc15]'
-            }`}>
-              <Shield className="w-3 h-3" />
-              <span>{chatBrandName}</span>
-            </div>
-            <h1 className={`text-lg sm:text-xl font-black tracking-tight ${
-              isLight ? 'text-slate-900' : 'text-white'
-            }`}>
-              {authMode === 'signin'
-                ? 'Sign In to Chat'
-                : googleSignupTicket ? 'Finish Google Sign-Up' : 'Create Chat Account'}
-            </h1>
-            <p className={`text-[11px] mt-0.5 max-w-xs font-medium leading-relaxed ${
-              isLight ? 'text-slate-500' : 'text-zinc-300'
-            }`}>
-              {authMode === 'signin'
-                ? 'Enter your Username, Email or Mobile Number and Password'
-                : googleSignupTicket
-                  ? 'Google verified your email. Add the details friends will see'
-                  : 'Create your unique handle with an email or mobile number'}
-            </p>
           </div>
+          <p className={`mb-5 text-[12.5px] leading-relaxed ${
+            isLight ? 'text-slate-600' : 'text-zinc-400'
+          }`}>
+            {authMode === 'signin'
+              ? 'Sign in with your username, email or mobile number to continue to your private chats.'
+              : googleSignupTicket
+                ? 'Google verified your email. Add the details your friends will see.'
+                : 'Create a unique handle with your email or mobile number. It only takes a minute.'}
+          </p>
 
           {inviteRef && (
-            <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 mb-3 text-[11px] font-semibold ${
+            <div className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2.5 text-[11px] font-medium leading-snug ${
               isLight
-                ? 'bg-amber-50 border-amber-200 text-amber-800'
-                : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                ? 'border-amber-200 bg-amber-50/70 text-amber-900'
+                : 'border-amber-500/20 bg-amber-500/[0.07] text-amber-200'
             }`}>
-              <UserPlus className="w-4 h-4 shrink-0" />
+              <UserPlus className="h-4 w-4 shrink-0" />
               <span className="min-w-0 break-words">
-                Invited by <strong>@{inviteRef}</strong>. Sign in or create an account to connect.
+                Invited by <strong className="font-semibold">@{inviteRef}</strong>. Sign in or create an account to connect.
               </span>
             </div>
           )}
 
-          {/* Mode Switcher Tabs with Sliding Pill */}
-          <div className={`relative flex rounded-xl p-1 mb-3 border ${
-            isLight ? 'bg-slate-100 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+          {/* Mode Switcher */}
+          <div className={`mb-4 grid grid-cols-2 gap-1 rounded-xl p-1 ${
+            isLight ? 'bg-slate-100' : 'bg-white/[0.05]'
           }`}>
-            {/* Sliding Background Pill */}
-            <div
-              className={`absolute top-1 bottom-1 rounded-lg bg-gradient-to-r from-[#facc15] to-[#eab308] shadow-md transition-all duration-300 ease-out pointer-events-none ${
-                authMode === 'signin'
-                  ? 'left-1 w-[calc(50%-4px)]'
-                  : 'left-[calc(50%+2px)] w-[calc(50%-4px)]'
-              }`}
-            />
             <button
               type="button"
               onClick={() => { setAuthMode('signin'); setErrorMsg('') }}
-              className={`relative z-10 flex-1 py-2 rounded-lg text-xs font-black transition-colors duration-200 flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation ${
+              aria-pressed={authMode === 'signin'}
+              className={`flex flex-1 cursor-pointer touch-manipulation items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
                 authMode === 'signin'
-                  ? 'text-[#09090b]'
+                  ? isLight
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'bg-[#23262c] text-white shadow-sm'
                   : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-white'
               }`}
             >
-              <LogIn className="w-3.5 h-3.5" />
-              <span>Sign In</span>
+              <LogIn className="h-3.5 w-3.5" />
+              <span>Sign in</span>
             </button>
             <button
               type="button"
               onClick={() => { setAuthMode('register'); setErrorMsg('') }}
-              className={`relative z-10 flex-1 py-2 rounded-lg text-xs font-black transition-colors duration-200 flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation ${
+              aria-pressed={authMode === 'register'}
+              className={`flex flex-1 cursor-pointer touch-manipulation items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all ${
                 authMode === 'register'
-                  ? 'text-[#09090b]'
+                  ? isLight
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'bg-[#23262c] text-white shadow-sm'
                   : isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-white'
               }`}
             >
-              <UserPlus className="w-3.5 h-3.5" />
-              <span>Create Account</span>
+              <UserPlus className="h-3.5 w-3.5" />
+              <span>Create account</span>
             </button>
           </div>
 
           {/* Error Message Box */}
           {errorMsg && (
-            <div className="mb-3 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/25 flex items-start gap-2.5 text-rose-500 text-xs font-bold animate-shake">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div
+              role="alert"
+              className={`mb-3 flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-xs font-medium animate-shake ${
+                isLight
+                  ? 'border-rose-200 bg-rose-50 text-rose-700'
+                  : 'border-rose-500/25 bg-rose-500/10 text-rose-300'
+              }`}
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span className="flex-1 leading-snug">{errorMsg}</span>
             </div>
           )}
@@ -809,9 +804,7 @@ export default function ChatLogin() {
               {/* Identifier Input (Username, Email or Mobile) */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                    isLight ? 'text-slate-600' : 'text-zinc-200'
-                  }`}>
+                  <label className="ui-label flex items-center gap-1.5">
                     <User className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                     <span>Username, Email or Mobile</span>
                     <span className="text-amber-500 font-black">*</span>
@@ -833,20 +826,14 @@ export default function ChatLogin() {
                   placeholder="@username, email or 10-digit mobile"
                   value={loginIdentifier}
                   onChange={(e) => setLoginIdentifier(e.target.value)}
-                  className={`w-full px-3.5 py-2.5 rounded-xl border text-[16px] sm:text-sm font-medium focus:outline-none transition-colors ${
-                    isLight
-                      ? 'bg-white border-slate-200 text-slate-900 focus:border-amber-500 placeholder:text-slate-400'
-                      : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] placeholder:text-zinc-400'
-                  }`}
+                  className="ui-input text-base sm:text-sm"
                   required
                 />
               </div>
 
               {/* Password Input */}
               <div className="space-y-1">
-                <label className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                  isLight ? 'text-slate-600' : 'text-zinc-200'
-                }`}>
+                <label className="ui-label flex items-center gap-1.5">
                   <Lock className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Password</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -858,18 +845,15 @@ export default function ChatLogin() {
                     placeholder="Enter your password"
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
-                    className={`w-full pl-3.5 pr-10 py-2.5 rounded-xl border text-[16px] sm:text-sm font-medium focus:outline-none transition-colors ${
-                      isLight
-                        ? 'bg-white border-slate-200 text-slate-900 focus:border-amber-500 placeholder:text-slate-400'
-                        : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] placeholder:text-zinc-400'
-                    }`}
+                    className="ui-input pr-10 text-base sm:text-sm"
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowLoginPassword(!showLoginPassword)}
-                    className={`absolute right-3 p-1 rounded-lg transition-colors ${
-                      isLight ? 'text-slate-400 hover:text-slate-600' : 'text-zinc-400 hover:text-zinc-200'
+                    aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                    className={`absolute right-2 flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+                      isLight ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-600' : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
                     }`}
                     title={showLoginPassword ? 'Hide password' : 'Show password'}
                   >
@@ -882,14 +866,14 @@ export default function ChatLogin() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full mt-1.5 py-3 px-4 rounded-xl font-black text-sm bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] hover:brightness-105 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-yellow-500/10 cursor-pointer touch-manipulation min-h-[44px]"
+                className="ui-btn ui-btn-primary mt-1 w-full touch-manipulation"
               >
                 {loading ? (
-                  <div className="w-5 h-5 border-2 border-[#09090b] border-t-transparent rounded-full animate-spin"></div>
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-[#171204]/30 border-t-[#171204]"></div>
                 ) : (
                   <>
-                    <span>Sign In to {chatBrandName}</span>
-                    <ArrowRight className="w-4 h-4 text-[#09090b]" />
+                    <span>Sign in to {chatBrandName}</span>
+                    <ArrowRight className="h-4 w-4" />
                   </>
                 )}
               </button>
@@ -899,11 +883,11 @@ export default function ChatLogin() {
                 <button
                   type="button"
                   onClick={() => { setAuthMode('register'); setErrorMsg('') }}
-                  className={`text-xs font-bold hover:underline transition-colors ${
-                    isLight ? 'text-amber-700' : 'text-[#facc15]'
+                  className={`text-xs font-medium underline-offset-4 transition-colors hover:underline ${
+                    isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-white'
                   }`}
                 >
-                  New to {chatBrandName}? Create an Account →
+                  New to {chatBrandName}? Create an account →
                 </button>
               </div>
             </form>
@@ -915,10 +899,10 @@ export default function ChatLogin() {
               {/* Google verified the identity; the chat account itself is
                   created only when this form is submitted. */}
               {googleSignupTicket && (
-                <div className={`p-3 rounded-2xl border text-[11px] font-bold leading-snug ${
+                <div className={`rounded-xl border p-3 text-[11px] font-medium leading-snug ${
                   isLight
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                    : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
                 }`}>
                   Google account verified. Choose your username, password, mobile number and gender to create your Chat id.
                 </div>
@@ -926,9 +910,7 @@ export default function ChatLogin() {
 
               {/* 1. Full Name */}
               <div className="space-y-1">
-                <label className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                  isLight ? 'text-slate-600' : 'text-zinc-200'
-                }`}>
+                <label className="ui-label flex items-center gap-1.5">
                   <User className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Full Name</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -942,11 +924,7 @@ export default function ChatLogin() {
                   placeholder="e.g. Jaydev Mahato"
                   value={regFullName}
                   onChange={(e) => setRegFullName(e.target.value)}
-                  className={`w-full px-3.5 py-2.5 rounded-xl border text-[16px] sm:text-sm font-medium focus:outline-none transition-colors ${
-                    isLight
-                      ? 'bg-white border-slate-200 text-slate-900 focus:border-amber-500 placeholder:text-slate-400'
-                      : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] placeholder:text-zinc-400'
-                  }`}
+                  className="ui-input text-base sm:text-sm"
                   required
                 />
               </div>
@@ -954,9 +932,7 @@ export default function ChatLogin() {
               {/* 2. Username (@handle) — Auto-sanitized, No email domain */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                    isLight ? 'text-slate-600' : 'text-zinc-200'
-                  }`}>
+                  <label className="ui-label flex items-center gap-1.5">
                     <AtSign className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                     <span>Unique Handle</span>
                     <span className="text-amber-500 font-black">*</span>
@@ -977,11 +953,7 @@ export default function ChatLogin() {
                     placeholder="choose_handle"
                     value={regUsername}
                     onChange={(e) => handleUsernameChange(e.target.value)}
-                    className={`w-full pl-8 pr-10 py-2.5 rounded-xl border text-[16px] sm:text-sm font-mono focus:outline-none transition-colors ${
-                      isLight
-                        ? 'bg-white border-slate-200 text-slate-900 focus:border-amber-500 placeholder:text-slate-400'
-                        : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] placeholder:text-zinc-400'
-                    }`}
+                    className="ui-input pl-8 pr-10 font-mono text-base sm:text-sm"
                     required
                   />
                   <div className="absolute right-3 flex items-center">
@@ -999,9 +971,9 @@ export default function ChatLogin() {
 
                 {/* Real-time username feedback message */}
                 {usernameStatus.message && (
-                  <p className={`text-[11px] font-bold transition-all ${
+                  <p className={`text-[11px] font-medium transition-all ${
                     usernameStatus.available === true
-                      ? 'text-emerald-500'
+                      ? 'text-emerald-600 dark:text-emerald-400'
                       : usernameStatus.available === false
                         ? 'text-rose-500'
                         : isLight ? 'text-slate-500' : 'text-zinc-400'
@@ -1013,9 +985,7 @@ export default function ChatLogin() {
 
               {/* 3. Email Address (primary sign-in identity) */}
               <div className="space-y-1">
-                <label className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                  isLight ? 'text-slate-600' : 'text-zinc-200'
-                }`}>
+                <label className="ui-label flex items-center gap-1.5">
                   <Mail className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Email Address</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -1031,13 +1001,7 @@ export default function ChatLogin() {
                   value={regEmail}
                   onChange={(e) => setRegEmail(e.target.value)}
                   readOnly={Boolean(googleSignupTicket)}
-                  className={`w-full px-3.5 py-2.5 rounded-xl border text-[16px] sm:text-sm font-medium focus:outline-none transition-colors ${
-                    googleSignupTicket ? 'opacity-70 cursor-not-allowed' : ''
-                  } ${
-                    isLight
-                      ? 'bg-white border-slate-200 text-slate-900 focus:border-amber-500 placeholder:text-slate-400'
-                      : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] placeholder:text-zinc-400'
-                  }`}
+                  className={`ui-input text-base sm:text-sm ${googleSignupTicket ? 'cursor-not-allowed opacity-70' : ''}`}
                   required
                 />
               </div>
@@ -1045,9 +1009,7 @@ export default function ChatLogin() {
               {/* 4. Mobile Number (Dedicated Indian Mobile Component) */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                    isLight ? 'text-slate-600' : 'text-zinc-200'
-                  }`}>
+                  <label className="ui-label flex items-center gap-1.5">
                     <Smartphone className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                     <span>Mobile Number</span>
                     {googleSignupTicket ? (
@@ -1064,10 +1026,10 @@ export default function ChatLogin() {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className={`px-2.5 py-2.5 rounded-xl border flex items-center gap-1.5 shrink-0 select-none shadow-xs ${
+                  <div className={`flex shrink-0 select-none items-center gap-1.5 rounded-[14px] border px-2.5 py-2.5 ${
                     isLight
-                      ? 'bg-slate-50 border-slate-200 text-slate-800'
-                      : 'bg-[#18181b] border-[#27272a] text-zinc-200'
+                      ? 'border-slate-200 bg-slate-50 text-slate-800'
+                      : 'border-white/10 bg-[#14171b] text-zinc-200'
                   }`}>
                     <span className="text-sm leading-none" role="img" aria-label="India flag">🇮🇳</span>
                     <span className={`text-xs font-black ${isLight ? 'text-amber-700' : 'text-[#facc15]'}`}>+91</span>
@@ -1082,14 +1044,8 @@ export default function ChatLogin() {
                       placeholder="98765 43210"
                       value={formatIndianPhone(regPhone)}
                       onChange={handlePhoneChange}
-                      className={`w-full px-3.5 py-2.5 rounded-xl border text-[16px] sm:text-sm font-medium focus:outline-none transition-colors tracking-wide ${
-                        regPhone.length === 10
-                          ? 'border-emerald-500/60 focus:border-emerald-500'
-                          : ''
-                      } ${
-                        isLight
-                          ? 'bg-white border-slate-200 text-slate-900 focus:border-amber-500 placeholder:text-slate-400'
-                          : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] placeholder:text-zinc-500'
+                      className={`ui-input tracking-wide text-base sm:text-sm ${
+                        regPhone.length === 10 ? 'border-emerald-500/60 focus:border-emerald-500' : ''
                       }`}
                     />
                     {regPhone.length === 10 && (
@@ -1104,9 +1060,7 @@ export default function ChatLogin() {
 
               {/* 5. Gender */}
               <div className="space-y-1">
-                <label className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                  isLight ? 'text-slate-600' : 'text-zinc-200'
-                }`}>
+                <label className="ui-label flex items-center gap-1.5">
                   <Users className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Gender</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -1114,11 +1068,7 @@ export default function ChatLogin() {
                 <select
                   value={regGender}
                   onChange={(e) => setRegGender(e.target.value)}
-                  className={`w-full px-3.5 py-2.5 rounded-xl border text-[16px] sm:text-sm font-medium focus:outline-none transition-colors ${
-                    isLight
-                      ? 'bg-white border-slate-200 text-slate-900 focus:border-amber-500'
-                      : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15]'
-                  }`}
+                  className="ui-input ui-select text-base sm:text-sm"
                   required
                 >
                   <option value="">Select gender</option>
@@ -1131,9 +1081,7 @@ export default function ChatLogin() {
 
               {/* 6. Set Password */}
               <div className="space-y-1">
-                <label className={`text-[11px] font-bold flex items-center gap-1.5 ${
-                  isLight ? 'text-slate-600' : 'text-zinc-200'
-                }`}>
+                <label className="ui-label flex items-center gap-1.5">
                   <Lock className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Create Password</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -1145,18 +1093,15 @@ export default function ChatLogin() {
                     placeholder="Min 6 characters"
                     value={regPassword}
                     onChange={(e) => setRegPassword(e.target.value)}
-                    className={`w-full pl-3.5 pr-10 py-2.5 rounded-xl border text-[16px] sm:text-sm font-medium focus:outline-none transition-colors ${
-                      isLight
-                        ? 'bg-white border-slate-200 text-slate-900 focus:border-amber-500 placeholder:text-slate-400'
-                        : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] placeholder:text-zinc-400'
-                    }`}
+                    className="ui-input pr-10 text-base sm:text-sm"
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowRegPassword(!showRegPassword)}
-                    className={`absolute right-3 p-1 rounded-lg transition-colors ${
-                      isLight ? 'text-slate-400 hover:text-slate-600' : 'text-zinc-400 hover:text-zinc-200'
+                    aria-label={showRegPassword ? 'Hide password' : 'Show password'}
+                    className={`absolute right-2 flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
+                      isLight ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-600' : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
                     }`}
                     title={showRegPassword ? 'Hide password' : 'Show password'}
                   >
@@ -1169,9 +1114,9 @@ export default function ChatLogin() {
                   <div className="space-y-1 pt-1 animate-fade-in">
                     <div className="flex items-center justify-between text-[10px] font-bold">
                       <span className={isLight ? 'text-slate-500' : 'text-zinc-400'}>
-                        Password Strength:
+                        Password strength
                       </span>
-                      <span className={`font-black ${pwStrength.textColor}`}>
+                      <span className={`font-semibold ${pwStrength.textColor}`}>
                         {pwStrength.label}
                       </span>
                     </div>
@@ -1203,7 +1148,7 @@ export default function ChatLogin() {
                     setAuthMode('signin')
                     setErrorMsg('')
                   }}
-                  className={`w-full text-[11px] font-bold hover:underline ${
+                  className={`w-full text-[11px] font-medium hover:underline ${
                     isLight ? 'text-slate-500' : 'text-zinc-400'
                   }`}
                 >
@@ -1215,14 +1160,14 @@ export default function ChatLogin() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full mt-1.5 py-3 px-4 rounded-xl font-black text-sm bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] hover:brightness-105 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-yellow-500/10 cursor-pointer touch-manipulation min-h-[44px]"
+                className="ui-btn ui-btn-primary mt-1 w-full touch-manipulation"
               >
                 {loading ? (
-                  <div className="w-5 h-5 border-2 border-[#09090b] border-t-transparent rounded-full animate-spin"></div>
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-[#171204]/30 border-t-[#171204]"></div>
                 ) : (
                   <>
-                    <span>Create Account &amp; Enter Chat</span>
-                    <ArrowRight className="w-4 h-4 text-[#09090b]" />
+                    <span>Create account &amp; enter chat</span>
+                    <ArrowRight className="h-4 w-4" />
                   </>
                 )}
               </button>
@@ -1232,25 +1177,25 @@ export default function ChatLogin() {
                 <button
                   type="button"
                   onClick={() => { setAuthMode('signin'); setErrorMsg('') }}
-                  className={`text-xs font-bold hover:underline transition-colors ${
-                    isLight ? 'text-amber-700' : 'text-[#facc15]'
+                  className={`text-xs font-medium underline-offset-4 transition-colors hover:underline ${
+                    isLight ? 'text-slate-600 hover:text-slate-900' : 'text-zinc-400 hover:text-white'
                   }`}
                 >
-                  Already have an account? Sign In →
+                  Already have an account? Sign in →
                 </button>
               </div>
             </form>
           )}
 
           {/* Divider */}
-          <div className="flex items-center gap-3 py-2">
-            <div className={`flex-1 h-px ${isLight ? 'bg-slate-200' : 'bg-[#27272a]'}`}></div>
-            <span className={`text-[11px] font-black uppercase tracking-wider ${
-              isLight ? 'text-slate-400' : 'text-zinc-400'
+          <div className="flex items-center gap-3 py-3">
+            <div className={`h-px flex-1 ${isLight ? 'bg-slate-200' : 'bg-white/[0.08]'}`}></div>
+            <span className={`text-[10px] font-medium uppercase tracking-[0.12em] ${
+              isLight ? 'text-slate-400' : 'text-zinc-500'
             }`}>
-              OR
+              or
             </span>
-            <div className={`flex-1 h-px ${isLight ? 'bg-slate-200' : 'bg-[#27272a]'}`}></div>
+            <div className={`h-px flex-1 ${isLight ? 'bg-slate-200' : 'bg-white/[0.08]'}`}></div>
           </div>
 
           {/* Login with Google — creates/uses chat-only identity */}
@@ -1258,42 +1203,40 @@ export default function ChatLogin() {
             type="button"
             onClick={handleGoogleLogin}
             disabled={loading}
-            className={`w-full py-2.5 px-4 rounded-xl font-bold text-sm shadow-sm active:scale-[0.98] transition-all flex items-center justify-center gap-3 border cursor-pointer touch-manipulation min-h-[44px] ${
-              isLight
-                ? 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'
-                : 'bg-[#18181b] hover:bg-[#202024] text-white border-[#27272a]'
-            }`}
+            className="ui-btn ui-btn-secondary w-full touch-manipulation gap-3"
           >
             <GoogleIcon />
-            <span>Login with Google</span>
+            <span>Continue with Google</span>
           </button>
 
           {/* Security & Notification Isolation Guarantee */}
-          <div className={`mt-4 pt-3 border-t space-y-1.5 ${isLight ? 'border-slate-200' : 'border-[#27272a]'}`}>
+          <div className={`mt-5 space-y-2 border-t pt-4 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
             <div className={`flex items-start gap-2 text-[11px] leading-relaxed ${
-              isLight ? 'text-slate-600' : 'text-zinc-300'
+              isLight ? 'text-slate-600' : 'text-zinc-400'
             }`}>
-              <Lock className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
+              <Lock className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${isLight ? 'text-amber-700' : 'text-amber-400'}`} />
               <span>
-                <strong className={isLight ? 'text-slate-900' : 'text-white'}>Isolated Account:</strong> Log in anytime using your username, email or mobile number + password.
+                <strong className={`font-semibold ${isLight ? 'text-slate-900' : 'text-zinc-200'}`}>Isolated account.</strong>{' '}
+                Sign in anytime with your username, email or mobile number and password.
               </span>
             </div>
-            <div className={`flex items-center gap-2 text-[10px] font-bold ${
-              isLight ? 'text-slate-500' : 'text-zinc-400'
+            <div className={`flex items-center gap-2 text-[10px] font-medium ${
+              isLight ? 'text-slate-500' : 'text-zinc-500'
             }`}>
-              <CheckCircle className={`w-3.5 h-3.5 shrink-0 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-              <span>Encrypted Messaging • Private &amp; Secure</span>
+              <CheckCircle className={`h-3.5 w-3.5 shrink-0 ${isLight ? 'text-emerald-600' : 'text-emerald-500'}`} />
+              <span>Encrypted messaging · Private and secure</span>
             </div>
           </div>
         </div>
       </main>
 
       {/* FOOTER */}
-      <footer className={`text-center text-[11px] py-2 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] font-medium ${
-        isLight ? 'text-slate-500' : 'text-zinc-400'
+      <footer className={`py-3 pb-[max(0.9rem,env(safe-area-inset-bottom,0px))] text-center text-[10px] font-medium ${
+        isLight ? 'text-slate-500' : 'text-zinc-500'
       }`}>
-        {chatBrandName} • Private Standalone Messenger
+        {chatBrandName} · Private standalone messenger
       </footer>
+      </div>
     </div>
   )
 }

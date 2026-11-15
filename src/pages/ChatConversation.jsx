@@ -5034,16 +5034,16 @@ export default function ChatConversation() {
         maxHeight: '100dvh'
       }}
       className={`fixed top-0 left-0 right-0 z-[100] flex flex-col font-sans overflow-hidden transition-colors duration-200 ${
-        isLight ? 'bg-white text-slate-900' : 'official-chat-dark dark bg-[#09090b] text-white'
+        isLight ? 'bg-[#f6f7f9] text-slate-900' : 'official-chat-dark dark bg-[#090a0c] text-white'
       }`}
     >
       {/* ── TOP APPLICATION HEADER ── */}
-      <header className={`ios-safe-header min-h-[3.75rem] shrink-0 border-b px-3 sm:px-5 items-center justify-between z-30 transition-colors select-none ${
+      <header className={`ios-safe-header z-30 min-h-[64px] shrink-0 items-center justify-between border-b px-3 transition-colors select-none sm:px-5 ${
         mobileView === 'chat' ? 'hidden md:flex' : 'flex'
       } ${
         isLight 
-          ? 'bg-white border-slate-200 shadow-sm text-slate-900' 
-          : 'bg-[#121215] border-[#27272a] shadow-md text-white'
+          ? 'border-[#e4e7ec] bg-white text-slate-900' 
+          : 'border-white/[0.07] bg-[#0f1114] text-white'
       }`}>
         {/* Left: User Profile & Identity (Clickable to open Profile & Settings) */}
         <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
@@ -5054,10 +5054,10 @@ export default function ChatConversation() {
           >
             {/* User Avatar with luxury aura */}
             <div className="relative shrink-0">
-              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-tr from-[#eab308] to-[#facc15] p-0.5 shadow-md shadow-yellow-500/15 group-hover:scale-105 transition-transform duration-200">
-                <div className={`w-full h-full rounded-[14px] flex items-center justify-center font-black text-xs sm:text-sm overflow-hidden ${
-                  isLight ? 'bg-amber-100 text-amber-800' : 'bg-[#18181b] text-[#facc15]'
-                }`}>
+              <div className={`h-9 w-9 shrink-0 overflow-hidden rounded-xl border transition-transform duration-200 group-hover:scale-[1.03] sm:h-10 sm:w-10 ${
+                isLight ? 'border-slate-200 bg-amber-50 text-amber-800' : 'border-white/10 bg-[#1a1d22] text-amber-300'
+              }`}>
+                <div className="flex h-full w-full items-center justify-center overflow-hidden text-xs font-semibold sm:text-sm">
                   {(chatUser?.profile_image || chatUser?.avatar) ? (
                     <img
                       src={resolveMediaUrl(chatUser.profile_image || chatUser.avatar)}
@@ -5082,15 +5082,15 @@ export default function ChatConversation() {
             {/* User Name & Handle */}
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 min-w-0">
-                <h1 className={`text-sm sm:text-base font-black truncate tracking-tight group-hover:text-amber-500 transition-colors ${
+                <h1 className={`truncate text-sm font-semibold tracking-tight transition-colors group-hover:text-amber-600 dark:group-hover:text-amber-400 sm:text-[15px] ${
                   isLight ? 'text-slate-900' : 'text-white'
                 }`}>
                   {chatUser?.name || chatUser?.full_name || chatBrandName}
                 </h1>
-                <span className={`hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase shrink-0 ${
-                  isLight ? 'bg-amber-100 text-amber-800' : 'bg-yellow-500/15 text-[#facc15] border border-yellow-500/30'
+                <span className={`hidden shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide sm:inline-flex ${
+                  isLight ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-amber-500/20 bg-amber-500/10 text-amber-300'
                 }`}>
-                  <Lock className="w-2.5 h-2.5" />
+                  <Lock className="h-2.5 w-2.5" />
                   Encrypted
                 </span>
               </div>
@@ -5112,11 +5112,7 @@ export default function ChatConversation() {
               fetchFriendsAndRequests()
             }}
             title="Add Friend & Search Users"
-            className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all active:scale-95 border cursor-pointer ${
-              isLight
-                ? 'bg-amber-500 text-white border-amber-600 hover:bg-amber-600 shadow-sm'
-                : 'bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] border-yellow-500/30 shadow-md shadow-yellow-500/15'
-            }`}
+            className="ui-btn ui-btn-primary h-9 min-h-0 gap-1.5 px-2.5 text-xs sm:px-3"
           >
             <UserPlus className="w-4 h-4" />
             <span className="hidden sm:inline">Add Friend</span>
@@ -5133,11 +5129,7 @@ export default function ChatConversation() {
             onClick={toggleChatTheme}
             title={`Theme: ${themeLabel} — click to change`}
             aria-label={`Theme: ${themeLabel}. Click to change.`}
-            className={`p-2 rounded-xl transition-all border active:scale-95 cursor-pointer ${
-              isLight
-                ? 'text-amber-700 hover:bg-slate-100 border-transparent hover:border-slate-200'
-                : 'text-[#a1a1aa] hover:text-[#facc15] hover:bg-[#18181b] border-transparent hover:border-[#27272a]'
-            }`}
+            className="ui-icon-btn"
           >
             {chatTheme === 'system'
               ? <Monitor className="w-5 h-5" />
@@ -5152,11 +5144,7 @@ export default function ChatConversation() {
               onClick={triggerPwaInstall}
               title="Install JDLX Chat App"
               aria-label="Install JDLX Chat App"
-              className={`p-2 sm:px-3 sm:py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all active:scale-95 border cursor-pointer ${
-                isLight
-                  ? 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
-                  : 'bg-[#18181b] hover:bg-[#27272a] text-[#facc15] border-[#3f3f46]'
-              }`}
+              className="ui-btn ui-btn-secondary h-9 min-h-0 gap-1.5 px-2.5 text-xs"
             >
               <Download className="w-4 h-4 text-[#facc15]" />
               <span className="hidden lg:inline text-[11px]">Install App</span>
@@ -5170,11 +5158,7 @@ export default function ChatConversation() {
               fetchNotifications()
             }}
             title="Chat Notifications"
-            className={`p-2 rounded-xl transition-all relative border active:scale-95 cursor-pointer ${
-              isLight
-                ? 'text-slate-600 hover:text-amber-700 hover:bg-slate-100 border-transparent hover:border-slate-200'
-                : 'text-[#a1a1aa] hover:text-[#facc15] hover:bg-[#18181b] border-transparent hover:border-[#27272a]'
-            }`}
+            className="ui-icon-btn relative"
           >
             <Bell className="w-5 h-5" />
             {unreadCount > 0 && (
@@ -5193,22 +5177,23 @@ export default function ChatConversation() {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* LEFT PANE: CONVERSATIONS & CHATS LIST (WhatsApp Sidebar)     */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <aside className={`w-full md:w-80 lg:w-96 shrink-0 border-r flex flex-col transition-all duration-200 ${
-          isLight ? 'bg-white border-slate-200' : 'bg-[#121215] border-[#27272a]'
+        <aside className={`flex w-full shrink-0 flex-col border-r transition-all duration-200 md:w-80 lg:w-96 ${
+          isLight ? 'border-[#e4e7ec] bg-white' : 'border-white/[0.07] bg-[#0f1114]'
         } ${mobileView === 'chat' ? 'hidden md:flex' : 'flex'}`}>
           {/* Search Contacts / Filter Bar */}
-          <div className={`p-3 border-b ${isLight ? 'border-slate-200 bg-slate-50/50' : 'border-[#27272a] bg-[#0e0e11]'}`}>
+          <div className={`border-b p-3 ${isLight ? 'border-[#e4e7ec] bg-white' : 'border-white/[0.07] bg-[#0f1114]'}`}>
             <div className="relative flex items-center">
-              <Search className={`w-4 h-4 absolute left-3 top-2.5 pointer-events-none ${isLight ? 'text-slate-400' : 'text-[#71717a]'}`} />
+              <Search className={`pointer-events-none absolute left-3 top-2.5 h-4 w-4 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`} />
               <input
                 type="text"
-                placeholder="Search chats or friends..."
+                placeholder="Search chats or friends"
                 value={conversationFilter}
                 onChange={(e) => setConversationFilter(e.target.value)}
-                className={`w-full pl-9 pr-8 py-2 rounded-xl text-xs font-medium focus:outline-none transition-colors border ${
+                aria-label="Search chats or friends"
+                className={`h-9 w-full rounded-lg border py-0 pl-9 pr-8 text-xs font-medium transition-colors focus:outline-none ${
                   isLight
-                    ? 'bg-white border-slate-200 text-slate-900 placeholder:text-slate-400 focus:border-amber-500'
-                    : 'bg-[#18181b] border-[#27272a] text-white placeholder:text-zinc-400 focus:border-[#facc15]'
+                    ? 'border-transparent bg-[#f2f4f7] text-slate-900 placeholder:text-slate-500 hover:bg-[#eef0f4] focus:border-amber-500/50 focus:bg-white'
+                    : 'border-transparent bg-[#16191e] text-white placeholder:text-zinc-500 hover:bg-[#1a1e24] focus:border-amber-500/40 focus:bg-[#16191e]'
                 }`}
               />
               {conversationFilter && (
@@ -5216,9 +5201,12 @@ export default function ChatConversation() {
                   type="button"
                   onClick={() => setConversationFilter('')}
                   title="Clear search"
-                  className="absolute right-2.5 top-2 p-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors cursor-pointer"
+                  aria-label="Clear search"
+                  className={`absolute right-2 flex h-6 w-6 items-center justify-center rounded-md transition-colors ${
+                    isLight ? 'text-slate-400 hover:bg-slate-200 hover:text-slate-600' : 'text-zinc-500 hover:bg-white/10 hover:text-zinc-200'
+                  }`}
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
@@ -5231,21 +5219,21 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setConversationTabFilter('all')
                 }}
-                className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   conversationTabFilter === 'all'
                     ? isLight
-                      ? 'bg-amber-500 text-white shadow-xs'
-                      : 'bg-[#facc15] text-[#09090b] shadow-xs font-black'
+                      ? 'bg-[#101828] text-white shadow-sm'
+                      : 'bg-white/[0.1] text-white shadow-sm'
                     : isLight
-                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                      : 'bg-[#18181b] hover:bg-[#202025] text-zinc-400'
+                      ? 'text-slate-600 hover:bg-slate-100'
+                      : 'text-zinc-400 hover:bg-white/[0.05]'
                 }`}
               >
                 <span>All</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${
                   conversationTabFilter === 'all'
-                    ? isLight ? 'bg-white/25 text-white' : 'bg-black/20 text-black'
-                    : isLight ? 'bg-slate-200 text-slate-600' : 'bg-zinc-800 text-zinc-400'
+                    ? isLight ? 'bg-white/20 text-white' : 'bg-white/15 text-white'
+                    : isLight ? 'bg-slate-200 text-slate-600' : 'bg-white/[0.07] text-zinc-400'
                 }`}>
                   {conversations.length}
                 </span>
@@ -5257,21 +5245,21 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setConversationTabFilter('unread')
                 }}
-                className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   conversationTabFilter === 'unread'
                     ? isLight
-                      ? 'bg-amber-500 text-white shadow-xs'
-                      : 'bg-[#facc15] text-[#09090b] shadow-xs font-black'
+                      ? 'bg-[#101828] text-white shadow-sm'
+                      : 'bg-white/[0.1] text-white shadow-sm'
                     : isLight
-                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                      : 'bg-[#18181b] hover:bg-[#202025] text-zinc-400'
+                      ? 'text-slate-600 hover:bg-slate-100'
+                      : 'text-zinc-400 hover:bg-white/[0.05]'
                 }`}
               >
                 <span>Unread</span>
                 {unreadConversationsCount > 0 && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-black ${
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${
                     conversationTabFilter === 'unread'
-                      ? isLight ? 'bg-white/30 text-white' : 'bg-black/25 text-black'
+                      ? isLight ? 'bg-white/20 text-white' : 'bg-white/15 text-white'
                       : 'bg-amber-500 text-white'
                   }`}>
                     {unreadConversationsCount}
@@ -5285,23 +5273,23 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setConversationTabFilter('pinned')
                 }}
-                className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1.5 ${
+                className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   conversationTabFilter === 'pinned'
                     ? isLight
-                      ? 'bg-amber-500 text-white shadow-xs'
-                      : 'bg-[#facc15] text-[#09090b] shadow-xs font-black'
+                      ? 'bg-[#101828] text-white shadow-sm'
+                      : 'bg-white/[0.1] text-white shadow-sm'
                     : isLight
-                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                      : 'bg-[#18181b] hover:bg-[#202025] text-zinc-400'
+                      ? 'text-slate-600 hover:bg-slate-100'
+                      : 'text-zinc-400 hover:bg-white/[0.05]'
                 }`}
               >
                 <Pin className="w-3 h-3 shrink-0 fill-current" />
                 <span>Pinned</span>
                 {pinnedConversationsCount > 0 && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${
                     conversationTabFilter === 'pinned'
-                      ? isLight ? 'bg-white/25 text-white' : 'bg-black/20 text-black'
-                      : isLight ? 'bg-slate-200 text-slate-600' : 'bg-zinc-800 text-zinc-400'
+                      ? isLight ? 'bg-white/20 text-white' : 'bg-white/15 text-white'
+                      : isLight ? 'bg-slate-200 text-slate-600' : 'bg-white/[0.07] text-zinc-400'
                   }`}>
                     {pinnedConversationsCount}
                   </span>
@@ -5353,10 +5341,10 @@ export default function ChatConversation() {
                 setShowAddFriendModal(true)
                 setFriendModalTab('requests')
               }}
-              className={`p-3 border-b flex items-center justify-between cursor-pointer transition-colors ${
+              className={`flex cursor-pointer items-center justify-between border-b p-3 transition-colors ${
                 isLight 
-                  ? 'bg-amber-50 border-amber-200 hover:bg-amber-100 text-amber-900' 
-                  : 'bg-yellow-500/10 border-yellow-500/20 hover:bg-yellow-500/15 text-[#facc15]'
+                  ? 'border-amber-200/70 bg-amber-50/60 text-amber-900 hover:bg-amber-50' 
+                  : 'border-amber-500/15 bg-amber-500/[0.06] text-amber-200 hover:bg-amber-500/10'
               }`}
             >
               <div className="flex items-center gap-2">
@@ -5843,40 +5831,32 @@ export default function ChatConversation() {
                       isLight={isLight}
                     >
                       <div
-                        className={`group relative p-3 sm:p-3.5 flex items-center gap-3 cursor-pointer transition-colors border-l-[3.5px] select-none ${
+                        className={`group relative flex cursor-pointer select-none items-center gap-3 border-l-2 p-3 transition-colors sm:p-3.5 ${
                           isSelected
                             ? isLight
-                              ? 'bg-gradient-to-r from-amber-500/12 via-amber-500/5 to-transparent border-amber-500 shadow-xs'
-                              : 'bg-gradient-to-r from-[#facc15]/15 via-[#facc15]/5 to-transparent border-[#facc15] shadow-xs'
+                              ? 'border-amber-500 bg-amber-50/60'
+                              : 'border-amber-400/80 bg-white/[0.045]'
                             : isLight
-                              ? 'border-transparent hover:border-slate-300 hover:bg-slate-50/80 bg-white'
-                              : 'border-transparent hover:border-white/10 hover:bg-[#18181b]/70 bg-[#121215]'
+                              ? 'border-transparent bg-white hover:bg-[#f7f8fa]'
+                              : 'border-transparent bg-transparent hover:bg-white/[0.025]'
                         }`}
                       >
                         {/* Contact Avatar with Live Online Presence Beacon & Luxury Bezel */}
                         <div className="relative shrink-0">
-                          <div className={`p-0.5 rounded-2xl transition-all ${
+                          <div className={`flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border text-sm font-semibold transition-transform group-hover:scale-[1.02] ${
                             isSelected
-                              ? 'bg-gradient-to-tr from-[#facc15] to-amber-500 shadow-xs'
-                              : isOnline
-                                ? 'bg-gradient-to-tr from-emerald-500/35 via-yellow-500/20 to-transparent'
-                                : 'bg-transparent'
+                              ? isLight
+                                ? 'border-amber-300 bg-amber-100 text-amber-800'
+                                : 'border-amber-500/30 bg-amber-500/15 text-amber-200'
+                              : isLight
+                                ? 'border-slate-200 bg-[#f2f4f7] text-slate-600'
+                                : 'border-white/[0.07] bg-[#1a1d22] text-zinc-300'
                           }`}>
-                            <div className={`w-12 h-12 rounded-[14px] flex items-center justify-center font-black text-sm border overflow-hidden transition-transform group-hover:scale-[1.02] ${
-                              isSelected
-                                ? isLight
-                                  ? 'bg-amber-100 text-amber-800 border-amber-300 ring-2 ring-amber-400/20'
-                                  : 'bg-[#facc15]/25 text-[#facc15] border-[#facc15]/40 ring-2 ring-yellow-500/20'
-                                : isLight
-                                  ? 'bg-slate-100 text-slate-700 border-slate-200'
-                                  : 'bg-[#18181b] text-zinc-300 border-[#27272a]'
-                            }`}>
-                              {conv.contact_avatar ? (
-                                <img src={resolveMediaUrl(conv.contact_avatar)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
-                              ) : (
-                                getContactDisplayName(conv)?.[0]?.toUpperCase() || 'U'
-                              )}
-                            </div>
+                            {conv.contact_avatar ? (
+                              <img src={resolveMediaUrl(conv.contact_avatar)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                            ) : (
+                              getContactDisplayName(conv)?.[0]?.toUpperCase() || 'U'
+                            )}
                           </div>
                           {isOnline && (
                             <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center pointer-events-none" title="Online">
@@ -5889,14 +5869,8 @@ export default function ChatConversation() {
                         {/* Chat Details */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-1">
-                            <h4 className={`text-xs sm:text-sm font-bold truncate transition-colors flex items-center gap-1.5 ${
-                              isSelected
-                                ? isLight
-                                  ? 'text-amber-900 font-black'
-                                  : 'text-[#facc15] font-black'
-                                : isLight
-                                  ? 'text-slate-900'
-                                  : 'text-white'
+                            <h4 className={`flex min-w-0 items-center gap-1.5 truncate text-[13px] font-semibold transition-colors ${
+                              isLight ? 'text-slate-900' : 'text-zinc-100'
                             }`}>
                               <span className="truncate">{getContactDisplayName(conv)}</span>
                               {getContactCustomNickname(conv) && (
@@ -5918,14 +5892,10 @@ export default function ChatConversation() {
                               {isPinned && (
                                 <Pin className="w-3 h-3 text-[#facc15] fill-[#facc15] shrink-0" title="Pinned chat" />
                               )}
-                              <span className={`text-[10px] font-medium font-mono ${
+                              <span className={`text-[10px] font-normal tabular-nums ${
                                 conv.unread_count > 0
-                                  ? isLight
-                                    ? 'text-amber-600 font-bold'
-                                    : 'text-[#facc15] font-bold'
-                                  : isLight
-                                    ? 'text-slate-400'
-                                    : 'text-zinc-500'
+                                  ? isLight ? 'font-medium text-amber-700' : 'font-medium text-amber-400'
+                                  : isLight ? 'text-slate-400' : 'text-zinc-500'
                               }`}>
                                 {conv.last_message ? formatTime(conv.last_message_at) : ''}
                               </span>
@@ -6030,10 +6000,10 @@ export default function ChatConversation() {
 
                               {/* Unread badge pill */}
                               {conv.unread_count > 0 && (
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black shadow-xs animate-badge-bounce ${
-                                  isLight ? 'bg-amber-500 text-white' : 'bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] shadow-yellow-500/20'
+                                <span className={`flex h-5 min-w-[20px] animate-badge-bounce items-center justify-center rounded-full px-1.5 text-[10px] font-semibold tabular-nums ${
+                                  isLight ? 'bg-amber-500 text-white' : 'bg-amber-400 text-[#171204]'
                                 }`}>
-                                  {conv.unread_count}
+                                  {conv.unread_count > 99 ? '99+' : conv.unread_count}
                                 </span>
                               )}
                             </div>
@@ -6077,7 +6047,7 @@ export default function ChatConversation() {
                 setShowAddFriendModal(true)
               }}
               title="Start new chat or add friend"
-              className="w-14 h-14 rounded-full bg-gradient-to-tr from-[#eab308] to-[#facc15] text-[#09090b] shadow-2xl shadow-yellow-500/40 flex items-center justify-center hover:scale-105 active:scale-95 animate-fab-spring tap-bounce transition-all cursor-pointer"
+              className="tap-bounce flex h-14 w-14 animate-fab-spring cursor-pointer items-center justify-center rounded-full bg-amber-400 text-[#171204] shadow-lg shadow-amber-500/20 transition-all hover:bg-amber-300 active:scale-95"
             >
               <UserPlus className="w-6 h-6 stroke-[2.2]" />
             </button>
@@ -6249,47 +6219,7 @@ export default function ChatConversation() {
                   </div>
                 </div>
 
-                {/* Header Action Buttons (Search & Contact Profile) */}
-                <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerHaptic('light')
-                      setIsSearchingChat((prev) => !prev)
-                      if (!isSearchingChat) {
-                        setTimeout(() => chatSearchInputRef.current?.focus(), 100)
-                      } else {
-                        setChatSearchQuery('')
-                      }
-                    }}
-                    className={`p-2 rounded-xl border transition-all cursor-pointer ${
-                      isSearchingChat
-                        ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/40 shadow-xs'
-                        : isLight
-                          ? 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'
-                          : 'bg-[#18181b] hover:bg-[#222228] border-[#27272a] text-zinc-300'
-                    }`}
-                    title={isSearchingChat ? "Close search (Esc)" : "Search in conversation"}
-                  >
-                    <Search className="w-4 h-4" />
-                  </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerHaptic('light')
-                      setShowContactInfoModal(true)
-                    }}
-                    className={`p-2 rounded-xl border transition-all cursor-pointer ${
-                      isLight
-                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'
-                        : 'bg-[#18181b] hover:bg-[#222228] border-[#27272a] text-zinc-300'
-                    }`}
-                    title="View Contact Profile"
-                  >
-                    <User className="w-4 h-4" />
-                  </button>
-                </div>
               </div>
 
               {/* ── IN-CHAT MESSAGE SEARCH BAR (WhatsApp / Telegram Standard) ── */}

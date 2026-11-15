@@ -81,10 +81,14 @@ function App() {
   const routeFallback = (
     <div
       role="status"
-      aria-label="Loading"
-      className={`min-h-[100dvh] flex items-center justify-center ${isDark ? 'bg-[#09090b]' : 'bg-white'}`}
+      aria-live="polite"
+      aria-label="Loading JDLX Chat"
+      className={`min-h-[100dvh] flex flex-col items-center justify-center gap-4 ${isDark ? 'bg-[#090a0c]' : 'bg-[#f6f7f9]'}`}
     >
-      <div className="w-8 h-8 rounded-full border-2 border-zinc-500/30 border-t-[#facc15] animate-spin" />
+      <div className={`w-11 h-11 rounded-2xl border flex items-center justify-center overflow-hidden ${isDark ? 'border-white/10 bg-[#141519]' : 'border-slate-200 bg-white shadow-sm'}`}>
+        <img src="/logo192.png" alt="" className="w-full h-full object-contain" />
+      </div>
+      <div className={`w-6 h-6 rounded-full border-2 border-t-transparent animate-spin ${isDark ? 'border-white/15 border-t-[#f0b429]' : 'border-slate-300 border-t-[#c98a04]'}`} />
     </div>
   )
 
@@ -94,18 +98,20 @@ function App() {
       <Toaster
         position="top-center"
         toastOptions={{
-          duration: 3500,
+          duration: 3200,
           style: {
-            background: isDark ? '#18181b' : '#ffffff',
-            color: isDark ? '#ffffff' : '#0f172a',
-            border: `1px solid ${isDark ? '#27272a' : '#e2e8f0'}`,
-            borderRadius: '16px',
+            background: isDark ? '#14171b' : '#ffffff',
+            color: isDark ? '#f4f5f7' : '#101828',
+            border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : '#e4e7ec'}`,
+            borderRadius: '12px',
+            boxShadow: isDark ? '0 18px 40px -20px rgba(0,0,0,0.9)' : '0 16px 36px -22px rgba(16,24,40,0.35)',
+            padding: '10px 14px',
             fontSize: '13px',
-            fontWeight: 600,
-            maxWidth: '420px'
+            fontWeight: 500,
+            maxWidth: '400px'
           },
-          success: { iconTheme: { primary: '#facc15', secondary: '#09090b' } },
-          error: { iconTheme: { primary: '#ef4444', secondary: '#ffffff' } }
+          success: { iconTheme: { primary: '#e0a92b', secondary: '#14171b' } },
+          error: { iconTheme: { primary: '#dc2626', secondary: '#ffffff' } }
         }}
       />
 

@@ -375,7 +375,11 @@ const setCachedMessages = (userId, roomId, msgs) => {
       .map(sanitizeCachedMessage)
       .filter(Boolean)
       .slice(-50)
-    localStorage.setItem(`jdlx_chat_cache_msgs_${userId}_${roomId}`, JSON.stringify(toCache))
+    if (toCache.length === 0) {
+      localStorage.removeItem(`jdlx_chat_cache_msgs_${userId}_${roomId}`)
+    } else {
+      localStorage.setItem(`jdlx_chat_cache_msgs_${userId}_${roomId}`, JSON.stringify(toCache))
+    }
   } catch {
     /* ignore */
   }
@@ -396,12 +400,19 @@ const scrubLegacyChatCaches = () => {
       const raw = localStorage.getItem(key)
       if (!raw) return
       const parsed = JSON.parse(raw)
-      if (!Array.isArray(parsed)) return
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        if (key.startsWith('jdlx_chat_cache_msgs_')) localStorage.removeItem(key)
+        return
+      }
       const sanitized = key.startsWith('jdlx_chat_cache_msgs_')
         ? parsed.map(sanitizeCachedMessage).filter(Boolean)
         : parsed.map(sanitizeCachedConversation).filter(Boolean)
-      const serialized = JSON.stringify(sanitized)
-      if (serialized !== raw) localStorage.setItem(key, serialized)
+      if (sanitized.length === 0 && key.startsWith('jdlx_chat_cache_msgs_')) {
+        localStorage.removeItem(key)
+      } else {
+        const serialized = JSON.stringify(sanitized)
+        if (serialized !== raw) localStorage.setItem(key, serialized)
+      }
     })
   } catch {
     /* ignore */
@@ -469,12 +480,15 @@ if (INITIAL_CONVERSATIONS.length > 0) {
   if (INITIAL_ACTIVE_CONV) {
     INITIAL_ACTIVE_ROOM_ID = INITIAL_ACTIVE_CONV.id
     const savedDelivered = getStoredDeliveredId(INITIAL_USER_ID, INITIAL_ACTIVE_ROOM_ID)
-    INITIAL_MESSAGES = getCachedMessages(INITIAL_USER_ID, INITIAL_ACTIVE_ROOM_ID).map((m) => {
-      if (savedDelivered > 0 && m && m.id <= savedDelivered) {
-        return { ...m, is_delivered: 1 }
-      }
-      return m
-    })
+    const hasActiveMessages = Boolean(INITIAL_ACTIVE_CONV.last_message && INITIAL_ACTIVE_CONV.last_message.trim())
+    INITIAL_MESSAGES = hasActiveMessages
+      ? getCachedMessages(INITIAL_USER_ID, INITIAL_ACTIVE_ROOM_ID).map((m) => {
+          if (savedDelivered > 0 && m && m.id <= savedDelivered) {
+            return { ...m, is_delivered: 1 }
+          }
+          return m
+        })
+      : []
   }
 }
 
@@ -1573,7 +1587,8 @@ export const useChatStore = create((set, get) => ({
     get().stopRealtime()
     const uid = get().chatUser?.id
     const savedDelivered = getStoredDeliveredId(uid, conv.id)
-    const rawCachedMsgs = uid ? getCachedMessages(uid, conv.id) : []
+    const hasLastMsg = Boolean(conv.last_message && conv.last_message.trim())
+    const rawCachedMsgs = (uid && hasLastMsg) ? getCachedMessages(uid, conv.id) : []
     // Smart Chat Load: slice to the most recent 35 cached messages for instantaneous 0ms initial paint
     const recentCached = rawCachedMsgs.length > 35 ? rawCachedMsgs.slice(-35) : rawCachedMsgs
     const cachedMsgs = recentCached.map((m) => {
@@ -1625,6 +1640,16 @@ export const useChatStore = create((set, get) => ({
     const roomId = get().activeRoomId
     if (!uid || !roomId) return
 
+    const activeConv = get().activeConversation
+      || (get().conversations || []).find((c) => sameId(c.id, roomId))
+
+    // If the conversation has no messages (cleared or empty), purge any leftover cache and don't re-hydrate ghosts
+    if (activeConv && (!activeConv.last_message || !activeConv.last_message.trim())) {
+      setCachedMessages(uid, roomId, [])
+      if (get().messages.length > 0) set({ messages: [] })
+      return
+    }
+
     const snapshot = get().messages
     if (!Array.isArray(snapshot) || !snapshot.some((m) => m && m.raw_message && m._locked)) return
 
@@ -1632,8 +1657,6 @@ export const useChatStore = create((set, get) => ({
     if (!identity) return
     if (!sameId(get().chatUser?.id, uid) || !sameId(get().activeRoomId, roomId)) return
 
-    const activeConv = get().activeConversation
-      || (get().conversations || []).find((c) => sameId(c.id, roomId))
     const decrypted = await Promise.all(
       snapshot.map((m) => (
         m && m.raw_message && m._locked
@@ -1795,7 +1818,7 @@ export const useChatStore = create((set, get) => ({
         })
 
         const uid = get().chatUser?.id
-        if (uid && merged.length > 0) {
+        if (uid) {
           setCachedMessages(uid, targetRoomId, merged)
         }
         const savedDelivered = uid ? getStoredDeliveredId(uid, targetRoomId) : 0
@@ -2314,7 +2337,7 @@ export const useChatStore = create((set, get) => ({
             const merged = [...byId.values()].sort(sortChatMessages)
             set({ messages: merged })
             const uid = get().chatUser?.id
-            if (uid && merged.length > 0) {
+            if (uid) {
               setCachedMessages(uid, roomId, merged)
             }
             get().fetchConversations()
@@ -2815,7 +2838,7 @@ export const useChatStore = create((set, get) => ({
         merged.sort(sortChatMessages)
         set({ messages: merged, sending: false })
         const uid = get().chatUser?.id
-        if (uid && merged.length > 0) {
+        if (uid) {
           setCachedMessages(uid, targetRoomId, merged)
         }
         setTimeout(() => {

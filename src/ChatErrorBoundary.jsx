@@ -45,37 +45,38 @@ export class ChatErrorBoundary extends React.Component {
     if (this.state.hasError) {
       const errorMsg = this.state.error?.message || String(this.state.error || 'Unknown startup error')
       return (
-        <div className="fixed inset-0 z-[99999] bg-[#09090b] text-white flex flex-col items-center justify-center p-6 select-none font-sans">
-          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-[#eab308] to-[#facc15] p-0.5 shadow-xl shadow-yellow-500/20 mb-5">
-            <div className="w-full h-full rounded-[22px] bg-[#09090b] flex items-center justify-center font-black text-xl text-[#facc15]">
-              JDLX
-            </div>
+        <div
+          role="alert"
+          className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-[#090a0c] p-6 font-sans text-white select-none"
+        >
+          <div className="mb-5 flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-[#14171b] shadow-2xl">
+            <img src="/logo192.png" alt="JDLX Chat" className="h-full w-full object-contain" />
           </div>
-          <h2 className="text-lg font-black tracking-tight mb-1 text-zinc-100">
-            JDLX Chat Messenger
+          <h2 className="mb-1 text-lg font-semibold tracking-tight text-zinc-100">
+            Something went wrong
           </h2>
-          <p className="text-xs text-zinc-400 max-w-xs text-center mb-4 leading-relaxed">
-            The application encountered a brief startup hiccup. Tap below to resume your encrypted session.
+          <p className="mb-5 max-w-sm text-center text-[13px] leading-relaxed text-zinc-400">
+            JDLX Chat hit an unexpected error. Reload to resume your encrypted session — your chats are safe.
           </p>
 
           {errorMsg && (
-            <div className="max-w-xs mb-5 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-400 text-center break-all select-text">
+            <div className="mb-6 max-w-sm break-all rounded-xl border border-white/10 bg-[#14171b] px-3 py-2 text-center font-mono text-[11px] leading-relaxed text-zinc-500 select-text">
               {errorMsg}
             </div>
           )}
 
-          <div className="flex flex-col sm:flex-row gap-2.5 w-full max-w-xs">
+          <div className="flex w-full max-w-sm flex-col gap-2.5 sm:flex-row">
             <button
               type="button"
               onClick={this.handleReload}
-              className="flex-1 py-3 px-4 rounded-2xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] text-xs font-black shadow-lg shadow-yellow-500/20 active:scale-95 transition-all cursor-pointer text-center"
+              className="ui-btn ui-btn-primary flex-1"
             >
               Reload Chat
             </button>
             <button
               type="button"
               onClick={this.handleReset}
-              className="py-3 px-4 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-700/60 text-xs font-bold active:scale-95 transition-all cursor-pointer text-center"
+              className="ui-btn ui-btn-secondary flex-1 border-white/15 bg-white/5 text-zinc-300 hover:bg-white/10"
             >
               Reset Session
             </button>
