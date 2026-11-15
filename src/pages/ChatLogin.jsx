@@ -794,7 +794,7 @@ export default function ChatLogin() {
               }`}
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span className="flex-1 leading-snug">{errorMsg}</span>
+              <span className="min-w-0 flex-1 break-words leading-snug">{errorMsg}</span>
             </div>
           )}
 
@@ -804,7 +804,7 @@ export default function ChatLogin() {
               {/* Identifier Input (Username, Email or Mobile) */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className="ui-label flex items-center gap-1.5">
+                  <label className="field-label flex items-center gap-1.5">
                     <User className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                     <span>Username, Email or Mobile</span>
                     <span className="text-amber-500 font-black">*</span>
@@ -833,7 +833,7 @@ export default function ChatLogin() {
 
               {/* Password Input */}
               <div className="space-y-1">
-                <label className="ui-label flex items-center gap-1.5">
+                <label className="field-label flex items-center gap-1.5">
                   <Lock className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Password</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -910,7 +910,7 @@ export default function ChatLogin() {
 
               {/* 1. Full Name */}
               <div className="space-y-1">
-                <label className="ui-label flex items-center gap-1.5">
+                <label className="field-label flex items-center gap-1.5">
                   <User className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Full Name</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -932,7 +932,7 @@ export default function ChatLogin() {
               {/* 2. Username (@handle) — Auto-sanitized, No email domain */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className="ui-label flex items-center gap-1.5">
+                  <label className="field-label flex items-center gap-1.5">
                     <AtSign className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                     <span>Unique Handle</span>
                     <span className="text-amber-500 font-black">*</span>
@@ -985,7 +985,7 @@ export default function ChatLogin() {
 
               {/* 3. Email Address (primary sign-in identity) */}
               <div className="space-y-1">
-                <label className="ui-label flex items-center gap-1.5">
+                <label className="field-label flex items-center gap-1.5">
                   <Mail className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Email Address</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -1009,7 +1009,7 @@ export default function ChatLogin() {
               {/* 4. Mobile Number (Dedicated Indian Mobile Component) */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className="ui-label flex items-center gap-1.5">
+                  <label className="field-label flex items-center gap-1.5">
                     <Smartphone className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                     <span>Mobile Number</span>
                     {googleSignupTicket ? (
@@ -1060,7 +1060,7 @@ export default function ChatLogin() {
 
               {/* 5. Gender */}
               <div className="space-y-1">
-                <label className="ui-label flex items-center gap-1.5">
+                <label className="field-label flex items-center gap-1.5">
                   <Users className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Gender</span>
                   <span className="text-amber-500 font-black">*</span>
@@ -1081,7 +1081,7 @@ export default function ChatLogin() {
 
               {/* 6. Set Password */}
               <div className="space-y-1">
-                <label className="ui-label flex items-center gap-1.5">
+                <label className="field-label flex items-center gap-1.5">
                   <Lock className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                   <span>Create Password</span>
                   <span className="text-amber-500 font-black">*</span>

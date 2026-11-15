@@ -1381,19 +1381,19 @@ button,
    LUXURY CHAT WALLPAPER & TAIL NOTCHES (WhatsApp & Telegram Starlight Canvas)
    ------------------------------------------------------------------------------ */
 .chat-wallpaper-doodle {
-  background-color: #09090b;
+  background-color: #0b0d10;
   background-image: 
-    radial-gradient(circle at 16px 16px, rgba(250, 204, 21, 0.055) 1.5px, transparent 1.5px),
-    radial-gradient(circle at 48px 48px, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    radial-gradient(circle at 16px 16px, rgba(250, 204, 21, 0.04) 1px, transparent 1px),
+    radial-gradient(circle at 48px 48px, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
   background-size: 64px 64px;
 }
 
 :root:not(.dark) .chat-wallpaper-doodle,
 .light .chat-wallpaper-doodle {
-  background-color: #f8fafc;
+  background-color: #f8f9fb;
   background-image: 
-    radial-gradient(circle at 16px 16px, rgba(15, 23, 42, 0.04) 1.5px, transparent 1.5px),
-    radial-gradient(circle at 48px 48px, rgba(217, 119, 6, 0.035) 1.2px, transparent 1.2px);
+    radial-gradient(circle at 16px 16px, rgba(15, 23, 42, 0.028) 1px, transparent 1px),
+    radial-gradient(circle at 48px 48px, rgba(217, 119, 6, 0.025) 1px, transparent 1px);
   background-size: 64px 64px;
 }
 
@@ -1816,6 +1816,11 @@ html, body {
   contain-intrinsic-block-size: auto 72px;
 }
 
+/* Bubble body: keep text selection off the chrome but allow copying on desktop. */
+[data-message-bubble] {
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
 /* ==============================================================================
    LUXURY CHAT ANIMATION SYSTEM (Telegram / iOS Caliber Mobile & Desktop Physics)
    ============================================================================== */
@@ -2164,7 +2169,8 @@ html, body {
   }
 
   .ui-input::placeholder {
-    color: color-mix(in srgb, var(--app-text-muted) 72%, transparent);
+    color: var(--app-text-muted);
+    opacity: 0.72;
     font-weight: 400;
   }
 
@@ -2226,13 +2232,13 @@ html, body {
 
   .ui-btn-primary {
     background-color: var(--app-brand-bright);
-    border-color: color-mix(in srgb, var(--app-brand-bright) 70%, #000);
+    border-color: #d9a12a;
     color: #171204;
     box-shadow: 0 8px 20px -12px rgba(180, 120, 0, 0.55);
   }
 
   @media (hover: hover) {
-    .ui-btn-primary:hover { background-color: color-mix(in srgb, var(--app-brand-bright) 88%, #fff); }
+    .ui-btn-primary:hover { background-color: #f6bd3f; }
   }
 
   .dark .ui-btn-primary {
@@ -2324,7 +2330,7 @@ html, body {
     line-height: 1.2;
   }
 
-  .ui-label {
+  .field-label {
     font-size: 0.75rem;
     font-weight: 600;
     color: var(--app-text-muted);
@@ -2340,7 +2346,7 @@ html, body {
 
 /* Selection matches the restrained brand accent instead of default blue. */
 ::selection {
-  background: color-mix(in srgb, var(--app-brand-bright) 35%, transparent);
+  background: rgba(240, 180, 41, 0.35);
   color: inherit;
 }
 

@@ -601,7 +601,7 @@ function SwipeableConversationRow({
           transform: `translateX(${offsetX}px)`,
           transition: isAnimating ? 'transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)' : 'none'
         }}
-        className={`relative z-10 w-full ${isLight ? 'bg-white' : 'bg-[#121215]'}`}
+        className={`relative z-10 w-full ${isLight ? 'bg-white' : 'bg-[#0f1114]'}`}
       >
         {children}
       </div>
@@ -3097,7 +3097,7 @@ export default function ChatConversation() {
         className={`flex items-center gap-3 px-4 py-3 rounded-2xl border shadow-2xl text-left max-w-sm cursor-pointer active:scale-[0.98] transition-transform ${
           isLight
             ? 'bg-white border-slate-200 text-slate-900'
-            : 'bg-[#18181b] border-[#27272a] text-white'
+            : 'bg-[#18181b] border-white/[0.07] text-white'
         }`}
         style={{ pointerEvents: 'auto' }}
       >
@@ -5302,7 +5302,7 @@ export default function ChatConversation() {
               app is closed). Hidden when permission is already granted/denied. */}
           {showPushPrompt && (
             <div className={`p-3 border-b ${
-              isLight ? 'border-slate-200 bg-emerald-50/70' : 'border-[#27272a] bg-emerald-500/5'
+              isLight ? 'border-slate-200 bg-emerald-50/70' : 'border-white/[0.07] bg-emerald-500/5'
             }`}>
               <div className="flex items-start gap-2">
                 <Bell className={`w-4 h-4 shrink-0 mt-0.5 ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`} />
@@ -5362,7 +5362,7 @@ export default function ChatConversation() {
           {/* Friends stay visible even after a chat is closed, so a connection
               never has to be re-searched and re-added. */}
           {friends && friends.length > 0 && (
-            <div className={`p-3 border-b ${isLight ? 'border-slate-200 bg-white' : 'border-[#27272a] bg-[#121215]'}`}>
+            <div className={`p-3 border-b ${isLight ? 'border-slate-200 bg-white' : 'border-white/[0.07] bg-[#0f1114]'}`}>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-1.5">
                   <span className={`text-[10px] font-black uppercase tracking-wider ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
@@ -5591,7 +5591,7 @@ export default function ChatConversation() {
                         className={`w-20 p-2 rounded-2xl border flex flex-col items-center gap-1 active:scale-95 tap-bounce transition-all cursor-pointer select-none ${
                           isLight
                             ? 'bg-slate-50 border-slate-200 hover:border-amber-300'
-                            : 'bg-[#18181b] border-[#27272a] hover:border-[#facc15]/40'
+                            : 'bg-[#18181b] border-white/[0.07] hover:border-[#facc15]/40'
                         }`}
                       >
                         <div className="relative shrink-0">
@@ -5683,7 +5683,7 @@ export default function ChatConversation() {
                   <div
                     key={i}
                     className={`p-3 sm:p-3.5 rounded-2xl border flex items-center gap-3 chat-shimmer-sweep ${
-                      isLight ? 'bg-slate-50/80 border-slate-200' : 'bg-[#18181b]/80 border-[#27272a]'
+                      isLight ? 'bg-slate-50/80 border-slate-200' : 'bg-[#18181b]/80 border-white/[0.07]'
                     }`}
                   >
                     <div className={`w-12 h-12 rounded-2xl shrink-0 ${isLight ? 'bg-slate-200' : 'bg-zinc-800'}`} />
@@ -6075,7 +6075,7 @@ export default function ChatConversation() {
                 opacity: Math.min(edgeSwipeOffset / 50, 1),
                 transform: `translateY(-50%) scale(${Math.min(0.7 + (edgeSwipeOffset / 120) * 0.4, 1.1)})`,
               }}
-              className="absolute top-1/2 z-50 pointer-events-none -translate-x-1/2 flex items-center justify-center w-11 h-11 rounded-full bg-gradient-to-tr from-[#eab308] to-[#facc15] text-[#121215] shadow-xl shadow-yellow-500/30 transition-transform"
+              className="pointer-events-none absolute top-1/2 z-50 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full bg-amber-400 text-[#171204] shadow-lg shadow-amber-500/20 transition-transform"
             >
               <ArrowLeft className={`w-5 h-5 transition-transform duration-150 ${edgeSwipeOffset >= 60 ? 'scale-125 stroke-[2.5]' : 'stroke-2'}`} />
             </div>
@@ -6084,8 +6084,8 @@ export default function ChatConversation() {
           {activeConversation ? (
             <>
               {/* Active Chat Header */}
-              <div className={`ios-safe-header relative min-h-[3.75rem] shrink-0 border-b px-3 sm:px-5 flex items-center justify-between z-20 transition-colors select-none ${
-                isLight ? 'bg-white border-slate-200 shadow-sm' : 'bg-[#121215] border-[#27272a]'
+              <div className={`ios-safe-header relative z-20 flex min-h-[64px] shrink-0 items-center justify-between border-b px-3 transition-colors select-none sm:px-5 ${
+                isLight ? 'border-[#e4e7ec] bg-white' : 'border-white/[0.07] bg-[#0f1114]'
               }`}>
                 {/* Sleek Top Chat Progress Bar (Telegram / YouTube caliber) */}
                 {messagesLoading && (
@@ -6094,15 +6094,15 @@ export default function ChatConversation() {
                 <div className="flex items-center gap-2.5 min-w-0">
                   {/* Mobile Back button to Chat List */}
                   <button
+                    type="button"
                     onClick={() => {
                       triggerHaptic('light')
                       setMobileView('list')
                     }}
-                    className={`md:hidden p-1.5 rounded-xl border transition-colors ${
-                      isLight ? 'hover:bg-slate-100 border-slate-200 text-slate-700' : 'hover:bg-[#18181b] border-[#27272a] text-[#a1a1aa]'
-                    }`}
+                    aria-label="Back to chats"
+                    className="ui-icon-btn md:hidden"
                   >
-                    <ArrowLeft className="w-5 h-5" />
+                    <ArrowLeft className="h-5 w-5" />
                   </button>
 
                   {/* Active Contact Avatar & Name (Clickable Profile) */}
@@ -6112,45 +6112,33 @@ export default function ChatConversation() {
                     title="Click to view contact profile & encryption details"
                   >
                     <div className="relative shrink-0">
-                      {/* Subtle Ambient Aura when Online */}
-                      {isContactOnline && (
-                        <div className="absolute -inset-1 rounded-2xl bg-emerald-500/25 blur-md pointer-events-none -z-10 animate-ambient-glow" />
-                      )}
-                      <div className={`p-0.5 rounded-2xl bg-gradient-to-tr transition-all ${
-                        isContactOnline
-                          ? 'from-[#facc15] via-emerald-400/50 to-[#eab308]'
-                          : isLight 
-                            ? 'from-amber-200 to-amber-300' 
-                            : 'from-yellow-500/30 to-zinc-700'
+                      <div className={`flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border text-sm font-semibold transition-transform group-hover:scale-[1.03] ${
+                        isLight 
+                          ? 'border-slate-200 bg-amber-50 text-amber-800' 
+                          : 'border-white/10 bg-[#1a1d22] text-amber-300'
                       }`}>
-                        <div className={`w-10 h-10 rounded-[14px] flex items-center justify-center font-black text-sm border overflow-hidden transition-transform group-hover:scale-105 ${
-                          isLight 
-                            ? 'bg-amber-100 text-amber-700 border-white/60' 
-                            : 'bg-[#18181b] text-[#facc15] border-white/10'
-                        }`}>
-                          {activeConversation.contact_avatar ? (
-                            <img src={resolveMediaUrl(activeConversation.contact_avatar)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
-                          ) : (
-                            getContactDisplayName(activeConversation)?.[0]?.toUpperCase() || 'U'
-                          )}
-                        </div>
+                        {activeConversation.contact_avatar ? (
+                          <img src={resolveMediaUrl(activeConversation.contact_avatar)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                        ) : (
+                          getContactDisplayName(activeConversation)?.[0]?.toUpperCase() || 'U'
+                        )}
                       </div>
                       {peerTyping ? (
                         <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center pointer-events-none" title="Typing…">
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
-                          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-500 border-2 border-white dark:border-[#121215]" />
+                          <span className="relative inline-flex h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-500 dark:border-[#0f1114]" />
                         </span>
                       ) : isContactOnline ? (
                         <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center pointer-events-none" title="Online">
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-[#121215] presence-beacon" />
+                          <span className="presence-beacon relative inline-flex h-2.5 w-2.5 rounded-full border-2 border-white bg-emerald-500 dark:border-[#0f1114]" />
                         </span>
                       ) : null}
                     </div>
 
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <h3 className={`text-sm font-black truncate group-hover:underline flex items-center gap-1.5 min-w-0 ${
+                        <h3 className={`flex min-w-0 items-center gap-1.5 truncate text-[15px] font-semibold tracking-tight ${
                           isLight ? 'text-slate-900' : 'text-white'
                         }`}>
                           <span className="truncate">{getContactDisplayName(activeConversation)}</span>
@@ -6160,7 +6148,7 @@ export default function ChatConversation() {
                             </span>
                           )}
                         </h3>
-                        <ShieldCheck className={`w-3.5 h-3.5 shrink-0 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
+                        <ShieldCheck className={`h-3.5 w-3.5 shrink-0 ${isLight ? 'text-amber-600' : 'text-amber-400'}`} />
                         {isRoomMuted(activeRoomId) && (
                           <button
                             type="button"
@@ -6169,7 +6157,7 @@ export default function ChatConversation() {
                               triggerHaptic('light')
                               setShowMuteModal(true)
                             }}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-rose-500/15 text-rose-500 border border-rose-500/30 hover:bg-rose-500/25 transition-all cursor-pointer shrink-0"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-amber-500/15 text-amber-500 dark:text-[#facc15] border border-amber-500/30 hover:bg-amber-500/25 transition-all cursor-pointer shrink-0"
                             title={`Notifications muted (${getMuteRemainingLabel(activeRoomId)}). Click to manage.`}
                           >
                             <VolumeX className="w-3 h-3 shrink-0" />
@@ -6210,7 +6198,7 @@ export default function ChatConversation() {
                           <span>{peerTyping ? 'typing…' : (isContactOnline ? 'Online' : 'Offline')}</span>
                         </span>
                         <span className={`opacity-30 ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>•</span>
-                        <span className="text-[10px] text-emerald-500 font-mono font-bold flex items-center gap-1" title="End-to-End Encrypted Messaging">
+                        <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400" title="End-to-End Encrypted Messaging">
                           <Lock className="w-2.5 h-2.5" />
                           <span>{activeConversation?.contact_public_key ? 'Text E2EE' : 'Encrypted text'}</span>
                         </span>
@@ -6224,8 +6212,8 @@ export default function ChatConversation() {
 
               {/* ── IN-CHAT MESSAGE SEARCH BAR (WhatsApp / Telegram Standard) ── */}
               {isSearchingChat && (
-                <div className={`px-3 sm:px-6 py-2.5 border-b flex items-center gap-2 z-20 animate-in slide-in-from-top-2 duration-150 ${
-                  isLight ? 'bg-amber-50/95 border-amber-200 text-slate-900 backdrop-blur-md shadow-xs' : 'bg-[#16161b] border-yellow-500/20 text-white backdrop-blur-md shadow-md'
+                <div className={`z-20 flex animate-in items-center gap-2 border-b px-3 py-2.5 slide-in-from-top-2 duration-150 sm:px-6 ${
+                  isLight ? 'border-[#e4e7ec] bg-white text-slate-900' : 'border-white/[0.06] bg-[#111419] text-white'
                 }`}>
                   <div className="relative flex-1 flex items-center">
                     <Search className="w-4 h-4 text-amber-500 absolute left-3 pointer-events-none" />
@@ -6247,10 +6235,10 @@ export default function ChatConversation() {
                         }
                       }}
                       placeholder={`Search messages with ${getContactDisplayName(activeConversation)}…`}
-                      className={`w-full pl-9 pr-8 py-2 rounded-xl text-xs sm:text-sm font-medium border outline-none transition-all ${
+                      className={`h-9 w-full rounded-lg border py-0 pl-9 pr-8 text-xs font-medium transition-colors focus:outline-none sm:text-sm ${
                         isLight
-                          ? 'bg-white border-slate-300 focus:border-amber-500 text-slate-900 shadow-xs'
-                          : 'bg-[#0f0f13] border-[#2b2b34] focus:border-yellow-500/60 text-white shadow-inner'
+                          ? 'border-[#e4e7ec] bg-[#f6f7f9] text-slate-900 focus:border-amber-500/60 focus:bg-white'
+                          : 'border-white/[0.07] bg-[#16191e] text-white focus:border-amber-500/40'
                       }`}
                     />
                     {chatSearchQuery && (
@@ -6317,10 +6305,10 @@ export default function ChatConversation() {
                       setIsSearchingChat(false)
                       setChatSearchQuery('')
                     }}
-                    className={`p-2 rounded-xl border transition-all cursor-pointer shrink-0 ${
+                    className={`ui-icon-btn h-9 w-9 border transition-colors ${
                       isLight
-                        ? 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'
-                        : 'bg-[#1e1e24] hover:bg-[#282832] border-[#2c2c34] text-zinc-300'
+                        ? 'border-[#e4e7ec] bg-white text-slate-600'
+                        : 'border-white/[0.07] bg-[#16191e] text-zinc-400'
                     }`}
                     title="Close search (Esc)"
                   >
@@ -6338,25 +6326,27 @@ export default function ChatConversation() {
                   touchAction: 'pan-y',
                   overscrollBehaviorX: 'none'
                 }}
-                className={`flex-1 overflow-y-auto overflow-x-hidden px-3 sm:px-6 py-4 space-y-1.5 overscroll-contain transition-colors ${
+                className={`flex-1 space-y-1.5 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4 transition-colors sm:px-6 ${
                   activeWallpaperClass
                 } ${
-                  !activeWallpaperClass ? (isLight ? 'bg-slate-50' : 'bg-[#09090b]') : ''
+                  !activeWallpaperClass ? (isLight ? 'bg-[#f8f9fb]' : 'bg-[#0b0d10]') : ''
                 }`}
               >
-                {/* Encryption Banner (WhatsApp Style) */}
-                <div className="w-full max-w-md mx-auto my-2">
-                  <div className={`p-2.5 rounded-2xl border text-center flex items-center justify-center gap-2 ${
-                    isLight 
-                      ? 'bg-amber-50/80 border-amber-200 text-amber-900' 
-                      : 'bg-yellow-500/5 border-yellow-500/15 text-[#facc15]'
-                  }`}>
-                    <Lock className="w-3.5 h-3.5 shrink-0" />
-                    <span className="text-[11px] font-medium leading-tight">
-                      Text messages in direct chats are end-to-end encrypted on your device. Photos, voice notes, videos and files are uploaded to the chat server but are not end-to-end encrypted yet. Official support chats are encrypted in transit and at rest.
-                    </span>
+                {/* WhatsApp-Style End-to-End Encryption Notice (Appears only once messages are loaded) */}
+                {!((messagesLoading || (activeRoomId && !sameId(initialRoomFetchedRef.current, activeRoomId))) && (!messages || messages.length === 0)) && (
+                  <div className="w-full flex justify-center my-3 px-3 select-none animate-in fade-in duration-300">
+                    <div className={`max-w-xs sm:max-w-sm rounded-xl px-3.5 py-2 text-center flex items-center justify-center gap-2 border shadow-xs ${
+                      isLight 
+                        ? 'bg-[#fffbeb] border-[#fde68a] text-[#78350f]' 
+                        : 'bg-[#18181b]/95 border-yellow-500/25 text-[#facc15]'
+                    }`}>
+                      <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      <p className="text-[11px] leading-snug font-medium">
+                        Messages and calls are end-to-end encrypted. No one outside of this chat, not even JDLX, can read them.
+                      </p>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Smart Chat Load pagination banner */}
                 {messagesHasMore && (
@@ -6378,7 +6368,7 @@ export default function ChatConversation() {
                         className={`px-3 py-1.5 rounded-xl border text-[11px] font-bold transition-all active:scale-95 cursor-pointer inline-flex items-center gap-1.5 ${
                           isLight
                             ? 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 shadow-xs'
-                            : 'bg-[#18181b] border-[#27272a] text-zinc-300 hover:bg-[#202026]'
+                            : 'bg-[#18181b] border-white/[0.07] text-zinc-300 hover:bg-[#202026]'
                         }`}
                         title="Scroll up or click to load earlier messages"
                       >
@@ -6392,26 +6382,13 @@ export default function ChatConversation() {
                 {/* Messages Bubbles with Sticky Floating Date Separator & Tails */}
                 {((messagesLoading || (activeRoomId && !sameId(initialRoomFetchedRef.current, activeRoomId))) && (!messages || messages.length === 0)) ? (
                   <div className="py-6 space-y-4 px-2 sm:px-4 max-w-2xl mx-auto w-full select-none" aria-label="Loading messages">
-                    {/* Security Syncing Pill */}
-                    <div className="flex flex-col items-center justify-center pt-2 pb-1">
-                      <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border shadow-xs animate-pulse ${
-                        isLight 
-                          ? 'bg-amber-50/90 border-amber-200 text-amber-900' 
-                          : 'bg-yellow-500/10 border-yellow-500/25 text-[#facc15]'
-                      }`}>
-                        <Lock className="w-3 h-3 text-amber-500" />
-                        <span className="text-[10px] font-mono font-bold tracking-tight">Syncing End-to-End Encrypted Chat…</span>
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                      </div>
-                    </div>
-
                     {/* Shimmer Skeleton Bubble 1: Received Left */}
                     <div className="flex items-end gap-2 justify-start animate-fade-in">
                       <div className={`w-7 h-7 rounded-xl shrink-0 chat-shimmer-sweep ${
                         isLight ? 'bg-slate-200' : 'bg-[#202024]'
                       }`} />
                       <div className={`p-3 rounded-2xl rounded-bl-xs w-[68%] sm:w-[52%] space-y-2 border chat-shimmer-sweep ${
-                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-[#27272a]'
+                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-white/[0.07]'
                       }`}>
                         <div className={`h-2.5 rounded-full w-4/5 ${isLight ? 'bg-slate-200' : 'bg-zinc-700/60'}`} />
                         <div className={`h-2 rounded-full w-2/5 ${isLight ? 'bg-slate-100' : 'bg-zinc-800'}`} />
@@ -6436,7 +6413,7 @@ export default function ChatConversation() {
                         isLight ? 'bg-slate-200' : 'bg-[#202024]'
                       }`} />
                       <div className={`p-2 rounded-2xl rounded-bl-xs w-[65%] sm:w-[48%] space-y-2 border chat-shimmer-sweep ${
-                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-[#27272a]'
+                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-white/[0.07]'
                       }`}>
                         <div className={`h-32 sm:h-36 rounded-xl flex items-center justify-center ${
                           isLight ? 'bg-slate-100' : 'bg-[#222228]'
@@ -6464,7 +6441,7 @@ export default function ChatConversation() {
                         isLight ? 'bg-slate-200' : 'bg-[#202024]'
                       }`} />
                       <div className={`p-3 rounded-2xl rounded-bl-xs w-[45%] sm:w-[35%] space-y-1.5 border chat-shimmer-sweep ${
-                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-[#27272a]'
+                        isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-[#18181b] border-white/[0.07]'
                       }`}>
                         <div className={`h-2.5 rounded-full w-3/4 ${isLight ? 'bg-slate-200' : 'bg-zinc-700/60'}`} />
                       </div>
@@ -6685,10 +6662,10 @@ export default function ChatConversation() {
                         {/* Floating Glassmorphic Date Separator (WhatsApp / Telegram style) */}
                         {showDateDivider && (
                           <div className="flex justify-center my-3 select-none pointer-events-none">
-                            <span className={`px-3.5 py-1 rounded-full text-[11px] font-semibold tracking-wide backdrop-blur-md transition-all shadow-md ${
+                            <span className={`rounded-full border px-3 py-1 text-[10.5px] font-medium tracking-wide backdrop-blur-md ${
                               isLight 
-                                ? 'bg-white/85 text-slate-700 border border-slate-200/90 shadow-slate-200/50' 
-                                : 'bg-[#18181b]/85 text-zinc-300 border border-white/10 shadow-black/40'
+                                ? 'border-[#e4e7ec] bg-white/90 text-slate-500 shadow-sm' 
+                                : 'border-white/[0.07] bg-[#16181d]/90 text-zinc-400 shadow-sm'
                             }`}>
                               {formatMessageDateDivider(m.created_at)}
                             </span>
@@ -6722,12 +6699,12 @@ export default function ChatConversation() {
                                   : (isImage && !hasText)
                                     ? 'p-1 sm:p-1.5 w-[260px] sm:w-[300px] max-w-full'
                                     : 'px-3.5 py-2 sm:px-4 sm:py-2.5 text-[13px] sm:text-[14px]'
-                              } leading-relaxed shadow-sm break-words select-none md:select-text ${bubbleCorners} ${
+                              } break-words leading-relaxed shadow-sm select-none md:select-text ${bubbleCorners} ${
                                 isUser
-                                  ? 'bg-gradient-to-br from-[#facc15] via-[#eab308] to-[#ca8a04] text-[#09090b] font-medium shadow-yellow-500/10'
+                                  ? 'bg-[var(--bubble-out)] font-medium text-[#201804]'
                                   : isLight
-                                    ? 'bg-white text-slate-900 border border-slate-200/90 shadow-sm shadow-slate-200/40'
-                                    : 'bg-[#18181b] text-zinc-100 border border-[#27272a] shadow-md shadow-black/30'
+                                    ? 'border border-[#e4e7ec] bg-white text-slate-900'
+                                    : 'border border-white/[0.06] bg-[#16181d] text-zinc-100'
                               }`}
                             >
                               {/* Floating Heart Burst on Double-Tap */}
@@ -6741,13 +6718,13 @@ export default function ChatConversation() {
                               {isLastInGroup && (
                                 isUser ? (
                                   <span className="absolute -right-2 bottom-0 w-2 h-3.5 pointer-events-none select-none z-10" aria-hidden="true">
-                                    <svg viewBox="0 0 8 14" className="w-2 h-3.5 fill-[#ca8a04]">
+                                    <svg viewBox="0 0 8 14" className="h-3.5 w-2 fill-[var(--bubble-out-edge)]">
                                       <path d="M0,0 C0,7 3,12 8,14 L0,14 Z" />
                                     </svg>
                                   </span>
                                 ) : (
                                   <span className="absolute -left-2 bottom-0 w-2 h-3.5 pointer-events-none select-none z-10" aria-hidden="true">
-                                    <svg viewBox="0 0 8 14" className={`w-2 h-3.5 ${isLight ? 'fill-white' : 'fill-[#18181b]'}`}>
+                                    <svg viewBox="0 0 8 14" className={`h-3.5 w-2 ${isLight ? 'fill-white' : 'fill-[#16181d]'}`}>
                                       <path d="M8,0 C8,7 5,12 0,14 L8,14 Z" />
                                     </svg>
                                   </span>
@@ -7207,8 +7184,8 @@ export default function ChatConversation() {
                 {/* Modern iMessage/Telegram 3-Dot Wave Typing Indicator */}
                 {peerTyping && (
                   <div className="flex items-center gap-2 mb-2 animate-bubble-peer">
-                    <div className={`px-4 py-2.5 rounded-2xl rounded-bl-sm border flex items-center gap-1.5 shadow-xs ${
-                      isLight ? 'bg-white border-slate-200 text-slate-700' : 'bg-[#18181b] border-[#27272a] text-zinc-300'
+                    <div className={`flex items-center gap-1.5 rounded-2xl rounded-bl-md border px-4 py-2.5 shadow-sm ${
+                      isLight ? 'border-[#e4e7ec] bg-white text-slate-700' : 'border-white/[0.06] bg-[#16181d] text-zinc-300'
                     }`}>
                       <span className="w-2 h-2 rounded-full bg-amber-500 animate-typing-dot-1" />
                       <span className="w-2 h-2 rounded-full bg-amber-500 animate-typing-dot-2" />
@@ -7223,12 +7200,12 @@ export default function ChatConversation() {
               {/* Active Chat Message Input Bar */}
               <footer
                 ref={footerRef}
-                className={`relative shrink-0 border-t p-2.5 sm:p-3 ${
-                  isKeyboardOpen ? 'pb-2' : 'pb-[max(0.75rem,env(safe-area-inset-bottom,0px))]'
-                } z-20 transition-colors backdrop-blur-2xl ${
+                className={`relative z-20 shrink-0 border-t px-2 pt-2 sm:px-3 sm:pt-3 ${
+                  isKeyboardOpen ? 'pb-2' : 'pb-[max(0.65rem,env(safe-area-inset-bottom,0px))]'
+                } transition-colors ${
                   isLight
-                    ? 'bg-white/95 border-slate-200/80 shadow-[0_-4px_24px_rgba(0,0,0,0.03)]'
-                    : 'bg-[#0f0f12]/95 border-white/5 shadow-[0_-4px_30px_rgba(0,0,0,0.5)]'
+                    ? 'border-[#e4e7ec] bg-white'
+                    : 'border-white/[0.07] bg-[#0f1114]'
                 }`}
               >
                 {/* Jump to latest message Floating Action Button (FAB) - dynamically anchored above footer */}
@@ -7236,7 +7213,7 @@ export default function ChatConversation() {
                   <button
                     type="button"
                     onClick={handleJumpToBottom}
-                    className="absolute right-4 sm:right-7 bottom-full mb-3 z-30 p-2.5 sm:p-3 rounded-full bg-gradient-to-tr from-[#facc15] to-[#eab308] text-[#09090b] shadow-xl shadow-yellow-500/25 hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 font-black cursor-pointer animate-fab-spring"
+                    className="absolute bottom-full right-3 z-30 mb-3 flex animate-fab-spring cursor-pointer items-center gap-1.5 rounded-full bg-amber-400 p-2.5 font-semibold text-[#171204] shadow-lg shadow-amber-500/15 transition-all hover:bg-amber-300 active:scale-95"
                     title="Jump to latest message"
                     aria-label="Jump to latest message"
                   >
@@ -7523,12 +7500,12 @@ export default function ChatConversation() {
                     }}
                     disabled={uploadingImage || isRecording || Boolean(voiceReview) || isBlockedConversation}
                     title={isBlockedConversation ? 'Unblock this user to attach files' : 'Attach photo, video, document or audio'}
-                    className={`p-2.5 sm:p-3 rounded-full border active:scale-95 transition-all shrink-0 cursor-pointer ${
+                    className={`flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border transition-colors active:scale-95 ${
                       showAttachmentTray
-                        ? 'bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] border-[#facc15] shadow-md shadow-yellow-500/20'
+                        ? 'border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300'
                         : isLight
-                          ? 'bg-slate-50 border-slate-200 text-slate-600 hover:text-amber-700 hover:border-amber-300 shadow-xs'
-                          : 'bg-[#18181b] border-white/10 text-[#a1a1aa] hover:text-[#facc15] hover:border-[#facc15]/40 shadow-xs'
+                          ? 'border-[#e4e7ec] bg-white text-slate-600 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700'
+                          : 'border-white/[0.07] bg-[#16191e] text-zinc-400 hover:border-amber-500/30 hover:text-amber-300'
                     }`}
                   >
                     {uploadingImage ? (
@@ -7542,8 +7519,8 @@ export default function ChatConversation() {
 
                   {/* Center Composer: Voice Review Mode OR Live Recording Bar OR Luxury Input Capsule */}
                   {voiceReview ? (
-                    <div className={`flex-1 flex items-center justify-between px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-[24px] sm:rounded-full border transition-all animate-in fade-in duration-200 ${
-                      isLight ? 'bg-amber-50/90 border-amber-300 shadow-xs' : 'bg-[#18181b] border-yellow-500/30 shadow-inner'
+                    <div className={`flex flex-1 animate-in items-center justify-between rounded-2xl border px-2.5 py-2 transition-all fade-in duration-200 sm:px-3.5 sm:py-2.5 ${
+                      isLight ? 'border-amber-300/70 bg-amber-50' : 'border-amber-500/20 bg-[#16191e]'
                     }`}>
                       {/* Hidden audio element for preview */}
                       <audio
@@ -7591,7 +7568,7 @@ export default function ChatConversation() {
                         className="flex-1 h-6 flex items-center cursor-pointer group py-1 mx-2 min-w-0"
                         title="Click to seek"
                       >
-                        <div className="w-full h-1.5 sm:h-2 rounded-full bg-zinc-700/60 overflow-hidden relative">
+                        <div className={`relative h-1.5 w-full overflow-hidden rounded-full sm:h-2 ${isLight ? 'bg-amber-200/80' : 'bg-white/10'}`}>
                           <div
                             style={{
                               width: `${
@@ -7600,13 +7577,13 @@ export default function ChatConversation() {
                                   : 0
                               }%`
                             }}
-                            className="h-full bg-[#facc15] rounded-full transition-all duration-75"
+                            className={`h-full rounded-full transition-all duration-75 ${isLight ? 'bg-amber-600' : 'bg-amber-400'}`}
                           />
                         </div>
                       </div>
 
                       {/* Current Time / Duration */}
-                      <span className="text-[11px] font-mono font-bold text-zinc-400 shrink-0 mr-1.5 select-none">
+                      <span className={`mr-1.5 shrink-0 select-none text-[11px] font-medium tabular-nums ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                         {formatRecordingDuration(Math.round(voiceReview.isPlaying ? voiceReview.currentTime : (voiceReview.duration || 0)))}
                       </span>
 
@@ -7614,15 +7591,19 @@ export default function ChatConversation() {
                       <button
                         type="button"
                         onClick={cycleReviewSpeed}
-                        className="px-2 py-0.5 rounded-full text-[10px] font-mono font-black bg-white/10 hover:bg-white/15 text-[#facc15] active:scale-95 transition cursor-pointer shrink-0"
+                        className={`shrink-0 cursor-pointer rounded-md px-2 py-1 text-[10px] font-semibold tabular-nums transition active:scale-95 ${
+                          isLight
+                            ? 'bg-amber-500/15 text-amber-800 hover:bg-amber-500/25'
+                            : 'bg-white/10 text-amber-300 hover:bg-white/15'
+                        }`}
                         title="Playback speed (1x / 1.5x / 2x)"
                       >
                         {reviewPlaybackRate}x
                       </button>
                     </div>
                   ) : isRecording ? (
-                    <div className={`flex-1 flex items-center justify-between px-3 sm:px-4 py-2.5 rounded-[24px] sm:rounded-full border transition-all animate-in fade-in duration-200 ${
-                      isLight ? 'bg-rose-50/95 border-rose-200 shadow-xs' : 'bg-rose-500/10 border-rose-500/30 shadow-inner'
+                    <div className={`flex flex-1 animate-in items-center justify-between rounded-2xl border px-3 py-2.5 transition-all fade-in duration-200 sm:px-4 ${
+                      isLight ? 'border-rose-200 bg-rose-50' : 'border-rose-500/25 bg-rose-500/[0.08]'
                     }`}>
                       {/* Left: Pulsing Red Recording Indicator & Duration */}
                       <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
@@ -7682,10 +7663,10 @@ export default function ChatConversation() {
                       </div>
                     </div>
                   ) : (
-                    <div className={`flex-1 flex items-end rounded-[24px] sm:rounded-full border transition-all pl-2 pr-3.5 sm:pl-2.5 sm:pr-4 py-1 sm:py-1.5 ${
+                    <div className={`flex flex-1 items-end rounded-2xl border py-1 pl-1.5 pr-3 transition-colors sm:pr-3.5 ${
                       isLight
-                        ? 'bg-slate-50/90 border-slate-200 hover:border-slate-300 focus-within:border-amber-500/40 focus-within:ring-1 focus-within:ring-amber-500/15 focus-within:bg-white shadow-xs'
-                        : 'bg-[#18181b]/90 border-white/10 hover:border-white/15 focus-within:border-yellow-500/35 focus-within:ring-1 focus-within:ring-yellow-500/15 focus-within:bg-[#1a1a1d] shadow-xs'
+                        ? 'border-transparent bg-[#f2f4f7] hover:bg-[#eef0f4] focus-within:border-amber-500/40 focus-within:bg-white'
+                        : 'border-white/[0.06] bg-[#16191e] hover:border-white/10 focus-within:border-amber-500/30 focus-within:bg-[#171b21]'
                     }`}>
                       {/* Emoji Smile Button */}
                       <button
@@ -7695,12 +7676,12 @@ export default function ChatConversation() {
                           setShowAttachmentTray(false)
                         }}
                         title="Choose emoji"
-                        className={`p-2 rounded-full transition-all cursor-pointer shrink-0 self-end mb-0.5 active:scale-95 ${
+                        className={`mb-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center self-end rounded-lg transition-colors active:scale-95 ${
                           showEmojiPicker
-                            ? 'text-[#facc15] bg-yellow-500/15'
+                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
                             : isLight
-                              ? 'text-slate-400 hover:text-amber-600 hover:bg-slate-200/60'
-                              : 'text-zinc-400 hover:text-[#facc15] hover:bg-white/5'
+                              ? 'text-slate-400 hover:bg-slate-200/60 hover:text-amber-600'
+                              : 'text-zinc-400 hover:bg-white/5 hover:text-amber-300'
                         }`}
                       >
                         <Smile className="w-5 h-5" />
@@ -7789,16 +7770,16 @@ export default function ChatConversation() {
                       type="button"
                       onClick={sendReviewedVoiceNote}
                       title="Send voice note"
-                      className="p-2.5 sm:p-3 rounded-2xl sm:rounded-full bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] shadow-lg shadow-yellow-500/20 hover:brightness-105 active:scale-95 transition-all shrink-0 font-black cursor-pointer flex items-center justify-center animate-in fade-in zoom-in-90 duration-150"
+                      className="flex h-11 w-11 shrink-0 animate-in cursor-pointer items-center justify-center rounded-xl bg-amber-400 text-[#171204] shadow-sm transition-all zoom-in-90 fade-in duration-150 hover:bg-amber-300 active:scale-95"
                     >
-                      <Send className="w-5 h-5" />
+                      <Send className="h-5 w-5" />
                     </button>
                   ) : isRecording ? (
                     <button
                       type="button"
                       onClick={stopVoiceRecording}
                       title="Send immediately"
-                      className="p-2.5 sm:p-3 rounded-2xl sm:rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/25 hover:brightness-110 active:scale-95 transition-all shrink-0 font-black cursor-pointer flex items-center justify-center animate-in fade-in zoom-in-90 duration-150"
+                      className="flex h-11 w-11 shrink-0 animate-in cursor-pointer items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm transition-all zoom-in-90 fade-in duration-150 hover:bg-emerald-500 active:scale-95"
                     >
                       <Send className="w-5 h-5" />
                     </button>
@@ -7807,9 +7788,9 @@ export default function ChatConversation() {
                       type="submit"
                       disabled={isBlockedConversation}
                       title="Send message (Enter)"
-                      className="p-2.5 sm:p-3 rounded-2xl sm:rounded-full bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] shadow-lg shadow-yellow-500/20 hover:brightness-105 active:scale-95 transition-all shrink-0 font-black cursor-pointer flex items-center justify-center animate-in fade-in zoom-in-90 duration-150"
+                      className="flex h-11 w-11 shrink-0 animate-in cursor-pointer items-center justify-center rounded-xl bg-amber-400 text-[#171204] shadow-sm transition-all zoom-in-90 fade-in duration-150 hover:bg-amber-300 active:scale-95"
                     >
-                      <Send className="w-5 h-5" />
+                      <Send className="h-5 w-5" />
                     </button>
                   ) : (
                     <button
@@ -7821,10 +7802,10 @@ export default function ChatConversation() {
                       onTouchCancel={handleMicTouchEnd}
                       disabled={uploadingImage || isBlockedConversation}
                       title="Record voice note (Hold to speak, slide left to cancel, slide up to lock)"
-                      className={`p-2.5 sm:p-3 rounded-2xl sm:rounded-full border active:scale-95 transition-all shrink-0 cursor-pointer flex items-center justify-center animate-in fade-in zoom-in-90 duration-150 ${
+                      className={`flex h-11 w-11 shrink-0 animate-in cursor-pointer items-center justify-center rounded-xl border transition-colors zoom-in-90 fade-in duration-150 active:scale-95 ${
                         isLight
-                          ? 'bg-slate-100 border-slate-200 text-slate-700 hover:text-amber-600 hover:border-amber-300 hover:bg-amber-50 shadow-xs'
-                          : 'bg-[#18181b] border-white/10 text-zinc-300 hover:text-[#facc15] hover:border-[#facc15]/40 hover:bg-[#facc15]/10 shadow-xs'
+                          ? 'border-[#e4e7ec] bg-white text-slate-600 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700'
+                          : 'border-white/[0.07] bg-[#16191e] text-zinc-400 hover:border-amber-500/30 hover:text-amber-300'
                       }`}
                     >
                       <Mic className="w-5 h-5" />
@@ -7834,71 +7815,69 @@ export default function ChatConversation() {
               </footer>
             </>
           ) : (!conversationsLoaded ? (
-            <div className={`flex-1 flex flex-col items-center justify-center p-6 text-center ${
-              isLight ? 'bg-slate-50' : 'bg-[#09090b]'
+            <div className={`flex flex-1 flex-col items-center justify-center p-6 text-center ${
+              isLight ? 'bg-[#f8f9fb]' : 'bg-[#0b0d10]'
             }`}>
-              <div className={`w-8 h-8 rounded-full border-2 border-t-transparent animate-spin ${
-                isLight ? 'border-amber-600' : 'border-[#facc15]'
+              <div className={`h-8 w-8 animate-spin rounded-full border-2 border-t-transparent ${
+                isLight ? 'border-slate-300 border-t-amber-600' : 'border-white/15 border-t-amber-400'
               }`} />
-              <p className={`mt-3 text-xs font-bold ${isLight ? 'text-slate-600' : 'text-zinc-300'}`}>
+              <p className={`mt-3 text-xs font-medium ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
                 Loading your chats…
               </p>
             </div>
           ) : (
             /* Empty State Hero on Desktop / Wide screens (WhatsApp Web style) */
-            <div className={`flex-1 flex flex-col items-center justify-center p-6 text-center select-none ${
-              isLight ? 'bg-slate-50' : 'bg-[#09090b]'
+            <div className={`flex flex-1 select-none flex-col items-center justify-center p-6 text-center ${
+              isLight ? 'bg-[#f8f9fb]' : 'bg-[#0b0d10]'
             }`}>
-              <div className={`w-20 h-20 rounded-3xl flex items-center justify-center mb-4 border overflow-hidden p-2 ${
+              <div className={`mb-5 flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl border p-1.5 ${
                 isLight 
-                  ? 'bg-amber-100 text-amber-700 border-amber-200' 
-                  : 'bg-[#18181b] text-[#facc15] border-[#27272a]'
+                  ? 'border-[#e4e7ec] bg-white shadow-sm' 
+                  : 'border-white/[0.07] bg-[#14171b]'
               }`}>
                 <img
                   src="/logo192.png"
                   alt={chatBrandName || "JDLX Chat"}
-                  className="w-full h-full object-contain rounded-2xl"
+                  className="h-full w-full rounded-xl object-contain"
                 />
               </div>
-              <h2 className={`text-xl sm:text-2xl font-black mb-1.5 ${
+              <h2 className={`mb-2 text-xl font-semibold tracking-tight sm:text-2xl ${
                 isLight ? 'text-slate-900' : 'text-white'
               }`}>
-                {chatBrandName} for Web &amp; Mobile
+                {chatBrandName}
               </h2>
-              <p className={`text-xs sm:text-sm max-w-sm mb-6 ${
-                isLight ? 'text-slate-600' : 'text-zinc-200'
+              <p className={`mb-6 max-w-sm text-[13px] leading-relaxed ${
+                isLight ? 'text-slate-600' : 'text-zinc-400'
               }`}>
-                Send and receive encrypted direct messages with friends across the network.
+                Select a conversation to continue, or start a new private chat with a friend.
               </p>
-              <div className="flex flex-wrap items-center justify-center gap-3">
+              <div className="flex flex-wrap items-center justify-center gap-2.5">
                 <button
+                  type="button"
                   onClick={() => {
                     setShowAddFriendModal(true)
                     setFriendModalTab('search')
                   }}
-                  className="px-4 py-2.5 rounded-xl font-black text-xs bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] flex items-center gap-2 shadow-lg shadow-yellow-500/15 cursor-pointer active:scale-95 transition-all"
+                  className="ui-btn ui-btn-primary text-xs"
                 >
-                  <UserPlus className="w-4 h-4" />
-                  <span>Add Friend by @username</span>
+                  <UserPlus className="h-4 w-4" />
+                  <span>Add friend by @username</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     setShowAddFriendModal(true)
                     setFriendModalTab('invite')
                   }}
-                  className={`px-4 py-2.5 rounded-xl font-bold text-xs border flex items-center gap-2 cursor-pointer active:scale-95 transition-all ${
-                    isLight 
-                      ? 'bg-white border-slate-200 text-slate-800 hover:bg-slate-100 shadow-sm' 
-                      : 'bg-[#18181b] border-[#3f3f46] text-white hover:bg-[#27272a]'
-                  }`}
+                  className="ui-btn ui-btn-secondary text-xs"
                 >
-                  <Share2 className="w-4 h-4" />
-                  <span>Invite Friends</span>
+                  <Share2 className="h-4 w-4" />
+                  <span>Invite friends</span>
                 </button>
               </div>
-              <div className="mt-8 flex items-center gap-1.5 text-[11px] text-emerald-500 font-bold">
-                <Lock className="w-3.5 h-3.5" />
-                <span>Encrypted Private Messaging Network</span>
+              <div className={`mt-8 flex items-center gap-1.5 text-[11px] font-medium ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
+                <Lock className="h-3.5 w-3.5" />
+                <span>Encrypted private messaging</span>
               </div>
             </div>
           ))}
@@ -7913,7 +7892,7 @@ export default function ChatConversation() {
             setGlobalSearchQuery('')
             setGlobalSearchResults([])
           }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in duration-200"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
@@ -7922,8 +7901,8 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Add friend"
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88vh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-[#f4f4f5]'
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88vh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
+              isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-[#f4f4f5]'
             }`}
           >
             <SheetGrabHandle onDismiss={() => {
@@ -7934,32 +7913,32 @@ export default function ChatConversation() {
 
             {/* Modal Header */}
             <div className={`flex items-center justify-between pb-3 border-b ${
-              isLight ? 'border-slate-200' : 'border-[#27272a]'
+              isLight ? 'border-slate-200' : 'border-white/[0.07]'
             }`}>
               <div className="flex items-center gap-2">
                 <UserPlus className={`w-5 h-5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-                <h3 className={`font-black text-sm ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                <h3 className={`font-semibold text-sm ${isLight ? 'text-slate-900' : 'text-white'}`}>
                   Add Friends &amp; Connect
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => {
                   triggerHaptic('light')
                   setShowAddFriendModal(false)
                   setGlobalSearchQuery('')
                   setGlobalSearchResults([])
                 }}
-                className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
-                  isLight ? 'hover:bg-slate-100 text-slate-500' : 'hover:bg-[#18181b] text-zinc-400 hover:text-white'
-                }`}
+                aria-label="Close add friend dialog"
+                className="ui-icon-btn h-9 w-9"
               >
-                <X className="w-5 h-5" />
+                <X className="h-5 w-5" />
               </button>
             </div>
 
             {/* Segmented Tab Bar */}
-            <div className={`grid grid-cols-3 p-1 rounded-xl border text-xs font-black ${
-              isLight ? 'bg-slate-100 border-slate-200 text-slate-600' : 'bg-[#18181b] border-[#27272a] text-zinc-300'
+            <div className={`grid grid-cols-3 gap-1 rounded-lg p-1 text-xs font-medium ${
+              isLight ? 'bg-slate-100 text-slate-600' : 'bg-white/[0.05] text-zinc-400'
             }`}>
               <button
                 type="button"
@@ -7967,13 +7946,13 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setFriendModalTab('search')
                 }}
-                className={`py-1.5 rounded-lg transition-all cursor-pointer ${
+                className={`cursor-pointer rounded-md py-1.5 transition-all ${
                   friendModalTab === 'search'
-                    ? isLight ? 'bg-white text-slate-900 shadow-sm' : 'bg-[#27272a] text-[#facc15]'
-                    : ''
+                    ? isLight ? 'bg-white font-semibold text-slate-900 shadow-sm' : 'bg-white/[0.1] font-semibold text-white'
+                    : 'hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                Find People
+                Find people
               </button>
               <button
                 type="button"
@@ -7981,10 +7960,10 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setFriendModalTab('requests')
                 }}
-                className={`py-1.5 rounded-lg transition-all relative cursor-pointer ${
+                className={`relative cursor-pointer rounded-md py-1.5 transition-all ${
                   friendModalTab === 'requests'
-                    ? isLight ? 'bg-white text-slate-900 shadow-sm' : 'bg-[#27272a] text-[#facc15]'
-                    : ''
+                    ? isLight ? 'bg-white font-semibold text-slate-900 shadow-sm' : 'bg-white/[0.1] font-semibold text-white'
+                    : 'hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
                 <span>Requests</span>
@@ -8000,13 +7979,13 @@ export default function ChatConversation() {
                   triggerHaptic('light')
                   setFriendModalTab('invite')
                 }}
-                className={`py-1.5 rounded-lg transition-all cursor-pointer ${
+                className={`cursor-pointer rounded-md py-1.5 transition-all ${
                   friendModalTab === 'invite'
-                    ? isLight ? 'bg-white text-slate-900 shadow-sm' : 'bg-[#27272a] text-[#facc15]'
-                    : ''
+                    ? isLight ? 'bg-white font-semibold text-slate-900 shadow-sm' : 'bg-white/[0.1] font-semibold text-white'
+                    : 'hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                Invite Friend
+                Invite friend
               </button>
             </div>
 
@@ -8015,22 +7994,18 @@ export default function ChatConversation() {
               <div className="flex-1 flex flex-col min-h-0 space-y-3">
                 <form onSubmit={handleGlobalSearch} className="flex items-center gap-2">
                   <div className="relative flex-1 flex items-center">
-                    <span className={`absolute left-3.5 top-2.5 font-black text-xs pointer-events-none select-none ${
-                      isLight ? 'text-amber-600' : 'text-[#facc15]'
+                    <span className={`pointer-events-none absolute inset-y-0 left-3.5 flex select-none items-center text-xs font-semibold ${
+                      isLight ? 'text-amber-700' : 'text-amber-400'
                     }`}>@</span>
                     <input
                       type="text"
                       placeholder="Search by @username, name, email or phone..."
                       value={globalSearchQuery}
                       onChange={(e) => setGlobalSearchQuery(e.target.value)}
-                      className={`w-full pl-8 pr-9 py-2.5 rounded-xl border text-xs focus:outline-none transition-colors ${
-                        isLight 
-                          ? 'bg-slate-50 border-slate-200 text-slate-900 focus:border-amber-500' 
-                          : 'bg-[#18181b] border-[#27272a] text-[#f4f4f5] focus:border-[#facc15]'
-                      }`}
+                      className="ui-input pl-8 pr-9 text-xs"
                     />
                     {searchingGlobal ? (
-                      <Loader2 className="w-4 h-4 absolute right-3 top-3 animate-spin text-amber-500 pointer-events-none" />
+                      <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-amber-500" />
                     ) : globalSearchQuery ? (
                       <button
                         type="button"
@@ -8039,7 +8014,7 @@ export default function ChatConversation() {
                           setGlobalSearchResults([])
                         }}
                         title="Clear search"
-                        className="absolute right-2.5 top-2.5 p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors cursor-pointer"
+                        className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-black/10 hover:text-zinc-600 dark:hover:bg-white/10 dark:hover:text-zinc-200 cursor-pointer"
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -8048,7 +8023,7 @@ export default function ChatConversation() {
                   <button
                     type="submit"
                     disabled={searchingGlobal || !globalSearchQuery.trim()}
-                    className="px-4 py-2.5 rounded-xl bg-[#facc15] text-[#09090b] font-black text-xs hover:bg-[#eab308] active:scale-95 transition-all disabled:opacity-50 cursor-pointer flex items-center gap-1.5 shrink-0"
+                    className="ui-btn ui-btn-primary h-11 shrink-0 px-4 text-xs"
                   >
                     {searchingGlobal ? (
                       <>
@@ -8098,7 +8073,7 @@ export default function ChatConversation() {
                         <div
                           key={u.id}
                           className={`p-3 rounded-2xl border flex items-center justify-between gap-3 ${
-                            isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                            isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                           }`}
                         >
                           <div className="flex items-center gap-2.5 min-w-0">
@@ -8183,7 +8158,7 @@ export default function ChatConversation() {
                   </h4>
                   {(!incomingRequests || incomingRequests.length === 0) ? (
                     <div className={`p-4 rounded-2xl border text-center text-xs ${
-                      isLight ? 'bg-slate-50 border-slate-200 text-slate-500' : 'bg-[#18181b] border-[#27272a] text-zinc-400'
+                      isLight ? 'bg-slate-50 border-slate-200 text-slate-500' : 'bg-[#18181b] border-white/[0.07] text-zinc-400'
                     }`}>
                       No incoming friend requests.
                     </div>
@@ -8192,7 +8167,7 @@ export default function ChatConversation() {
                       <div
                         key={req.request_id}
                         className={`p-3 rounded-2xl border flex items-center justify-between gap-3 mb-2 ${
-                          isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                          isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
@@ -8244,7 +8219,7 @@ export default function ChatConversation() {
                       <div
                         key={req.request_id}
                         className={`p-2.5 rounded-2xl border flex items-center justify-between gap-2 mb-1.5 ${
-                          isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                          isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                         }`}
                       >
                         <div className={`text-xs font-bold truncate ${
@@ -8263,7 +8238,7 @@ export default function ChatConversation() {
                 )}
 
                 {friends && friends.length > 0 && (
-                  <div className={`pt-2 border-t ${isLight ? 'border-slate-200' : 'border-[#27272a]'}`}>
+                  <div className={`pt-2 border-t ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
                     <h4 className={`text-xs font-black uppercase tracking-wider mb-2 ${
                       isLight ? 'text-slate-900' : 'text-white'
                     }`}>
@@ -8273,7 +8248,7 @@ export default function ChatConversation() {
                       <div
                         key={fr.friend_id}
                         className={`p-2.5 rounded-2xl border flex items-center justify-between gap-2 mb-1.5 ${
-                          isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                          isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                         }`}
                       >
                         <div className={`text-xs font-bold truncate ${
@@ -8313,7 +8288,7 @@ export default function ChatConversation() {
 
                 {/* Invite Link Display Box */}
                 <div className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 font-mono text-xs ${
-                  isLight ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-[#18181b] border-[#27272a] text-white'
+                  isLight ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-[#18181b] border-white/[0.07] text-white'
                 }`}>
                   <span className="truncate">
                     {inviteInfo?.invite_url || `${window.location.origin}/chat/login?ref=@${chatUser?.username || 'member'}`}
@@ -8354,7 +8329,7 @@ export default function ChatConversation() {
       {showProfileDrawer && (
         <div 
           onClick={() => setShowProfileDrawer(false)}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-md p-0 sm:p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-md p-0 sm:p-4 animate-in fade-in duration-200"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
@@ -8363,15 +8338,15 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="My profile"
             tabIndex={-1}
-            className={`w-full max-w-lg rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90vh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
+            className={`w-full max-w-lg rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90vh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
+              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
             <SheetGrabHandle onDismiss={() => setShowProfileDrawer(false)} />
 
             {/* Header */}
             <div className={`flex items-center justify-between p-4 sm:p-5 border-b shrink-0 ${
-              isLight ? 'border-slate-200 bg-slate-50/70' : 'border-[#27272a] bg-[#16161a]'
+              isLight ? 'border-slate-200 bg-slate-50/70' : 'border-white/[0.07] bg-[#16161a]'
             }`}>
               <div className="flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black ${
@@ -8380,7 +8355,7 @@ export default function ChatConversation() {
                   <User className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className={`font-black text-sm sm:text-base flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                  <h3 className={`font-semibold text-sm sm:text-base flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
                     <span>Profile &amp; Settings</span>
                     <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-gradient-to-r from-amber-500 to-yellow-500 text-black">
                       JDLX
@@ -8425,7 +8400,7 @@ export default function ChatConversation() {
 
             {/* Segmented Tab Bar */}
             <div className={`flex items-center px-4 pt-3 pb-2 gap-2 border-b shrink-0 ${
-              isLight ? 'border-slate-200 bg-slate-100/60' : 'border-[#27272a] bg-[#141418]'
+              isLight ? 'border-slate-200 bg-slate-100/60' : 'border-white/[0.07] bg-[#141418]'
             }`}>
               {[
                 { id: 'profile', label: 'Profile', Icon: User },
@@ -8597,7 +8572,7 @@ export default function ChatConversation() {
                         className={`w-full pl-10 pr-4 py-2.5 rounded-2xl border text-sm font-medium transition-all outline-none ${
                           isLight
                             ? 'bg-slate-50 border-slate-200 text-slate-900 focus:bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20'
-                            : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] focus:ring-2 focus:ring-yellow-500/20'
+                            : 'bg-[#18181b] border-white/[0.07] text-white focus:border-[#facc15] focus:ring-2 focus:ring-yellow-500/20'
                         }`}
                       />
                     </div>
@@ -8626,7 +8601,7 @@ export default function ChatConversation() {
                         className={`w-full pl-8 pr-4 py-2.5 rounded-2xl border text-sm font-mono font-bold transition-all outline-none ${
                           isLight
                             ? 'bg-slate-50 border-slate-200 text-slate-900 focus:bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20'
-                            : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] focus:ring-2 focus:ring-yellow-500/20'
+                            : 'bg-[#18181b] border-white/[0.07] text-white focus:border-[#facc15] focus:ring-2 focus:ring-yellow-500/20'
                         }`}
                       />
                     </div>
@@ -8651,7 +8626,7 @@ export default function ChatConversation() {
                       className={`w-full px-3.5 py-2.5 rounded-2xl border text-xs sm:text-sm font-medium transition-all outline-none resize-none ${
                         isLight
                           ? 'bg-slate-50 border-slate-200 text-slate-900 focus:bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20'
-                          : 'bg-[#18181b] border-[#27272a] text-white focus:border-[#facc15] focus:ring-2 focus:ring-yellow-500/20'
+                          : 'bg-[#18181b] border-white/[0.07] text-white focus:border-[#facc15] focus:ring-2 focus:ring-yellow-500/20'
                       }`}
                     />
 
@@ -8715,7 +8690,7 @@ export default function ChatConversation() {
                                   : 'bg-yellow-500/20 border-[#facc15] text-[#facc15] shadow-md shadow-yellow-500/10'
                                 : isLight
                                   ? 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                                  : 'bg-[#18181b] border-[#27272a] text-zinc-400 hover:bg-[#202025]'
+                                  : 'bg-[#18181b] border-white/[0.07] text-zinc-400 hover:bg-[#202025]'
                             }`}
                           >
                             <span>{emoji}</span>
@@ -8728,7 +8703,7 @@ export default function ChatConversation() {
 
                   {/* Verified Contact Badges (Read-only security info) */}
                   <div className={`p-3 rounded-2xl border space-y-2 ${
-                    isLight ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-[#18181b] border-[#27272a] text-zinc-300'
+                    isLight ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-[#18181b] border-white/[0.07] text-zinc-300'
                   }`}>
                     <div className="flex items-center justify-between text-[11px]">
                       <span className="flex items-center gap-1.5 font-bold">
@@ -8819,7 +8794,7 @@ export default function ChatConversation() {
                                   : 'border-[#facc15] bg-[#18181b] shadow-lg shadow-yellow-500/10'
                                 : isLight
                                   ? 'border-slate-200 bg-white hover:border-slate-300'
-                                  : 'border-[#27272a] bg-[#18181b] hover:border-[#3f3f46]'
+                                  : 'border-white/[0.07] bg-[#18181b] hover:border-[#3f3f46]'
                             }`}
                           >
                             <span className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
@@ -8855,7 +8830,7 @@ export default function ChatConversation() {
 
                     {/* Enter to Send Toggle */}
                     <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                     }`}>
                       <div className="min-w-0">
                         <div className={`text-xs font-black ${isLight ? 'text-slate-900' : 'text-white'}`}>
@@ -8880,7 +8855,7 @@ export default function ChatConversation() {
 
                     {/* Chat Sound Effects */}
                     <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                     }`}>
                       <div className="min-w-0">
                         <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
@@ -8906,7 +8881,7 @@ export default function ChatConversation() {
 
                     {/* Wallpaper Doodle Toggle */}
                     <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                     }`}>
                       <div className="min-w-0">
                         <div className={`text-xs font-black ${isLight ? 'text-slate-900' : 'text-white'}`}>
@@ -8931,7 +8906,7 @@ export default function ChatConversation() {
 
                     {/* Chat Wallpaper Customizer */}
                     <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                     }`}>
                       <div className="min-w-0">
                         <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
@@ -8969,7 +8944,7 @@ export default function ChatConversation() {
                     </div>
 
                     <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                     }`}>
                       <div className="min-w-0">
                         <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
@@ -9005,7 +8980,7 @@ export default function ChatConversation() {
                       </div>
 
                       <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                        isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                        isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                       }`}>
                         <div className="min-w-0">
                           <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
@@ -9047,7 +9022,7 @@ export default function ChatConversation() {
                             togglePinConversation(e, activeRoomId)
                           }}
                           className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
-                            isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-[#27272a] hover:bg-[#202025] text-zinc-300'
+                            isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-white/[0.07] hover:bg-[#202025] text-zinc-300'
                           }`}
                         >
                           <Pin className={`w-4 h-4 shrink-0 ${pinnedRoomIds.includes(activeRoomId) ? 'text-[#facc15] fill-[#facc15]' : 'text-amber-500'}`} />
@@ -9074,7 +9049,7 @@ export default function ChatConversation() {
                             })
                           }}
                           className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
-                            isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-[#27272a] hover:bg-[#202025] text-zinc-300'
+                            isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-white/[0.07] hover:bg-[#202025] text-zinc-300'
                           }`}
                         >
                           <RotateCcw className="w-4 h-4 text-amber-500 shrink-0" />
@@ -9097,7 +9072,7 @@ export default function ChatConversation() {
                               else toast.error(wasBlocked ? 'Could not block user' : 'Could not block user')
                             }}
                             className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
-                              isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-[#27272a] hover:bg-[#202025] text-zinc-300'
+                              isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-white/[0.07] hover:bg-[#202025] text-zinc-300'
                             }`}
                           >
                             <Ban className="w-4 h-4 text-rose-500 shrink-0" />
@@ -9117,7 +9092,7 @@ export default function ChatConversation() {
                               setShowReportModal(true)
                             }}
                             className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition-all cursor-pointer ${
-                              isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-[#27272a] hover:bg-[#202025] text-zinc-300'
+                              isLight ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800' : 'bg-[#18181b] border-white/[0.07] hover:bg-[#202025] text-zinc-300'
                             }`}
                           >
                             <Flag className="w-4 h-4 text-rose-500 shrink-0" />
@@ -9153,7 +9128,7 @@ export default function ChatConversation() {
                     </div>
 
                     <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                     }`}>
                       <div className="min-w-0">
                         <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
@@ -9187,7 +9162,7 @@ export default function ChatConversation() {
                     </div>
 
                     <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                      isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                     }`}>
                       <div>
                         <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
@@ -9257,7 +9232,7 @@ export default function ChatConversation() {
 
                   {/* Public Key Fingerprint */}
                   <div className={`p-3.5 rounded-2xl border space-y-2 ${
-                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                   }`}>
                     <div className="flex items-center justify-between">
                       <span className={`text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
@@ -9288,7 +9263,7 @@ export default function ChatConversation() {
 
                   {/* Encrypted Recovery Backup */}
                   <div className={`p-3.5 rounded-2xl border ${
-                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                   }`}>
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -9315,7 +9290,7 @@ export default function ChatConversation() {
 
                   {/* Connected Friends Overview */}
                   <div className={`p-3.5 rounded-2xl border ${
-                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                   }`}>
                     <div className="flex items-center justify-between mb-2">
                       <div className={`text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${isLight ? 'text-slate-700' : 'text-zinc-300'}`}>
@@ -9340,7 +9315,7 @@ export default function ChatConversation() {
                           <div
                             key={fr.friend_id}
                             className={`p-2 rounded-xl flex items-center justify-between text-xs border ${
-                              isLight ? 'bg-white border-slate-200' : 'bg-[#121215] border-[#27272a]'
+                              isLight ? 'bg-white border-slate-200' : 'bg-[#0f1114] border-white/[0.07]'
                             }`}
                           >
                             <span className="font-bold truncate">@{fr.username || fr.name}</span>
@@ -9366,7 +9341,7 @@ export default function ChatConversation() {
 
                   {/* Cache & Maintenance */}
                   <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
-                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                    isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                   }`}>
                     <div>
                       <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
@@ -9419,7 +9394,7 @@ export default function ChatConversation() {
 
             {/* Modal Bottom Action Bar */}
             <div className={`p-4 border-t shrink-0 flex items-center justify-between ${
-              isLight ? 'border-slate-200 bg-slate-50/70' : 'border-[#27272a] bg-[#16161a]'
+              isLight ? 'border-slate-200 bg-slate-50/70' : 'border-white/[0.07] bg-[#16161a]'
             }`}>
               <span className={`text-[10px] font-medium flex items-center gap-1 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
@@ -9441,7 +9416,7 @@ export default function ChatConversation() {
       {showNotificationsDrawer && (
         <div 
           onClick={() => setShowNotificationsDrawer(false)}
-          className="fixed inset-0 z-50 flex items-end sm:items-stretch sm:justify-end bg-black/80 backdrop-blur-sm animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex items-end sm:items-stretch sm:justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
@@ -9451,17 +9426,17 @@ export default function ChatConversation() {
             aria-label="Notifications"
             tabIndex={-1}
             className={`w-full sm:max-w-sm max-h-[85vh] sm:max-h-full rounded-t-[32px] sm:rounded-none border-t sm:border-t-0 sm:border-l flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-drawer-spring-right transition-colors pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
+              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
             <SheetGrabHandle onDismiss={() => setShowNotificationsDrawer(false)} />
 
             <div className={`p-4 border-b flex items-center justify-between ${
-              isLight ? 'border-slate-200' : 'border-[#27272a]'
+              isLight ? 'border-slate-200' : 'border-white/[0.07]'
             }`}>
               <div className="flex items-center gap-2">
                 <Bell className={`w-5 h-5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
-                <h3 className={`font-black text-sm ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                <h3 className={`font-semibold text-sm ${isLight ? 'text-slate-900' : 'text-white'}`}>
                   Chat Notifications
                 </h3>
                 {notifications && notifications.filter(n => !n.is_read).length > 0 && (
@@ -9508,7 +9483,7 @@ export default function ChatConversation() {
                             : 'border-yellow-500/40 bg-yellow-500/10 hover:bg-yellow-500/15 hover:border-yellow-500/60'
                           : isLight
                             ? 'border-slate-200 bg-slate-50/70 hover:bg-slate-100/80 opacity-80 hover:opacity-100'
-                            : 'border-[#27272a] bg-[#18181b]/70 hover:bg-[#18181b] opacity-75 hover:opacity-100'
+                            : 'border-white/[0.07] bg-[#18181b]/70 hover:bg-[#18181b] opacity-75 hover:opacity-100'
                       }`}
                     >
                       <div className="flex items-start gap-2.5">
@@ -9604,7 +9579,7 @@ export default function ChatConversation() {
 
             {notifications && notifications.length > 0 && (
               <div className={`p-3 border-t flex items-center justify-between text-center ${
-                isLight ? 'border-slate-200 bg-slate-50/50' : 'border-[#27272a] bg-[#0e0e11]'
+                isLight ? 'border-slate-200 bg-slate-50/50' : 'border-white/[0.07] bg-[#0e0e11]'
               }`}>
                 <span className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                   {notifications.length} notification{notifications.length > 1 ? 's' : ''}
@@ -9881,7 +9856,7 @@ export default function ChatConversation() {
       {showReportModal && (
         <div
           onClick={() => setShowReportModal(false)}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 p-0 sm:p-4 backdrop-blur-sm animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-sm animate-in fade-in duration-200"
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -9890,8 +9865,8 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Report user"
             tabIndex={-1}
-            className={`w-full max-w-sm rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b p-5 sm:p-6 space-y-4 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
-              isLight ? 'bg-white border-slate-200' : 'bg-[#121214] border-[#27272a]'
+            className={`w-full max-w-sm rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b p-5 sm:p-6 space-y-4 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
+              isLight ? 'bg-white border-slate-200' : 'bg-[#121214] border-white/[0.07]'
             }`}
           >
             <SheetGrabHandle onDismiss={() => setShowReportModal(false)} />
@@ -9917,7 +9892,7 @@ export default function ChatConversation() {
               className={`w-full px-3 py-2.5 rounded-xl border text-xs font-bold ${
                 isLight
                   ? 'bg-slate-50 border-slate-200 text-slate-900'
-                  : 'bg-[#18181b] border-[#27272a] text-white'
+                  : 'bg-[#18181b] border-white/[0.07] text-white'
               }`}
             >
               <option value="spam">Spam</option>
@@ -9936,7 +9911,7 @@ export default function ChatConversation() {
               className={`w-full px-3 py-2.5 rounded-xl border text-xs font-medium resize-none ${
                 isLight
                   ? 'bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-400'
-                  : 'bg-[#18181b] border-[#27272a] text-white placeholder:text-zinc-500'
+                  : 'bg-[#18181b] border-white/[0.07] text-white placeholder:text-zinc-500'
               }`}
             />
 
@@ -10526,7 +10501,7 @@ export default function ChatConversation() {
             ref={contactDialogRef}
             tabIndex={-1}
             className={`w-full max-w-md md:max-w-[420px] lg:max-w-[450px] md:h-full max-h-[92dvh] md:max-h-full rounded-t-[36px] md:rounded-none md:rounded-l-3xl border-t md:border-t-0 md:border-l shadow-2xl overflow-hidden animate-sheet-spring-up md:animate-drawer-spring-right flex flex-col ${
-              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-400/30' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-400/30' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
             {/* Top Sheet Grab Handle & Header */}
@@ -10832,7 +10807,7 @@ export default function ChatConversation() {
                             : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 shadow-emerald-500/10'
                           : isLight
                             ? 'bg-slate-100 text-slate-500 border-slate-200'
-                            : 'bg-[#18181b] text-zinc-400 border-[#27272a]'
+                            : 'bg-[#18181b] text-zinc-400 border-white/[0.07]'
                     }`}>
                       <span className="relative flex h-2 w-2 shrink-0">
                         {isContactOnline && !peerTyping && (
@@ -10890,8 +10865,8 @@ export default function ChatConversation() {
                   className={`p-2.5 sm:p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
                     isRoomMuted(activeRoomId)
                       ? isLight
-                        ? 'bg-rose-50/90 hover:bg-rose-100/90 border-rose-300 text-rose-800 hover:shadow-md shadow-rose-500/5'
-                        : 'bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/35 text-rose-300 hover:shadow-black/40 shadow-rose-500/10'
+                        ? 'bg-amber-50/90 hover:bg-amber-100/90 border-amber-300 text-amber-900 hover:shadow-md shadow-amber-500/5'
+                        : 'bg-yellow-500/10 hover:bg-yellow-500/20 border-yellow-500/35 text-amber-300 hover:shadow-black/40 shadow-yellow-500/10'
                       : isLight 
                         ? 'bg-slate-50/90 hover:bg-slate-100/90 border-slate-200/90 text-slate-800 hover:shadow-md' 
                         : 'bg-[#16161a] hover:bg-[#1e1e24] border-[#26262c] hover:border-[#383842] text-zinc-200 hover:shadow-black/40'
@@ -10900,11 +10875,11 @@ export default function ChatConversation() {
                 >
                   <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shadow-xs transition-transform duration-200 group-hover:scale-105 border ${
                     isRoomMuted(activeRoomId)
-                      ? 'bg-rose-500/20 text-rose-400 border-rose-500/40 ring-1 ring-rose-500/30'
+                      ? 'bg-amber-500/20 text-[#facc15] border-yellow-500/40 ring-1 ring-yellow-500/30'
                       : 'bg-emerald-500/15 text-emerald-500 border-emerald-500/25 group-hover:border-emerald-400/50'
                   }`}>
                     {isRoomMuted(activeRoomId) ? (
-                      <VolumeX className="w-5 h-5 text-rose-500" />
+                      <VolumeX className="w-5 h-5 text-amber-500 dark:text-[#facc15]" />
                     ) : (
                       <Volume2 className="w-5 h-5 text-emerald-500" />
                     )}
@@ -10915,7 +10890,7 @@ export default function ChatConversation() {
                     </span>
                     <span className={`text-[9px] font-bold font-mono px-1 rounded-full ${
                       isRoomMuted(activeRoomId) 
-                        ? 'bg-rose-500/20 text-rose-400 dark:text-rose-300' 
+                        ? 'bg-amber-500/20 text-[#facc15]' 
                         : 'text-emerald-500 opacity-80'
                     }`}>
                       {isRoomMuted(activeRoomId) ? getMuteRemainingLabel(activeRoomId) : 'Alerts'}
@@ -11000,7 +10975,7 @@ export default function ChatConversation() {
 
               {/* About / Bio Status Card */}
               <div className={`p-4 rounded-2xl border space-y-1.5 ${
-                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
               }`}>
                 <span className="text-[10px] font-black uppercase tracking-wider text-amber-500 block">
                   About &amp; Status
@@ -11014,7 +10989,7 @@ export default function ChatConversation() {
               <div className={`p-3.5 rounded-2xl border space-y-2 transition-all shadow-xs ${
                 isLight 
                   ? 'bg-amber-50/50 border-amber-200 text-amber-950' 
-                  : 'bg-[#18181b] border-[#27272a] text-zinc-200'
+                  : 'bg-[#18181b] border-white/[0.07] text-zinc-200'
               }`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
@@ -11161,7 +11136,7 @@ export default function ChatConversation() {
                         : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
                       : isLight
                         ? 'bg-slate-50 border-slate-200 text-slate-800'
-                        : 'bg-[#18181b] border-[#27272a] text-zinc-200'
+                        : 'bg-[#18181b] border-white/[0.07] text-zinc-200'
                   }`}
                 >
                   <div 
@@ -11262,7 +11237,7 @@ export default function ChatConversation() {
                         : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
                       : isLight
                         ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                        : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                        : 'bg-[#18181b] hover:bg-[#202026] border-white/[0.07] text-zinc-200'
                   }`}
                   title="Change chat wallpaper & theme"
                 >
@@ -11304,22 +11279,22 @@ export default function ChatConversation() {
                   className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xs ${
                     isRoomMuted(activeRoomId)
                       ? isLight 
-                        ? 'bg-rose-50/90 border-rose-300 text-rose-950 shadow-rose-500/10' 
-                        : 'bg-rose-500/10 border-rose-500/30 text-rose-200 shadow-rose-500/10'
+                        ? 'bg-amber-50/90 border-amber-300 text-amber-950 shadow-amber-500/10' 
+                        : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
                       : isLight
                         ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                        : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                        : 'bg-[#18181b] hover:bg-[#202026] border-white/[0.07] text-zinc-200'
                   }`}
                   title="Configure notification sounds & mute"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
                       isRoomMuted(activeRoomId)
-                        ? 'bg-rose-500/20 text-rose-400 border-rose-500/40 ring-1 ring-rose-500/30'
+                        ? 'bg-amber-500/20 text-[#facc15] border-yellow-500/40 ring-1 ring-yellow-500/30'
                         : 'bg-emerald-500/15 text-emerald-500 border-emerald-500/25'
                     }`}>
                       {isRoomMuted(activeRoomId) ? (
-                        <VolumeX className="w-4.5 h-4.5 text-rose-500" />
+                        <VolumeX className="w-4.5 h-4.5 text-amber-500 dark:text-[#facc15]" />
                       ) : (
                         <Volume2 className="w-4.5 h-4.5 text-emerald-500" />
                       )}
@@ -11336,7 +11311,7 @@ export default function ChatConversation() {
                   <div className="flex items-center gap-1 shrink-0">
                     <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
                       isRoomMuted(activeRoomId)
-                        ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                        ? 'bg-amber-500/20 text-[#facc15] border-yellow-500/30'
                         : 'bg-emerald-500/15 text-emerald-500 border-emerald-500/25'
                     }`}>
                       {isRoomMuted(activeRoomId) ? getMuteRemainingLabel(activeRoomId) : 'Unmuted'}
@@ -11358,7 +11333,7 @@ export default function ChatConversation() {
                         : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200 shadow-yellow-500/10'
                       : isLight
                         ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                        : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                        : 'bg-[#18181b] hover:bg-[#202026] border-white/[0.07] text-zinc-200'
                   }`}
                   title="View starred / saved messages"
                 >
@@ -11400,12 +11375,12 @@ export default function ChatConversation() {
               <div 
                 id="contact-shared-media-section"
                 className={`rounded-2xl border overflow-hidden transition-all shadow-xs ${
-                  isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                  isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                 }`}
               >
                 {/* Header Title with Dynamic Total Count Badge */}
                 <div className={`px-4 py-3 flex items-center justify-between border-b ${
-                  isLight ? 'border-slate-200/80 bg-white/50' : 'border-[#27272a]/80 bg-[#141416]/50'
+                  isLight ? 'border-slate-200/80 bg-white/50' : 'border-white/[0.07]/80 bg-[#141416]/50'
                 }`}>
                   <span className="text-[10.5px] font-black uppercase tracking-wider text-amber-500 flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5" />
@@ -11420,7 +11395,7 @@ export default function ChatConversation() {
 
                 {/* 3 Segmented Pill Tabs */}
                 <div className={`p-1.5 grid grid-cols-3 gap-1 border-b ${
-                  isLight ? 'border-slate-200/80 bg-slate-100/60' : 'border-[#27272a]/80 bg-[#121214]'
+                  isLight ? 'border-slate-200/80 bg-slate-100/60' : 'border-white/[0.07]/80 bg-[#121214]'
                 }`}>
                   {/* Media Tab */}
                   <button
@@ -11562,7 +11537,7 @@ export default function ChatConversation() {
                             className={`p-2.5 rounded-xl border flex items-center justify-between gap-2.5 transition-all ${
                               isLight 
                                 ? 'bg-white hover:bg-slate-100 border-slate-200' 
-                                : 'bg-[#141417] hover:bg-[#1c1c21] border-[#27272a]'
+                                : 'bg-[#141417] hover:bg-[#1c1c21] border-white/[0.07]'
                             }`}
                           >
                             <div className="flex items-center gap-2.5 min-w-0 flex-1">
@@ -11631,7 +11606,7 @@ export default function ChatConversation() {
                             className={`p-2.5 rounded-xl border flex items-center justify-between gap-2.5 transition-all ${
                               isLight 
                                 ? 'bg-white hover:bg-slate-100 border-slate-200' 
-                                : 'bg-[#141417] hover:bg-[#1c1c21] border-[#27272a]'
+                                : 'bg-[#141417] hover:bg-[#1c1c21] border-white/[0.07]'
                             }`}
                           >
                             <div className="flex items-center gap-2.5 min-w-0 flex-1">
@@ -11777,7 +11752,7 @@ export default function ChatConversation() {
 
               {/* Chat Management & Safety (Destructive Actions) */}
               <div className={`rounded-2xl border divide-y overflow-hidden ${
-                isLight ? 'bg-slate-50 border-slate-200 divide-slate-200' : 'bg-[#18181b] border-[#27272a] divide-[#27272a]'
+                isLight ? 'bg-slate-50 border-slate-200 divide-slate-200' : 'bg-[#18181b] border-white/[0.07] divide-[#27272a]'
               }`}>
                 {/* Clear Conversation */}
                 <button
@@ -11907,8 +11882,8 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Safety number verification"
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
             {/* Top Sheet Grab Handle & Header */}
@@ -11977,7 +11952,7 @@ export default function ChatConversation() {
 
               {/* 60-Digit Safety Number Grid */}
               <div className={`p-3.5 rounded-2xl border space-y-2 text-left ${
-                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181c] border-[#27272a]'
+                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181c] border-white/[0.07]'
               }`}>
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-black uppercase tracking-wider text-emerald-500 font-mono">
@@ -12007,7 +11982,7 @@ export default function ChatConversation() {
                         className={`py-1.5 px-1 rounded-lg text-xs sm:text-sm font-black tracking-widest border select-all ${
                           isLight 
                             ? 'bg-white border-slate-200 text-slate-800' 
-                            : 'bg-[#121215] border-[#292930] text-emerald-400'
+                            : 'bg-[#0f1114] border-[#292930] text-emerald-400'
                         }`}
                       >
                         {block}
@@ -12068,8 +12043,8 @@ export default function ChatConversation() {
               aria-modal="true"
               aria-label="Disappearing messages"
               tabIndex={-1}
-              className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
-                isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+              className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+                isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
               }`}
             >
               {/* Modal Header */}
@@ -12131,7 +12106,7 @@ export default function ChatConversation() {
                               : 'bg-yellow-500/15 border-yellow-500/60 ring-2 ring-yellow-500/30 text-white shadow-xs'
                             : isLight
                               ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                              : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                              : 'bg-[#18181b] hover:bg-[#202026] border-white/[0.07] text-zinc-200'
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
@@ -12193,8 +12168,8 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label={`Settings for ${friendQuickActionsTarget.name || friendQuickActionsTarget.username}`}
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
             {/* Grab Handle & Header */}
@@ -12298,7 +12273,7 @@ export default function ChatConversation() {
 
               {/* ── Auto-Delete / Disappearing Messages Quick Picker for this Friend ── */}
               <div className={`p-3.5 rounded-2xl border space-y-2.5 ${
-                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-[#27272a]'
+                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
               }`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -12346,7 +12321,7 @@ export default function ChatConversation() {
                               : 'bg-yellow-500/25 border-yellow-500/60 text-[#facc15] font-black shadow-xs ring-1 ring-yellow-500/40'
                             : isLight
                               ? 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700'
-                              : 'bg-[#121215] hover:bg-[#1f1f24] border-[#2b2b32] text-zinc-300'
+                              : 'bg-[#0f1114] hover:bg-[#1f1f24] border-[#2b2b32] text-zinc-300'
                         }`}
                       >
                         <span className="text-xs">{chip.icon}</span>
@@ -12359,7 +12334,7 @@ export default function ChatConversation() {
 
               {/* Action List Grid */}
               <div className={`rounded-2xl border divide-y overflow-hidden ${
-                isLight ? 'bg-slate-50 border-slate-200 divide-slate-200' : 'bg-[#18181b] border-[#27272a] divide-[#27272a]'
+                isLight ? 'bg-slate-50 border-slate-200 divide-slate-200' : 'bg-[#18181b] border-white/[0.07] divide-[#27272a]'
               }`}>
                 {/* View Full Profile */}
                 <button
@@ -12481,7 +12456,7 @@ export default function ChatConversation() {
                   }`}
                 >
                   <div className="flex items-center gap-2.5">
-                    <VolumeX className="w-4 h-4 text-rose-500" />
+                    <VolumeX className="w-4 h-4 text-amber-500 dark:text-[#facc15]" />
                     <span>Mute Chat Notifications</span>
                   </div>
                   <ChevronRight className="w-4 h-4 opacity-40" />
@@ -12533,15 +12508,15 @@ export default function ChatConversation() {
             role="dialog"
             aria-modal="true"
             aria-label="Mute notifications"
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
             {/* Modal Header */}
-            <div className="relative pt-3 pb-2 px-5 sm:px-6 bg-gradient-to-b from-rose-500/15 via-rose-500/5 to-transparent shrink-0">
+            <div className="relative pt-3 pb-2 px-5 sm:px-6 bg-gradient-to-b from-amber-500/15 via-amber-500/5 to-transparent shrink-0">
               <SheetGrabHandle onDismiss={() => setShowMuteModal(false)} />
               <div className="flex items-center justify-between mt-1">
-                <span className="text-[11px] font-black uppercase tracking-wider text-rose-500 flex items-center gap-1.5">
+                <span className="text-[11px] font-black uppercase tracking-wider text-amber-500 dark:text-[#facc15] flex items-center gap-1.5">
                   <BellOff className="w-4 h-4" />
                   Mute Notifications
                 </span>
@@ -12569,7 +12544,7 @@ export default function ChatConversation() {
               <div className="space-y-1 text-center">
                 <div className={`w-12 h-12 rounded-2xl mx-auto flex items-center justify-center border ${
                   isRoomMuted(activeRoomId)
-                    ? 'bg-rose-500/15 text-rose-500 border-rose-500/30'
+                    ? 'bg-amber-500/15 text-amber-500 dark:text-[#facc15] border-amber-500/30 shadow-xs'
                     : isLight ? 'bg-slate-100 text-slate-700 border-slate-200' : 'bg-white/10 text-zinc-300 border-white/10'
                 }`}>
                   <VolumeX className="w-6 h-6" />
@@ -12586,11 +12561,11 @@ export default function ChatConversation() {
               {isRoomMuted(activeRoomId) && (
                 <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
                   isLight 
-                    ? 'bg-rose-50/80 border-rose-200 text-rose-950' 
-                    : 'bg-rose-950/20 border-rose-500/30 text-rose-200'
+                    ? 'bg-amber-50/80 border-amber-200 text-amber-950' 
+                    : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200'
                 }`}>
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-500 flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-[#facc15] flex items-center justify-center shrink-0">
                       <BellOff className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
@@ -12634,17 +12609,17 @@ export default function ChatConversation() {
                       className={`p-3 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer transition-all active:scale-[0.98] ${
                         isSelected
                           ? isLight 
-                            ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-400/30 text-rose-950 shadow-xs' 
-                            : 'bg-rose-500/15 border-rose-500/60 ring-2 ring-rose-500/30 text-white shadow-xs'
+                            ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/30 text-amber-950 shadow-xs' 
+                            : 'bg-yellow-500/15 border-yellow-500/60 ring-2 ring-yellow-500/30 text-white shadow-xs'
                           : isLight
                             ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                            : 'bg-[#18181b] hover:bg-[#202026] border-[#27272a] text-zinc-200'
+                            : 'bg-[#18181b] hover:bg-[#202026] border-white/[0.07] text-zinc-200'
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border transition-colors ${
                           isSelected
-                            ? 'bg-rose-500 text-white border-rose-400'
+                            ? 'bg-amber-500 text-black border-amber-400 font-bold shadow-xs'
                             : 'bg-black/10 dark:bg-white/10 text-zinc-400 border-transparent'
                         }`}>
                           {opt.id === '8h' ? (
@@ -12659,7 +12634,7 @@ export default function ChatConversation() {
                           <p className="text-xs font-bold leading-tight flex items-center gap-1.5">
                             <span>{opt.label}</span>
                             {isCurrentActive && (
-                              <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-400 border border-rose-500/30 font-mono">
+                              <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-500/20 text-[#facc15] border border-yellow-500/30 font-mono">
                                 Active
                               </span>
                             )}
@@ -12673,10 +12648,10 @@ export default function ChatConversation() {
                       {/* Radio Circle */}
                       <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
                         isSelected
-                          ? 'border-rose-500 bg-rose-500'
+                          ? 'border-[#facc15] bg-[#facc15]'
                           : 'border-zinc-500/40 bg-transparent'
                       }`}>
-                        {isSelected && <div className="w-2 h-2 rounded-full bg-white" />}
+                        {isSelected && <div className="w-2 h-2 rounded-full bg-black" />}
                       </div>
                     </div>
                   )
@@ -12702,7 +12677,7 @@ export default function ChatConversation() {
                     muteRoomWithDuration(activeRoomId, selectedMuteDuration)
                     setShowMuteModal(false)
                   }}
-                  className="flex-1 py-2.5 px-4 rounded-xl text-xs font-black bg-rose-500 hover:bg-rose-600 text-white transition active:scale-95 cursor-pointer shadow-md shadow-rose-500/20 flex items-center justify-center gap-1.5"
+                  className="flex-1 py-2.5 px-4 rounded-xl text-xs font-black bg-amber-500 hover:bg-amber-600 text-black transition active:scale-95 cursor-pointer shadow-md shadow-amber-500/20 flex items-center justify-center gap-1.5"
                 >
                   <BellOff className="w-4 h-4" />
                   <span>{isRoomMuted(activeRoomId) ? 'Update Mute' : 'Mute Notifications'}</span>
@@ -12724,8 +12699,8 @@ export default function ChatConversation() {
             role="dialog"
             aria-modal="true"
             aria-label="Chat wallpaper"
-            className={`w-full max-w-md rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#121215] border-[#27272a] text-white shadow-black/90'
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+              isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
             {/* Modal Header */}
@@ -12788,7 +12763,7 @@ export default function ChatConversation() {
                             : 'border-yellow-500 ring-2 ring-yellow-500/30 bg-yellow-500/10 shadow-xs'
                           : isLight
                             ? 'bg-slate-50 hover:bg-slate-100 border-slate-200'
-                            : 'bg-[#18181b] hover:bg-[#222228] border-[#27272a]'
+                            : 'bg-[#18181b] hover:bg-[#222228] border-white/[0.07]'
                       }`}
                     >
                       {/* Swatch Preview Bar */}
@@ -12862,8 +12837,8 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Starred Messages"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-lg max-h-[85vh] rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 overflow-hidden pb-[max(1rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
+            className={`w-full max-w-lg max-h-[85vh] rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 overflow-hidden pb-[max(1rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
             <SheetGrabHandle onDismiss={() => setShowStarredModal(false)} />
@@ -12931,7 +12906,7 @@ export default function ChatConversation() {
                       className={`p-3.5 rounded-2xl border transition-all space-y-2.5 group ${
                         isLight 
                           ? 'bg-slate-50 hover:bg-slate-100/80 border-slate-200' 
-                          : 'bg-[#18181b] hover:bg-[#1e1e24] border-[#27272a]'
+                          : 'bg-[#18181b] hover:bg-[#1e1e24] border-white/[0.07]'
                       }`}
                     >
                       {/* Message meta */}
@@ -13057,7 +13032,7 @@ export default function ChatConversation() {
 
       {/* ── DRAG & DROP LUXURY VIEWPORT DROPZONE OVERLAY (Item 4) ── */}
       {isDraggingOver && activeConversation && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-6 select-none animate-in fade-in duration-150 pointer-events-none">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex flex-col items-center justify-center p-6 select-none animate-in fade-in duration-150 pointer-events-none">
           <div className="w-full max-w-md border-2 border-dashed border-[#facc15] bg-[#18181b]/95 rounded-3xl p-8 flex flex-col items-center justify-center gap-4 text-center shadow-2xl shadow-yellow-500/25 animate-in zoom-in-95 duration-150">
             <div className="w-20 h-20 rounded-3xl bg-yellow-400/10 border border-yellow-400/30 flex items-center justify-center text-[#facc15] animate-bounce">
               <Upload className="w-10 h-10 stroke-[2.2]" />
@@ -13085,7 +13060,7 @@ export default function ChatConversation() {
       {showPwaInstallModal && (
         <div
           onClick={() => setShowPwaInstallModal(false)}
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -13094,8 +13069,8 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Install app"
             tabIndex={-1}
-            className={`w-full max-w-sm rounded-t-[32px] sm:rounded-3xl border border-b-0 sm:border-b shadow-2xl p-5 sm:p-6 space-y-4 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
-              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#121215] border-[#27272a] text-white'
+            className={`w-full max-w-sm rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl p-5 sm:p-6 space-y-4 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
+              isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
             <SheetGrabHandle onDismiss={() => setShowPwaInstallModal(false)} />

@@ -214,28 +214,29 @@ export default function RecoveryPinModal() {
     toast('New encryption key created. Older messages may not be readable here.', { icon: '⚠️' })
   }
 
-  const fieldClass = `w-full rounded-xl border px-3 py-2.5 text-sm outline-none transition ${
-    isLight
-      ? 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-yellow-500'
-      : 'border-zinc-700 bg-zinc-900 text-white placeholder:text-zinc-500 focus:border-yellow-500'
-  }`
+  const fieldClass = 'ui-input text-sm'
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/75 p-4 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200">
       <div
-        className={`w-full max-w-sm rounded-2xl border p-5 shadow-2xl animate-popover-spring origin-center ${
-          isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-zinc-800 bg-[#111113] text-white'
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="recovery-pin-title"
+        className={`ui-card w-full max-w-sm origin-center p-5 animate-popover-spring ${
+          isLight ? 'border-slate-200/90 bg-white text-slate-900' : 'border-white/[0.08] bg-[#0f1114] text-white'
         }`}
       >
-        <div className="mb-3 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-yellow-500/15 text-yellow-500">
+        <div className="mb-4 flex items-center gap-3">
+          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+            isLight ? 'bg-amber-50 text-amber-700' : 'bg-amber-500/10 text-amber-400'
+          }`}>
             {mode === 'unlock' ? <KeyRound className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
           </div>
-          <div>
-            <h2 className="text-base font-bold">
+          <div className="min-w-0">
+            <h2 id="recovery-pin-title" className="text-base font-semibold tracking-tight">
               {mode === 'unlock' ? 'Unlock your chats' : 'Protect your chat backup'}
             </h2>
-            <p className={`text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+            <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
               {mode === 'unlock'
                 ? 'This account has an encrypted key backup.'
                 : 'Encrypt your key with a Recovery PIN.'}
@@ -268,22 +269,20 @@ export default function RecoveryPinModal() {
               onChange={(e) => setConfirmPin(e.target.value)}
               disabled={busy}
             />
-            {error && <p className="text-xs font-semibold text-red-500">{error}</p>}
+            {error && <p role="alert" className="text-xs font-medium text-rose-500">{error}</p>}
             <div className="flex gap-2 pt-1">
               <button
                 type="button"
                 onClick={handleLater}
                 disabled={busy}
-                className={`flex-1 rounded-xl border px-3 py-2.5 text-sm font-semibold ${
-                  isLight ? 'border-slate-200 text-slate-600' : 'border-zinc-700 text-zinc-300'
-                }`}
+                className="ui-btn ui-btn-secondary flex-1"
               >
                 Later
               </button>
               <button
                 type="submit"
                 disabled={busy}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-yellow-500 px-3 py-2.5 text-sm font-bold text-black disabled:opacity-60"
+                className="ui-btn ui-btn-primary flex-1"
               >
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                 Save PIN
@@ -306,14 +305,14 @@ export default function RecoveryPinModal() {
               disabled={busy || isLocked}
               autoFocus
             />
-            {error && <p className="text-xs font-semibold text-red-500">{error}</p>}
+            {error && <p role="alert" className="text-xs font-medium text-rose-500">{error}</p>}
             {isLocked && !error && (
-              <p className="text-xs font-semibold text-red-500">Too many attempts. Try again in {lockSecondsLeft}s.</p>
+              <p className="text-xs font-medium text-rose-500">Too many attempts. Try again in {lockSecondsLeft}s.</p>
             )}
             <button
               type="submit"
               disabled={busy || isLocked}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-yellow-500 px-3 py-2.5 text-sm font-bold text-black disabled:opacity-60"
+              className="ui-btn ui-btn-primary w-full"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
               {isLocked ? `Try again in ${lockSecondsLeft}s` : 'Unlock chats'}
