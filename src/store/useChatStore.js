@@ -27,6 +27,27 @@ const CHAT_REFRESH_KEY = 'jdlx_chat_refresh_token'
 const CHAT_USER_KEY = 'jdlx_chat_user'
 const CHAT_THEME_KEY = 'jdlx_chat_theme'
 
+// Call signaling can fail in ways that have no useful message of their own.
+// A backend that is unreachable (or answers the CORS preflight with a 404
+// because the /call/* routes are not deployed there) makes fetch reject with a
+// bare `TypeError: Failed to fetch`, which must never reach the user as-is.
+const describeCallError = (err, fallback = 'Call failed') => {
+  if (!err) return fallback
+  if (err.name === 'AbortError') return 'Call cancelled'
+  if (err instanceof TypeError || /failed to fetch|networkerror/i.test(err.message || '')) {
+    return 'Cannot reach the call server. Voice calling may not be enabled on this backend yet.'
+  }
+  return err.message || fallback
+}
+
+// Flask answers an unknown route with 404 "Resource not found" (and 405 for a
+// wrong method); a real call-signaling error has its own message.
+const isMissingCallRoute = (res, json) =>
+  res.status === 405
+  || (res.status === 404 && /resource not found/i.test(json?.error || json?.message || ''))
+
+const CALL_ROUTES_MISSING_ERROR = 'Voice calling is not available on this server yet.'
+
 let realtimeAuthReady = false
 let realtimeAuthExpiresAt = 0
 let realtimeAuthPromise = null
@@ -3723,7 +3744,12 @@ export const useChatStore = create((set, get) => ({
       const json = await res.json()
       if (!res.ok || !json.success) {
         get().cleanupCallResources()
-        return { success: false, error: json.error || 'Call offer failed' }
+        return {
+          success: false,
+          error: isMissingCallRoute(res, json)
+            ? CALL_ROUTES_MISSING_ERROR
+            : (json.error || 'Call offer failed')
+        }
       }
       set({
         activeCall: {
@@ -3739,9 +3765,8 @@ export const useChatStore = create((set, get) => ({
       get().pollCallState(roomId, true)
       return { success: true }
     } catch (e) {
-      if (e.name === 'AbortError') return { success: false, error: 'Call cancelled' }
       get().cleanupCallResources()
-      return { success: false, error: e.message || 'Call failed' }
+      return { success: false, error: describeCallError(e, 'Call failed') }
     }
   },
 
@@ -3823,7 +3848,12 @@ export const useChatStore = create((set, get) => ({
       const json = await res.json()
       if (!res.ok || !json.success) {
         get().cleanupCallResources()
-        return { success: false, error: json.error || 'Call answer failed' }
+        return {
+          success: false,
+          error: isMissingCallRoute(res, json)
+            ? CALL_ROUTES_MISSING_ERROR
+            : (json.error || 'Call answer failed')
+        }
       }
 
       set({
@@ -3840,7 +3870,7 @@ export const useChatStore = create((set, get) => ({
     } catch (e) {
       console.warn('answer call error:', e)
       get().cleanupCallResources()
-      return { success: false, error: e.message || 'Call answer failed' }
+      return { success: false, error: describeCallError(e, 'Call answer failed') }
     }
   },
 

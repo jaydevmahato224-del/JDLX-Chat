@@ -87,6 +87,85 @@ let isWindowBlurred = false
 let isBlurPaused = false
 let blurPauseTimer = null
 let captureDismissTimer = null
+let blankReleaseTimer = null
+let blankHoldKind = null // 'blur' = held until focus returns, 'key' = held during region-select capture, null = auto-release
+let keyHoldReleaseTimer = null
+let focusWatchdogTimer = null
+let lastCaptureEventAt = 0
+let lastToastTime = 0
+
+// ── BLANK CAPTURE SHIELD ─────────────────────────────────────────────
+// The core guarantee: when a capture signal is detected, the whole page is
+// blanked SYNCHRONOUSLY (class on <html>) BEFORE the OS actually grabs the
+// frame (PrintScreen copies on key-up, snipping tools capture while the
+// window is unfocused, region captures happen during the drag). Every
+// captured frame therefore shows a blank page carrying only the
+// "Protected by JDLX Security System" notice.
+const BLANK_OVERLAY_ID = 'jdlx-blank-overlay'
+
+function ensureBlankOverlay() {
+  if (typeof document === 'undefined' || !document.body) return
+  if (document.getElementById(BLANK_OVERLAY_ID)) return
+  const el = document.createElement('div')
+  el.id = BLANK_OVERLAY_ID
+  el.setAttribute('aria-hidden', 'true')
+  const card = document.createElement('div')
+  card.className = 'jdlx-blank-card'
+
+  const icon = document.createElement('div')
+  icon.className = 'jdlx-blank-icon'
+  icon.textContent = '🛡️'
+
+  const title = document.createElement('p')
+  title.className = 'jdlx-blank-title'
+  title.textContent = 'Protected by JDLX Security System'
+
+  const sub = document.createElement('p')
+  sub.className = 'jdlx-blank-sub'
+  sub.textContent = 'Screenshots & screen capture are restricted on this page'
+
+  card.appendChild(icon)
+  card.appendChild(title)
+  card.appendChild(sub)
+  el.appendChild(card)
+  document.body.appendChild(el)
+}
+
+function activateBlank(kind) {
+  if (typeof document === 'undefined') return
+  ensureBlankOverlay()
+  document.documentElement.classList.add('jdlx-blank-capture')
+  if (kind) blankHoldKind = kind
+}
+
+function clearKeyHoldRelease() {
+  if (keyHoldReleaseTimer) {
+    clearTimeout(keyHoldReleaseTimer)
+    keyHoldReleaseTimer = null
+  }
+}
+
+function releaseBlank() {
+  blankHoldKind = null
+  clearKeyHoldRelease()
+  if (blankReleaseTimer) {
+    clearTimeout(blankReleaseTimer)
+    blankReleaseTimer = null
+  }
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.remove('jdlx-blank-capture')
+}
+
+function scheduleBlankRelease(delayMs = 1100) {
+  // A held ('blur') blank is only released by focus returning — never by a timer.
+  if (blankHoldKind === 'blur') return
+  if (blankReleaseTimer) clearTimeout(blankReleaseTimer)
+  blankReleaseTimer = setTimeout(() => {
+    blankReleaseTimer = null
+    blankHoldKind = null
+    document.documentElement.classList.remove('jdlx-blank-capture')
+  }, delayMs)
+}
 
 // Reactive subscriber system for React hooks
 const subscribers = new Set()
@@ -109,6 +188,7 @@ export function getShieldState() {
     showShield,
     isCaptureTriggered,
     isWindowBlurred,
+    blankActive: typeof document !== 'undefined' && document.documentElement.classList.contains('jdlx-blank-capture'),
     activeReasons: Array.from(activeReasons)
   }
 }
@@ -125,6 +205,8 @@ export function dismissShield() {
  */
 export function pauseBlurShield(durationMs = 5000) {
   isBlurPaused = true
+  // Make sure a held blank shield never traps the user during file picking.
+  releaseBlank()
   if (blurPauseTimer) clearTimeout(blurPauseTimer)
   blurPauseTimer = setTimeout(() => {
     isBlurPaused = false
@@ -142,12 +224,11 @@ function updateNativeProtection(enable) {
   }
 }
 
-let lastToastTime = 0
 function notifyScreenshotBlocked() {
   const now = Date.now()
   if (now - lastToastTime < 2500) return
   lastToastTime = now
-  toast('🔒 Screenshot Protected: Screen capture and copying are restricted.', {
+  toast('🔒 Screenshot Blocked: Capture content is replaced with a blank protected page.', {
     id: 'screenshot-blocked-toast',
     icon: '🛡️',
     duration: 3500,
@@ -162,17 +243,75 @@ function notifyScreenshotBlocked() {
   })
 }
 
-function triggerCaptureProtection() {
+/**
+ * Notify the app UI (chat feed) that a screenshot / screen capture attempt
+ * was detected, so a centered alert message can be shown in the feed.
+ */
+function emitCaptureAttempt(source) {
+  const now = Date.now()
+  if (now - lastCaptureEventAt < 1200) return
+  lastCaptureEventAt = now
+  try {
+    window.dispatchEvent(new CustomEvent('jdlx_capture_attempt', { detail: { source, at: now } }))
+  } catch {}
+}
+
+/**
+ * Central capture response. Blank FIRST (so the captured frame is blank),
+ * then surface the toast / shield / feed alert.
+ *
+ * holdKind:
+ *   - undefined/null → auto-release the blank shortly after (instant captures)
+ *   - 'blur'         → hold until focus/visibility returns (unfocused captures)
+ *   - 'key'          → hold while a region-select drag capture is in progress
+ */
+function triggerCaptureProtection(source = 'unknown', holdKind = null) {
+  // 1) Blank the page synchronously before the OS grabs the frame.
+  activateBlank(holdKind || undefined)
+
+  try { console.info('[JDLX Security] Capture attempt blocked:', source) } catch {}
+
+  // 2) Mark shield state for the React overlay.
   isCaptureTriggered = true
   notifyScreenshotBlocked()
   notifySubscribers()
 
-  // Overwrite clipboard if OS or user shortcut copied the screen
+  // 3) In-feed centered alert for chat / profile capture attempts.
+  emitCaptureAttempt(source)
+
+  // 4) Overwrite clipboard if OS or user shortcut copied the screen.
   try {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText('🔒 JDLX Chat: Screenshots and captures of protected chats and profiles are restricted for privacy.').catch(() => {})
     }
   } catch {}
+
+  // 5) Release the blank page:
+  //    - instant captures release automatically after the grab,
+  //    - blur/tab-hold keeps it until focus returns,
+  //    - key-hold keeps it through the whole region-select drag (with a cap).
+  if (!holdKind) {
+    scheduleBlankRelease(1100)
+  } else {
+    // A held blank must outlive any earlier auto-release timer.
+    if (blankReleaseTimer) {
+      clearTimeout(blankReleaseTimer)
+      blankReleaseTimer = null
+    }
+    if (holdKind === 'key') {
+      // Region-select drag: hold through the whole drag (capped), release on
+      // mouseup / next non-capture keydown / watchdog restore.
+      clearKeyHoldRelease()
+      keyHoldReleaseTimer = setTimeout(() => {
+        keyHoldReleaseTimer = null
+        blankHoldKind = null
+        document.documentElement.classList.remove('jdlx-blank-capture')
+      }, 10000)
+    } else {
+      // 'blur' hold: cancel any pending key-hold cap; release happens on focus.
+      clearKeyHoldRelease()
+    }
+  }
 
   if (captureDismissTimer) clearTimeout(captureDismissTimer)
   captureDismissTimer = setTimeout(() => {
@@ -181,69 +320,118 @@ function triggerCaptureProtection() {
   }, 3500)
 }
 
+function isPrintScreenEvent(e) {
+  return (
+    e.key === 'PrintScreen' ||
+    e.key === 'Snapshot' ||
+    e.code === 'PrintScreen' ||
+    e.keyCode === 44 ||
+    e.which === 44
+  )
+}
+
 function handleKeyDown(e) {
   if (!isScreenSecurityEnabled() || activeReasons.size === 0) return
 
   // PrintScreen key variations across OSes (Windows, Linux, macOS)
-  const isPrintScreen = 
-    e.key === 'PrintScreen' || 
-    e.key === 'Snapshot' || 
-    e.code === 'PrintScreen' || 
-    e.keyCode === 44 || 
-    e.which === 44
+  const isPrintScreen = isPrintScreenEvent(e)
 
-  // Snipping tool / OS screenshot shortcuts:
-  // Win+Shift+S / Cmd+Shift+S / Cmd+Shift+3 / Cmd+Shift+4 / Cmd+Shift+5 / Ctrl+Shift+S / Alt+PrintScreen / Ctrl+PrintScreen
-  const isCaptureShortcut =
-    ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'S' || e.key === 's' || e.key === '3' || e.key === '4' || e.key === '5')) ||
+  // Instant capture shortcuts (whole-screen / window grab):
+  // Win+Shift+S / Cmd+Shift+S / Cmd+Shift+3 / Alt+PrintScreen / Ctrl+PrintScreen
+  const isInstantCaptureShortcut =
+    ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'S' || e.key === 's' || e.key === '3')) ||
     (e.altKey && isPrintScreen) ||
     ((e.metaKey || e.ctrlKey) && isPrintScreen)
+
+  // Region / panel capture shortcuts (capture happens during/after a mouse
+  // drag, e.g. Cmd+Shift+4 on macOS or Cmd+Shift+5 snipping panel):
+  const isRegionCaptureShortcut =
+    (e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === '4' || e.key === '5')
 
   // Browser Print / Save to PDF
   const isPrintShortcut = (e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')
 
+  // Any keydown that is clearly not part of a capture flow ends a held
+  // region-capture blank (user is back to normal interaction).
+  if (blankHoldKind === 'key' && !isPrintScreen && !isInstantCaptureShortcut && !isRegionCaptureShortcut && !isPrintShortcut) {
+    releaseBlank()
+  }
+
   // Inspect / DevTools shortcut
-  const isDevToolsShortcut = 
-    e.key === 'F12' || 
+  const isDevToolsShortcut =
+    e.key === 'F12' ||
     ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.key === 'C' || e.key === 'c' || e.key === 'J' || e.key === 'j'))
 
-  if (isPrintScreen || isCaptureShortcut || isPrintShortcut || isDevToolsShortcut) {
+  if (isPrintScreen || isInstantCaptureShortcut || isRegionCaptureShortcut || isPrintShortcut) {
+    // Blank synchronously NOW — OS grabs the frame on key-up / during the
+    // drag, after our class is applied, so the captured image is a blank
+    // protected page.
     try {
       e.preventDefault()
       e.stopPropagation()
     } catch {}
-    triggerCaptureProtection()
+    const source = isPrintScreen
+      ? 'printscreen'
+      : isPrintShortcut
+        ? 'print'
+        : isRegionCaptureShortcut
+          ? 'region_capture'
+          : 'capture_shortcut'
+    triggerCaptureProtection(source, isRegionCaptureShortcut ? 'key' : null)
+  } else if (isDevToolsShortcut) {
+    try {
+      e.preventDefault()
+      e.stopPropagation()
+    } catch {}
+    emitCaptureAttempt('devtools')
+    notifyScreenshotBlocked()
+    isCaptureTriggered = true
+    notifySubscribers()
+    if (captureDismissTimer) clearTimeout(captureDismissTimer)
+    captureDismissTimer = setTimeout(() => {
+      isCaptureTriggered = false
+      notifySubscribers()
+    }, 3500)
   }
+}
+
+// Region-select captures end with a mouse release (e.g. Cmd+Shift+4 drag).
+// The OS swallows events during the drag, but any mouseup that does reach us
+// signals the capture flow is over — release the held blank shortly after.
+function handleMouseUp() {
+  if (blankHoldKind !== 'key' || isBlurPaused) return
+  clearKeyHoldRelease()
+  keyHoldReleaseTimer = setTimeout(() => {
+    keyHoldReleaseTimer = null
+    blankHoldKind = null
+    document.documentElement.classList.remove('jdlx-blank-capture')
+  }, 450)
 }
 
 function handleKeyUp(e) {
   if (!isScreenSecurityEnabled() || activeReasons.size === 0) return
-  const isPrintScreen = 
-    e.key === 'PrintScreen' || 
-    e.key === 'Snapshot' || 
-    e.code === 'PrintScreen' || 
-    e.keyCode === 44 || 
-    e.which === 44
-
-  if (isPrintScreen) {
-    try {
-      e.preventDefault()
-      e.stopPropagation()
-    } catch {}
-    triggerCaptureProtection()
-  }
+  if (!isPrintScreenEvent(e)) return
+  try {
+    e.preventDefault()
+    e.stopPropagation()
+  } catch {}
+  // OS clipboard capture lands on key-up while the blank page is showing.
+  triggerCaptureProtection('printscreen')
 }
 
 function handleWindowBlur() {
   if (!isScreenSecurityEnabled() || activeReasons.size === 0 || isBlurPaused) return
   isWindowBlurred = true
   document.documentElement.classList.add('jdlx-window-blurred')
-  notifySubscribers()
+  // Snipping tools capture while this window is unfocused — hold the blank
+  // page until focus returns so the captured frame is blank.
+  triggerCaptureProtection('window_blur', 'blur')
 }
 
 function handleWindowFocus() {
   isWindowBlurred = false
   isCaptureTriggered = false
+  releaseBlank()
   document.documentElement.classList.remove('jdlx-window-blurred')
   notifySubscribers()
 }
@@ -253,9 +441,10 @@ function handleVisibilityChange() {
     if (!isScreenSecurityEnabled() || activeReasons.size === 0 || isBlurPaused) return
     isWindowBlurred = true
     document.documentElement.classList.add('jdlx-window-blurred')
-    notifySubscribers()
+    triggerCaptureProtection('visibility_hidden', 'blur')
   } else {
     isWindowBlurred = false
+    releaseBlank()
     document.documentElement.classList.remove('jdlx-window-blurred')
     notifySubscribers()
   }
@@ -267,11 +456,22 @@ function handleMouseLeave(e) {
   if (!e.relatedTarget && !e.toElement) {
     isWindowBlurred = true
     document.documentElement.classList.add('jdlx-window-blurred')
+    // Lighter response than window blur: blank briefly + feed alert, without
+    // holding the page hostage while the mouse is merely outside.
+    activateBlank()
+    emitCaptureAttempt('mouse_out')
+    notifyScreenshotBlocked()
     notifySubscribers()
+    scheduleBlankRelease(1800)
   }
 }
 
 function handleMouseEnter() {
+  if (document.hasFocus() && !isCaptureTriggered) {
+    // Never cancel a keyboard-triggered blank (PrintScreen may still be
+    // waiting for its key-up capture); only restore plain mouse-out blanks.
+    releaseBlank()
+  }
   if (isWindowBlurred && document.hasFocus() && !isCaptureTriggered) {
     isWindowBlurred = false
     document.documentElement.classList.remove('jdlx-window-blurred')
@@ -290,6 +490,32 @@ function handleCopy(e) {
   notifyScreenshotBlocked()
 }
 
+function handleBeforePrint() {
+  if (!isScreenSecurityEnabled() || activeReasons.size === 0) return
+  emitCaptureAttempt('print')
+  notifyScreenshotBlocked()
+}
+
+// ── FOCUS WATCHDOG ──
+// Some capture paths (screenshot panels, VM switchers, certain snipping
+// tools) steal focus without a reliable `blur` event reaching the page. A
+// light poll on document.hasFocus() guarantees the blank shield engages for
+// ANY unfocused state while protection is active, and restores on focus.
+function runFocusWatchdog() {
+  if (!isWebListenersAttached || isBlurPaused) return
+  if (typeof document !== 'undefined' && !document.hasFocus()) {
+    if (!isWindowBlurred || !document.documentElement.classList.contains('jdlx-blank-capture')) {
+      handleWindowBlur()
+    } else {
+      // Re-assert the held blank every tick so nothing can release it while
+      // the window is unfocused.
+      activateBlank('blur')
+    }
+  } else if (isWindowBlurred && !isCaptureTriggered) {
+    handleWindowFocus()
+  }
+}
+
 function attachWebListeners() {
   if (typeof window === 'undefined' || isWebListenersAttached) return
   isWebListenersAttached = true
@@ -297,10 +523,17 @@ function attachWebListeners() {
   window.addEventListener('keyup', handleKeyUp, true)
   window.addEventListener('blur', handleWindowBlur)
   window.addEventListener('focus', handleWindowFocus)
+  window.addEventListener('mouseup', handleMouseUp, true)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   document.documentElement.addEventListener('mouseleave', handleMouseLeave)
   document.documentElement.addEventListener('mouseenter', handleMouseEnter)
   document.addEventListener('copy', handleCopy, true)
+  window.addEventListener('beforeprint', handleBeforePrint)
+  // Pre-create the blank shield overlay so the first capture attempt is instant.
+  ensureBlankOverlay()
+  if (!focusWatchdogTimer) {
+    focusWatchdogTimer = setInterval(runFocusWatchdog, 250)
+  }
 }
 
 function detachWebListeners() {
@@ -310,11 +543,18 @@ function detachWebListeners() {
   window.removeEventListener('keyup', handleKeyUp, true)
   window.removeEventListener('blur', handleWindowBlur)
   window.removeEventListener('focus', handleWindowFocus)
+  window.removeEventListener('mouseup', handleMouseUp, true)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   document.documentElement.removeEventListener('mouseleave', handleMouseLeave)
   document.documentElement.removeEventListener('mouseenter', handleMouseEnter)
   document.removeEventListener('copy', handleCopy, true)
+  window.removeEventListener('beforeprint', handleBeforePrint)
+  if (focusWatchdogTimer) {
+    clearInterval(focusWatchdogTimer)
+    focusWatchdogTimer = null
+  }
   document.documentElement.classList.remove('jdlx-window-blurred')
+  releaseBlank()
 }
 
 /**
@@ -332,6 +572,7 @@ export function syncProtection() {
   } else {
     document.documentElement.classList.remove('jdlx-screen-protected-window')
     document.documentElement.classList.remove('jdlx-window-blurred')
+    releaseBlank()
     updateNativeProtection(false)
     detachWebListeners()
     isCaptureTriggered = false

@@ -2109,6 +2109,28 @@ export default function ChatConversation() {
     return () => window.removeEventListener('jdlx_stealth_mode_changed', handleStealthChange)
   }, [])
 
+  // Centered alert shown in the chat feed the moment a screenshot / screen
+  // capture attempt is detected on the chat or the profile (fired by the
+  // screen protection engine for chat, profile drawer, contact info, lightbox).
+  const [captureAttempt, setCaptureAttempt] = useState(null)
+
+  useEffect(() => {
+    const handleCaptureAttempt = (e) => {
+      setCaptureAttempt({
+        source: e.detail?.source || 'unknown',
+        at: e.detail?.at || Date.now()
+      })
+    }
+    window.addEventListener('jdlx_capture_attempt', handleCaptureAttempt)
+    return () => window.removeEventListener('jdlx_capture_attempt', handleCaptureAttempt)
+  }, [])
+
+  useEffect(() => {
+    if (!captureAttempt) return
+    const t = setTimeout(() => setCaptureAttempt(null), 6000)
+    return () => clearTimeout(t)
+  }, [captureAttempt])
+
   // Small synthesized chime for incoming messages (no audio asset needed).
   const audioContextRef = useRef(null)
   const playChatSound = useCallback(() => {
@@ -13677,6 +13699,29 @@ export default function ChatConversation() {
               >
                 <span>{confirmDialog.confirmLabel || 'Confirm'}</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SCREENSHOT / SCREEN CAPTURE ATTEMPT ALERT (CENTERED OVER THE CHAT FEED & PROFILE) ── */}
+      {captureAttempt && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="pointer-events-none fixed inset-x-0 top-1/2 z-[9999999] flex -translate-y-1/2 justify-center px-6"
+        >
+          <div className="animate-in fade-in zoom-in duration-200 flex max-w-[calc(100vw-3rem)] items-center gap-3 rounded-2xl border border-yellow-500/40 bg-[#18181b]/95 px-4 py-3 shadow-2xl shadow-yellow-500/10 backdrop-blur-md">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-yellow-500/30 bg-yellow-500/15">
+              <ShieldAlert className="h-5 w-5 text-[#facc15]" />
+            </div>
+            <div className="text-left">
+              <p className="flex items-center gap-1.5 text-[12.5px] font-black leading-tight text-[#facc15]">
+                Trying to take a screenshot or screen capture
+              </p>
+              <p className="mt-0.5 text-[11px] leading-snug text-zinc-400">
+                Chat &amp; profile are protected by JDLX Security System. Captured content stays blank.
+              </p>
             </div>
           </div>
         </div>
