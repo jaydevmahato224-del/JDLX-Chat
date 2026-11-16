@@ -5,61 +5,30 @@
 const DEFAULT_PROD_BACKEND_URL = 'https://jdlx-chat.onrender.com/api'
 const DEFAULT_PROD_BACKEND_ORIGIN = 'https://jdlx-chat.onrender.com'
 
-// The standalone chat service (jdlx-chat.onrender.com) is the default backend.
-// VITE_CHAT_API_BASE_URL / VITE_API_BASE_URL still override it, so a build can
-// be pointed at another host without a code change.
 const CONFIGURED_CHAT_API_URL = (
   import.meta.env.VITE_CHAT_API_BASE_URL ||
   import.meta.env.VITE_API_BASE_URL ||
   ''
 ).trim().replace(/\/+$/, '')
 
-const PROD_BACKEND_URL = CONFIGURED_CHAT_API_URL || DEFAULT_PROD_BACKEND_URL
-const PROD_BACKEND_ORIGIN = (() => {
-  try {
-    return new URL(PROD_BACKEND_URL).origin
-  } catch {
-    return DEFAULT_PROD_BACKEND_ORIGIN
-  }
-})()
-
-// Capacitor Android app: the WebView origin is https://localhost, which is not
-// a dev machine. Always talk to the deployed backend there.
 export function isCapacitorNative() {
   return typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
 }
 
-function getDefaultApiBaseUrl() {
-  if (typeof window === 'undefined') return PROD_BACKEND_URL
-  if (isCapacitorNative()) return PROD_BACKEND_URL
-
-  const hostname = window.location.hostname
-  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:'
-
-  // Local dev: chat dev server talks to the local Flask backend.
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return `${protocol}//${hostname}:5001/api`
-  }
-
-  // Any hosted domain (Cloudflare pages.dev/workers.dev, vercel.app, jdlxmobile.in, custom domains) uses production backend
-  return PROD_BACKEND_URL
-}
-
-// Safety net for local dev: when the page itself is a localhost dev page and
-// the configured API URL is the production default (e.g. .env was reverted by
-// a build script or git checkout), prefer the local backend so local testing
-// never silently targets production.
-function isLocalDevPage() {
-  if (typeof window === 'undefined') return false
-  const hostname = window.location.hostname
-  return hostname === 'localhost' || hostname === '127.0.0.1'
-}
-
+// The standalone chat service (jdlx-chat.onrender.com) is the default backend.
+// VITE_CHAT_API_BASE_URL in .env overrides it for dev or custom deployments.
 export const API_BASE_URL = (
-  isLocalDevPage() && CONFIGURED_CHAT_API_URL === DEFAULT_PROD_BACKEND_URL
-    ? getDefaultApiBaseUrl()
-    : (CONFIGURED_CHAT_API_URL || getDefaultApiBaseUrl())
+  CONFIGURED_CHAT_API_URL || DEFAULT_PROD_BACKEND_URL
 ).replace(/\/+$/, '')
+
+const PROD_BACKEND_URL = API_BASE_URL
+const PROD_BACKEND_ORIGIN = (() => {
+  try {
+    return new URL(API_BASE_URL).origin
+  } catch {
+    return DEFAULT_PROD_BACKEND_ORIGIN
+  }
+})()
 
 // Bare backend origin (for /static media etc.)
 function getBackendOrigin() {
