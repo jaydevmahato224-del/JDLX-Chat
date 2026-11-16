@@ -97,6 +97,7 @@ function App() {
       {/* Chat-styled toast notifications */}
       <Toaster
         position="top-center"
+        containerStyle={{ zIndex: 9999999 }}
         toastOptions={{
           duration: 3200,
           style: {

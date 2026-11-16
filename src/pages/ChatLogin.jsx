@@ -30,6 +30,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
 import { API_BASE_URL, resolveMediaUrl, isCapacitorNative } from '../config'
 import { apiFetch } from '../utils/apiFetch'
+import { useScreenProtection } from '../utils/screenProtection'
 import toast from 'react-hot-toast'
 
 const OAUTH_VERIFIER_KEY = 'jdlx_chat_oauth_verifier'
@@ -157,6 +158,9 @@ const GoogleIcon = () => (
 
 export default function ChatLogin() {
   const navigate = useNavigate()
+
+  // Login screen is part of the protected surface too (blank capture shield).
+  useScreenProtection('login', true)
 
   // Warm the chat bundle while the user is still on the login screen so the
   // post-login transition does not wait on the lazy route download. Runs idle,

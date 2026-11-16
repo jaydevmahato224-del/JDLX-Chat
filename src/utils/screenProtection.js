@@ -324,6 +324,7 @@ function isPrintScreenEvent(e) {
   return (
     e.key === 'PrintScreen' ||
     e.key === 'Snapshot' ||
+    e.key === 'F13' || // external PC keyboards map PrintScreen to F13 on macOS
     e.code === 'PrintScreen' ||
     e.keyCode === 44 ||
     e.which === 44

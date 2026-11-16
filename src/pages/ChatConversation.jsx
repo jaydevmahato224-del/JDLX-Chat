@@ -5260,25 +5260,6 @@ export default function ChatConversation() {
             )}
           </button>
 
-          {/* Voice / Video Call Button */}
-          <button type="button"
-            onClick={async () => {
-              if (!activeRoomId) return
-              const res = await initiateCall(activeRoomId, 'voice')
-              if (res && res.success === false) {
-                toast.error(res.error || 'Call failed. Please try again.')
-              }
-            }}
-            title="Start Voice Call"
-            aria-label="Start voice call"
-            disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
-            className="ui-btn ui-btn-secondary h-9 min-h-0 gap-1.5 px-2.5 text-xs sm:px-3"
-          >
-            <Phone className={`w-4 h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
-            <span className="hidden sm:inline">Call</span>
-          </button>
-
-
           {/* Quick Theme Switcher Button */}
           <button type="button"
             onClick={toggleChatTheme}
@@ -6247,7 +6228,7 @@ export default function ChatConversation() {
               <div className={`ios-safe-header relative z-20 flex min-h-[64px] shrink-0 items-center justify-between border-b px-3 transition-colors select-none sm:px-5 ${
                 isLight ? 'border-[#e4e7ec] bg-white' : 'border-white/[0.07] bg-[#0f1114]'
               }`}>
-                <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   {/* Mobile Back button to Chat List */}
                   <button
                     type="button"
@@ -6410,7 +6391,77 @@ export default function ChatConversation() {
                   </div>
                 </div>
 
+                {/* Active Chat Header Quick Actions: Voice Call, Video Call, Search, More */}
+                <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 ml-2">
+                  {/* Voice Call */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!activeRoomId) return
+                      triggerHaptic('light')
+                      const res = await initiateCall(activeRoomId, 'voice')
+                      if (res && res.success === false) {
+                        toast.error(res.error || 'Voice call failed. Please try again.')
+                      }
+                    }}
+                    title="Start voice call"
+                    aria-label="Start voice call"
+                    disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+                    className="ui-icon-btn h-9 w-9"
+                  >
+                    <Phone className={`w-4 h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
+                  </button>
 
+                  {/* Video Call */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!activeRoomId) return
+                      triggerHaptic('light')
+                      const res = await initiateCall(activeRoomId, 'video')
+                      if (res && res.success === false) {
+                        toast.error(res.error || 'Video call failed. Please try again.')
+                      }
+                    }}
+                    title="Start video call"
+                    aria-label="Start video call"
+                    disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+                    className="ui-icon-btn h-9 w-9"
+                  >
+                    <Video className={`w-4 h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
+                  </button>
+
+                  {/* Search in conversation */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setIsSearchingChat((prev) => !prev)
+                      if (!isSearchingChat) {
+                        setTimeout(() => chatSearchInputRef.current?.focus(), 120)
+                      }
+                    }}
+                    title={isSearchingChat ? "Close search" : "Search in conversation"}
+                    aria-label={isSearchingChat ? "Close search" : "Search in conversation"}
+                    className={`ui-icon-btn h-9 w-9 ${isSearchingChat ? 'bg-amber-500/15 text-amber-500 dark:text-[#facc15]' : ''}`}
+                  >
+                    <Search className="w-4 h-4" />
+                  </button>
+
+                  {/* Contact Info & Settings */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setShowContactInfoModal(true)
+                    }}
+                    title="Contact info & settings"
+                    aria-label="Contact info & settings"
+                    className="ui-icon-btn h-9 w-9"
+                  >
+                    <MoreVertical className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               {/* ── IN-CHAT MESSAGE SEARCH BAR (WhatsApp / Telegram Standard) ── */}
@@ -8316,7 +8367,7 @@ export default function ChatConversation() {
                             isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                           }`}
                         >
-                          <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
                             <div className={`w-9 h-9 rounded-xl font-black text-xs flex items-center justify-center shrink-0 border ${
                               isLight 
                                 ? 'bg-amber-100 text-amber-700 border-amber-300' 
@@ -8416,7 +8467,7 @@ export default function ChatConversation() {
                           isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
                         }`}
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
                           <div className={`w-9 h-9 rounded-xl font-black text-xs flex items-center justify-center shrink-0 border ${
                             isLight ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
                           }`}>
@@ -11267,9 +11318,67 @@ export default function ChatConversation() {
                 </div>
               </div>
 
-              {/* Quick Action Tiles (Item 3.4: Luxury Telegram & WhatsApp 4-Tile Row) */}
+              {/* Quick Action Tiles (Telegram & WhatsApp Style: Audio, Video, Search, Mute) */}
               <div className="grid grid-cols-4 gap-2 sm:gap-2.5 pt-1">
-                {/* 1. Search in Conversation */}
+                {/* 1. Voice Call */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!activeRoomId) return
+                    triggerHaptic('light')
+                    setShowContactInfoModal(false)
+                    const res = await initiateCall(activeRoomId, 'voice')
+                    if (res && res.success === false) {
+                      toast.error(res.error || 'Voice call failed')
+                    }
+                  }}
+                  disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+                  className={`p-2.5 sm:p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
+                    isLight 
+                      ? 'bg-slate-50/90 hover:bg-slate-100/90 border-slate-200/90 text-slate-800 hover:shadow-md' 
+                      : 'bg-[#16161a] hover:bg-[#1e1e24] border-[#26262c] hover:border-[#383842] text-zinc-200 hover:shadow-black/40'
+                  }`}
+                  title="Voice call"
+                >
+                  <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-amber-500/15 text-amber-500 dark:text-[#facc15] border border-amber-500/25 group-hover:border-amber-400/50 flex items-center justify-center shadow-xs transition-transform duration-200 group-hover:scale-105">
+                    <Phone className="w-5 h-5" />
+                  </div>
+                  <div className="flex flex-col items-center leading-tight">
+                    <span className="text-[11px] font-bold">Audio</span>
+                    <span className="text-[9px] font-medium opacity-50">Call</span>
+                  </div>
+                </button>
+
+                {/* 2. Video Call */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!activeRoomId) return
+                    triggerHaptic('light')
+                    setShowContactInfoModal(false)
+                    const res = await initiateCall(activeRoomId, 'video')
+                    if (res && res.success === false) {
+                      toast.error(res.error || 'Video call failed')
+                    }
+                  }}
+                  disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+                  className={`p-2.5 sm:p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
+                    isLight 
+                      ? 'bg-slate-50/90 hover:bg-slate-100/90 border-slate-200/90 text-slate-800 hover:shadow-md' 
+                      : 'bg-[#16161a] hover:bg-[#1e1e24] border-[#26262c] hover:border-[#383842] text-zinc-200 hover:shadow-black/40'
+                  }`}
+                  title="Video call"
+                >
+                  <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-amber-500/15 text-amber-500 dark:text-[#facc15] border border-amber-500/25 group-hover:border-amber-400/50 flex items-center justify-center shadow-xs transition-transform duration-200 group-hover:scale-105">
+                    <Video className="w-5 h-5" />
+                  </div>
+                  <div className="flex flex-col items-center leading-tight">
+                    <span className="text-[11px] font-bold">Video</span>
+                    <span className="text-[9px] font-medium opacity-50">Call</span>
+                  </div>
+                </button>
+
+                {/* 3. Search in Conversation */}
                 <button
                   type="button"
                   onClick={() => {
@@ -11294,7 +11403,7 @@ export default function ChatConversation() {
                   </div>
                 </button>
 
-                {/* 2. Mute Notifications */}
+                {/* 4. Mute Notifications */}
                 <button
                   type="button"
                   onClick={() => {
@@ -11336,15 +11445,18 @@ export default function ChatConversation() {
                     </span>
                   </div>
                 </button>
+              </div>
 
-                {/* 3. Starred Messages */}
+              {/* Secondary Action Tiles: Starred Messages & Share Contact */}
+              <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+                {/* Starred Messages */}
                 <button
                   type="button"
                   onClick={() => {
                     triggerHaptic('light')
                     setShowStarredModal(true)
                   }}
-                  className={`p-2.5 sm:p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
+                  className={`p-2.5 sm:p-3 rounded-2xl border flex items-center justify-center gap-3 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
                     activeRoomStarredMessages.length > 0
                       ? isLight
                         ? 'bg-amber-50/90 hover:bg-amber-100/90 border-amber-300 text-amber-900 hover:shadow-md'
@@ -11356,12 +11468,12 @@ export default function ChatConversation() {
                   title={activeRoomStarredMessages.length > 0 ? `${activeRoomStarredMessages.length} Starred Messages` : "Starred Messages"}
                 >
                   <div className="relative">
-                    <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shadow-xs transition-transform duration-200 group-hover:scale-105 border ${
+                    <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-xs transition-transform duration-200 group-hover:scale-105 border ${
                       activeRoomStarredMessages.length > 0
                         ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/40'
                         : 'bg-amber-500/15 text-amber-500 border-amber-500/25 group-hover:border-amber-400/50'
                     }`}>
-                      <Star className={`w-5 h-5 ${activeRoomStarredMessages.length > 0 ? 'text-amber-400 fill-amber-400' : 'text-amber-500'}`} />
+                      <Star className={`w-4 h-4 sm:w-5 sm:h-5 ${activeRoomStarredMessages.length > 0 ? 'text-amber-400 fill-amber-400' : 'text-amber-500'}`} />
                     </div>
                     {activeRoomStarredMessages.length > 0 && (
                       <span className="absolute -top-1 -right-1 px-1.5 py-0.2 min-w-[16px] text-[9px] font-mono font-black rounded-full bg-amber-500 text-black leading-none flex items-center justify-center shadow-xs">
@@ -11369,19 +11481,19 @@ export default function ChatConversation() {
                       </span>
                     )}
                   </div>
-                  <div className="flex flex-col items-center leading-tight">
-                    <span className="text-[11px] font-bold">Starred</span>
+                  <div className="flex flex-col items-start leading-tight">
+                    <span className="text-[11px] font-bold">Starred Messages</span>
                     <span className="text-[9px] font-mono opacity-60">
-                      {activeRoomStarredMessages.length > 0 ? `${activeRoomStarredMessages.length} saved` : 'Saved'}
+                      {activeRoomStarredMessages.length > 0 ? `${activeRoomStarredMessages.length} saved` : 'Saved in this chat'}
                     </span>
                   </div>
                 </button>
 
-                {/* 4. Share Contact Card */}
+                {/* Share Contact Card */}
                 <button
                   type="button"
                   onClick={handleShareContact}
-                  className={`p-2.5 sm:p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
+                  className={`p-2.5 sm:p-3 rounded-2xl border flex items-center justify-center gap-3 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
                     sharedContactCard
                       ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
                       : isLight 
@@ -11390,23 +11502,23 @@ export default function ChatConversation() {
                   }`}
                   title="Share contact card / link"
                 >
-                  <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shadow-xs transition-transform duration-200 group-hover:scale-105 border ${
+                  <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shadow-xs transition-transform duration-200 group-hover:scale-105 border ${
                     sharedContactCard
                       ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 ring-1 ring-emerald-400/30'
                       : 'bg-sky-500/15 text-sky-400 border-sky-500/25 group-hover:border-sky-400/50'
                   }`}>
                     {sharedContactCard ? (
-                      <Check className="w-5 h-5 text-emerald-400 animate-in zoom-in duration-200" />
+                      <Check className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400 animate-in zoom-in duration-200" />
                     ) : (
-                      <Share2 className="w-5 h-5 text-sky-400" />
+                      <Share2 className="w-4 h-4 sm:w-5 sm:h-5 text-sky-400" />
                     )}
                   </div>
-                  <div className="flex flex-col items-center leading-tight">
+                  <div className="flex flex-col items-start leading-tight">
                     <span className="text-[11px] font-bold">
-                      {sharedContactCard ? 'Shared!' : 'Share'}
+                      {sharedContactCard ? 'Shared!' : 'Share Contact'}
                     </span>
                     <span className={`text-[9px] font-medium ${sharedContactCard ? 'text-emerald-400 font-bold' : 'opacity-50'}`}>
-                      {sharedContactCard ? 'Copied ✓' : 'Profile'}
+                      {sharedContactCard ? 'Copied to clipboard' : 'Send contact link'}
                     </span>
                   </div>
                 </button>
@@ -13003,7 +13115,7 @@ export default function ChatConversation() {
                     ? 'bg-amber-50/80 border-amber-200 text-amber-950' 
                     : 'bg-yellow-500/10 border-yellow-500/30 text-amber-200'
                 }`}>
-                  <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-[#facc15] flex items-center justify-center shrink-0">
                       <BellOff className="w-4 h-4" />
                     </div>
