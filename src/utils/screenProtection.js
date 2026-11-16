@@ -92,6 +92,32 @@ let blankHoldKind = null // 'blur' = held until focus returns, 'key' = held duri
 let keyHoldReleaseTimer = null
 let focusWatchdogTimer = null
 let lastCaptureEventAt = 0
+let nativeCaptureListenerAdded = false
+
+/**
+ * Native Android (APK): the ScreenProtectionPlugin fires 'screenCapture'
+ * (Android 14+ ScreenCaptureCallback) the moment the user presses the system
+ * screenshot gesture. FLAG_SECURE has already made the captured frame black —
+ * this surfaces the same centered alert UX as desktop.
+ */
+function attachNativeCaptureListener() {
+  if (!ScreenProtectionNative || nativeCaptureListenerAdded) return
+  try {
+    nativeCaptureListenerAdded = true
+    ScreenProtectionNative.addListener('screenCapture', () => {
+      isCaptureTriggered = true
+      notifyScreenshotBlocked()
+      emitCaptureAttempt('android_system_capture')
+      notifySubscribers()
+      if (captureDismissTimer) clearTimeout(captureDismissTimer)
+      captureDismissTimer = setTimeout(() => {
+        isCaptureTriggered = false
+        notifySubscribers()
+      }, 3500)
+    })
+  } catch {}
+}
+
 let lastToastTime = 0
 
 // ── BLANK CAPTURE SHIELD ─────────────────────────────────────────────
@@ -570,6 +596,7 @@ export function syncProtection() {
     document.documentElement.classList.add('jdlx-screen-protected-window')
     updateNativeProtection(true)
     attachWebListeners()
+    attachNativeCaptureListener()
   } else {
     document.documentElement.classList.remove('jdlx-screen-protected-window')
     document.documentElement.classList.remove('jdlx-window-blurred')
