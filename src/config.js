@@ -2,12 +2,12 @@
 // The chat frontend is deployed on its OWN origin (e.g. chat.jdlxmobile.in).
 // The backend lives on Render; chat identity (chat_users) and chat data are
 // fully separate from the JDLX storefront. Chat has NO links back to the store.
-const DEFAULT_PROD_BACKEND_URL = 'https://jdlx-mobile.onrender.com/api'
-const DEFAULT_PROD_BACKEND_ORIGIN = 'https://jdlx-mobile.onrender.com'
+const DEFAULT_PROD_BACKEND_URL = 'https://jdlx-chat.onrender.com/api'
+const DEFAULT_PROD_BACKEND_ORIGIN = 'https://jdlx-chat.onrender.com'
 
-// After the standalone chat service is deployed, set this in the Chat build.
-// Keeping VITE_API_BASE_URL as a fallback means existing builds/deployments
-// continue to use the main backend until the env switch is made.
+// The standalone chat service (jdlx-chat.onrender.com) is the default backend.
+// VITE_CHAT_API_BASE_URL / VITE_API_BASE_URL still override it, so a build can
+// be pointed at another host without a code change.
 const CONFIGURED_CHAT_API_URL = (
   import.meta.env.VITE_CHAT_API_BASE_URL ||
   import.meta.env.VITE_API_BASE_URL ||

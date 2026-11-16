@@ -37,5 +37,5 @@ npm run android:apk
 ```
 
 ## 🌐 API & Backend Connection
-* Default backend: `https://jdlx-mobile.onrender.com/api` (configurable via `VITE_CHAT_API_BASE_URL` in `.env`).
+* Default backend: `https://jdlx-chat.onrender.com/api` (configurable via `VITE_CHAT_API_BASE_URL` in `.env`).
 * Standalone backend files & Dockerfile available under `backend/`.
