@@ -8,7 +8,6 @@ import {
   CheckCheck, 
   Check, 
   ShieldCheck, 
-  ShieldAlert,
   Bell, 
   X, 
   AlertCircle, 
@@ -92,8 +91,6 @@ import { copyTextToClipboard } from '../utils/clipboard'
 import { useDialogA11y } from '../hooks/useDialogA11y'
 import { 
   useScreenProtection, 
-  useScreenProtectionState,
-  dismissShield,
   pauseBlurShield,
   isScreenSecurityEnabled, 
   setScreenSecurityEnabled, 
@@ -2099,7 +2096,6 @@ export default function ChatConversation() {
   })
   const [screenSecurity, setScreenSecurity] = useState(() => isScreenSecurityEnabled())
   const [stealthMode, setStealthMode] = useState(() => isStealthModeEnabled())
-  const { showShield } = useScreenProtectionState()
 
   useEffect(() => {
     const handleStealthChange = (e) => {
@@ -2108,28 +2104,6 @@ export default function ChatConversation() {
     window.addEventListener('jdlx_stealth_mode_changed', handleStealthChange)
     return () => window.removeEventListener('jdlx_stealth_mode_changed', handleStealthChange)
   }, [])
-
-  // Centered alert shown in the chat feed the moment a screenshot / screen
-  // capture attempt is detected on the chat or the profile (fired by the
-  // screen protection engine for chat, profile drawer, contact info, lightbox).
-  const [captureAttempt, setCaptureAttempt] = useState(null)
-
-  useEffect(() => {
-    const handleCaptureAttempt = (e) => {
-      setCaptureAttempt({
-        source: e.detail?.source || 'unknown',
-        at: e.detail?.at || Date.now()
-      })
-    }
-    window.addEventListener('jdlx_capture_attempt', handleCaptureAttempt)
-    return () => window.removeEventListener('jdlx_capture_attempt', handleCaptureAttempt)
-  }, [])
-
-  useEffect(() => {
-    if (!captureAttempt) return
-    const t = setTimeout(() => setCaptureAttempt(null), 6000)
-    return () => clearTimeout(t)
-  }, [captureAttempt])
 
   // Small synthesized chime for incoming messages (no audio asset needed).
   const audioContextRef = useRef(null)
@@ -13812,63 +13786,6 @@ export default function ChatConversation() {
                 <span>{confirmDialog.confirmLabel || 'Confirm'}</span>
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── SCREENSHOT / SCREEN CAPTURE ATTEMPT ALERT (CENTERED OVER THE CHAT FEED & PROFILE) ── */}
-      {captureAttempt && (
-        <div
-          role="alert"
-          aria-live="assertive"
-          className="pointer-events-none fixed inset-x-0 top-1/2 z-[9999999] flex -translate-y-1/2 justify-center px-6"
-        >
-          <div className="animate-in fade-in zoom-in duration-200 flex max-w-[calc(100vw-3rem)] items-center gap-3 rounded-2xl border border-yellow-500/40 bg-[#18181b]/95 px-4 py-3 shadow-2xl shadow-yellow-500/10 backdrop-blur-md">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-yellow-500/30 bg-yellow-500/15">
-              <ShieldAlert className="h-5 w-5 text-[#facc15]" />
-            </div>
-            <div className="text-left">
-              <p className="flex items-center gap-1.5 text-[12.5px] font-black leading-tight text-[#facc15]">
-                Trying to take a screenshot or screen capture
-              </p>
-              <p className="mt-0.5 text-[11px] leading-snug text-zinc-400">
-                Chat &amp; profile are protected by JDLX Security System. Captured content stays blank.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── DESKTOP PRIVACY SHIELD OVERLAY (ACTIVATES ON PRINT-SCREEN, SNIPPING TOOL & DESKTOP WINDOW BLUR) ── */}
-      {showShield && (
-        <div
-          onClick={dismissShield}
-          role="alert"
-          aria-live="assertive"
-          className="fixed inset-0 z-[999999] flex flex-col items-center justify-center p-6 text-center select-none bg-[#090a0c]/98 backdrop-blur-2xl animate-in fade-in duration-75 cursor-pointer"
-        >
-          <div className="relative mb-5 flex items-center justify-center">
-            <div className="absolute -inset-4 rounded-full bg-gradient-to-tr from-amber-500/30 to-yellow-400/20 blur-xl animate-pulse" />
-            <div className="relative w-20 h-20 rounded-3xl bg-amber-500/15 border-2 border-yellow-500/40 text-[#facc15] flex items-center justify-center shadow-2xl shadow-yellow-500/20">
-              <ShieldAlert className="w-10 h-10" />
-            </div>
-          </div>
-          
-          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-yellow-500/15 border border-yellow-500/30 text-[#facc15] text-[11px] font-black uppercase tracking-wider mb-3">
-            <Lock className="w-3.5 h-3.5" />
-            <span>Screenshot &amp; Screen Capture Restricted</span>
-          </div>
-
-          <h2 className="text-xl sm:text-2xl font-black text-white max-w-md tracking-tight">
-            JDLX Privacy Shield Active
-          </h2>
-
-          <p className="text-xs sm:text-sm text-zinc-400 max-w-sm mt-2 leading-relaxed">
-            This chat, profile and media are protected. Screen capture, snipping tool, and unauthorized recordings are blocked to safeguard privacy.
-          </p>
-
-          <div className="mt-6 flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs text-zinc-300 font-medium hover:bg-white/10 transition">
-            <span>Click anywhere to resume</span>
           </div>
         </div>
       )}
