@@ -1565,6 +1565,17 @@ export default function ChatConversation() {
       return {}
     }
   })
+  // Baselines: WHEN each disappearing mode was enabled (per contact key).
+  // The auto-delete engine only reaps messages created after this timestamp —
+  // turning a mode on must never retroactively destroy the existing history.
+  const [disappearingBaselines, setDisappearingBaselines] = useState(() => {
+    try {
+      const saved = localStorage.getItem('jdlx_chat_disappearing_baselines')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
 
   // Per-friend disappearing mode resolver (checks room id, friend_id, user id, and username)
   const getDisappearingMode = useCallback((convOrFriendOrRoomId) => {
@@ -1595,11 +1606,48 @@ export default function ChatConversation() {
     return 'off'
   }, [disappearingSettings, getContactKeys, activeConversation, activeRoomId])
 
+  // Baseline resolver: mirrors getDisappearingMode's key precedence and returns
+  // when the mode was enabled for this contact (0 = unknown / legacy setting).
+  const getDisappearingBaseline = useCallback((convOrFriendOrRoomId) => {
+    if (!convOrFriendOrRoomId) return 0
+    const pick = (keys) => {
+      for (const k of keys) {
+        const b = disappearingBaselines[k]
+        if (b && typeof b.at === 'number') return b.at
+      }
+      return 0
+    }
+    if (typeof convOrFriendOrRoomId === 'object') {
+      const keys = getContactKeys(convOrFriendOrRoomId)
+      const extra = []
+      if (convOrFriendOrRoomId.friend_id && !keys.includes(String(convOrFriendOrRoomId.friend_id))) extra.push(String(convOrFriendOrRoomId.friend_id))
+      if (convOrFriendOrRoomId.id && !keys.includes(String(convOrFriendOrRoomId.id))) extra.push(String(convOrFriendOrRoomId.id))
+      return pick([...keys, ...extra])
+    }
+    const str = String(convOrFriendOrRoomId)
+    const direct = disappearingBaselines[str]
+    if (direct && typeof direct.at === 'number') return direct.at
+    if (activeConversation) {
+      const keys = getContactKeys(activeConversation)
+      if (keys.includes(str) || String(activeRoomId) === str || String(activeConversation.id) === str) {
+        return pick(keys)
+      }
+    }
+    return 0
+  }, [disappearingBaselines, getContactKeys, activeConversation, activeRoomId])
+
   const currentDisappearingMode = useMemo(() => {
     if (activeConversation) return getDisappearingMode(activeConversation)
     if (activeRoomId) return getDisappearingMode(activeRoomId)
     return 'off'
   }, [activeConversation, activeRoomId, getDisappearingMode])
+
+  // When the active room's disappearing mode was enabled (0 = unknown/legacy).
+  const currentDisappearingBaseline = useMemo(() => {
+    const anchor = activeConversation || activeRoomId
+    if (!anchor) return 0
+    return getDisappearingBaseline(anchor)
+  }, [activeConversation, activeRoomId, getDisappearingBaseline])
 
   const setRoomDisappearingMode = useCallback((targetConvOrFriendOrRoomId, mode) => {
     let conv = null
@@ -1624,6 +1672,7 @@ export default function ChatConversation() {
     if (keys.length === 0) return
 
     triggerHaptic('medium')
+    const nowMs = Date.now()
     setDisappearingSettings((prev) => {
       const next = { ...prev }
       for (const k of keys) {
@@ -1635,6 +1684,24 @@ export default function ChatConversation() {
       }
       try {
         localStorage.setItem('jdlx_chat_disappearing_settings', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+
+    // Stamp when the mode was enabled for these keys — the auto-delete engine
+    // only reaps messages created after this moment, so enabling (or switching)
+    // a mode never retroactively destroys the existing conversation history.
+    setDisappearingBaselines((prev) => {
+      const next = { ...prev }
+      for (const k of keys) {
+        if (mode === 'off') {
+          delete next[k]
+        } else {
+          next[k] = { mode, at: nowMs }
+        }
+      }
+      try {
+        localStorage.setItem('jdlx_chat_disappearing_baselines', JSON.stringify(next))
       } catch {}
       return next
     })
@@ -1750,6 +1817,36 @@ export default function ChatConversation() {
   useEffect(() => {
     if (!activeRoomId || !currentDisappearingMode || currentDisappearingMode === 'off') return
 
+    // Only messages CREATED AFTER the mode was enabled may disappear. For a
+    // legacy setting saved before baselines existed, treat the moment this
+    // effect first runs as the baseline (safe: existing history is preserved,
+    // only future messages become subject to deletion).
+    const legacyBaselineMs = Date.now()
+    const baselineMs = currentDisappearingBaseline > 0 ? currentDisappearingBaseline : legacyBaselineMs
+
+    // Migrate legacy settings (saved before baselines existed): stamp a one-time
+    // baseline so this setting only affects messages from now on, instead of
+    // re-wiping history on every app start.
+    if (currentDisappearingBaseline <= 0) {
+      const conv = activeConversation
+      const keys = conv ? getContactKeys(conv) : []
+      if (conv?.friend_id && !keys.includes(String(conv.friend_id))) keys.push(String(conv.friend_id))
+      if (conv?.id && !keys.includes(String(conv.id))) keys.push(String(conv.id))
+      if (activeRoomId && !keys.includes(String(activeRoomId))) keys.push(String(activeRoomId))
+      if (keys.length > 0) {
+        setDisappearingBaselines((prev) => {
+          const next = { ...prev }
+          for (const k of keys) {
+            if (!next[k]) next[k] = { mode: currentDisappearingMode, at: legacyBaselineMs }
+          }
+          try {
+            localStorage.setItem('jdlx_chat_disappearing_baselines', JSON.stringify(next))
+          } catch {}
+          return next
+        })
+      }
+    }
+
     const interval = setInterval(() => {
       const now = Date.now()
       const currentMessages = messages || []
@@ -1758,6 +1855,8 @@ export default function ChatConversation() {
       if (currentDisappearingMode === 'seen') {
         currentMessages.forEach((m) => {
           if (!m || m.deleted || m.message_type === 'deleted') return
+          const mCreatedMs = m.created_at ? new Date(m.created_at).getTime() : 0
+          if (!mCreatedMs || mCreatedMs < baselineMs) return
           const isUser = sameId(m.user_id, chatUser?.id) || (m.sender_type === 'user' && m.username === chatUser?.username)
 
           if (isUser) {
@@ -1795,7 +1894,8 @@ export default function ChatConversation() {
       currentMessages.forEach((m) => {
         if (!m || m.deleted || m.message_type === 'deleted' || !m.created_at) return
         const createdMs = new Date(m.created_at).getTime()
-        if (createdMs && now - createdMs >= opt.ms) {
+        if (!createdMs || createdMs < baselineMs) return
+        if (now - createdMs >= opt.ms) {
           const isUser = sameId(m.user_id, chatUser?.id) || (m.sender_type === 'user' && m.username === chatUser?.username)
           deleteMessage(m.id, isUser ? 'everyone' : 'me')
         }
@@ -1803,7 +1903,7 @@ export default function ChatConversation() {
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [activeRoomId, currentDisappearingMode, messages, peerLastReadId, chatUser?.id, chatUser?.username, deleteMessage])
+  }, [activeRoomId, currentDisappearingMode, currentDisappearingBaseline, messages, peerLastReadId, chatUser?.id, chatUser?.username, deleteMessage, activeConversation, getContactKeys])
 
   // ── SEND & RECEIVE STATUS TICKS (Single tick = Sent, Double tick = Delivered, Highlighted = Seen) ──
   const renderMessageStatusTicks = useCallback((targetMsg, { isFloatingDark = false, isAlbum = false, albumMessages = [], onRetry = null } = {}) => {
@@ -5164,7 +5264,7 @@ export default function ChatConversation() {
       }`}
     >
       {/* ── TOP APPLICATION HEADER ── */}
-      <header className={`ios-safe-header z-30 min-h-[64px] shrink-0 items-center justify-between border-b px-3 transition-colors select-none sm:px-5 ${
+      <header className={`ios-safe-header z-30 min-h-[58px] sm:min-h-[64px] shrink-0 items-center justify-between border-b px-2.5 sm:px-5 transition-colors select-none ${
         mobileView === 'chat' ? 'hidden md:flex' : 'flex'
       } ${
         isLight 
@@ -5350,7 +5450,7 @@ export default function ChatConversation() {
             </div>
 
             {/* Thumb-friendly Filter Tabs (All / Unread / Pinned) */}
-            <div className="flex items-center gap-1.5 pt-2 select-none overflow-x-auto scrollbar-none">
+            <div className="flex items-center gap-1.5 pt-2 select-none overflow-x-auto scrollbar-none touch-scroll">
               <button
                 type="button"
                 onClick={() => {
@@ -5699,7 +5799,7 @@ export default function ChatConversation() {
               </div>
 
               {/* Friends Horizontal Scroll List (Tap to Chat, Tap & Hold on Mobile / 3-Dot on Desktop for Settings) */}
-              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none overscroll-x-contain">
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none overscroll-x-contain touch-scroll">
                 {sortedFriends.map((fr) => {
                   const friendDisappearing = getDisappearingMode(fr)
                   const isOnline = Boolean(
@@ -6225,10 +6325,10 @@ export default function ChatConversation() {
           {activeConversation ? (
             <>
               {/* Active Chat Header */}
-              <div className={`ios-safe-header relative z-20 flex min-h-[64px] shrink-0 items-center justify-between border-b px-3 transition-colors select-none sm:px-5 ${
+              <div className={`ios-safe-header relative z-20 flex min-h-[58px] sm:min-h-[64px] shrink-0 items-center justify-between border-b px-2 sm:px-4 md:px-5 transition-colors select-none ${
                 isLight ? 'border-[#e4e7ec] bg-white' : 'border-white/[0.07] bg-[#0f1114]'
               }`}>
-                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
                   {/* Mobile Back button to Chat List */}
                   <button
                     type="button"
@@ -6237,9 +6337,9 @@ export default function ChatConversation() {
                       setMobileView('list')
                     }}
                     aria-label="Back to chats"
-                    className="ui-icon-btn md:hidden"
+                    className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9 md:hidden shrink-0"
                   >
-                    <ArrowLeft className="h-5 w-5" />
+                    <ArrowLeft className="h-4 w-4 sm:h-5 sm:w-5" />
                   </button>
 
                   {/* Active Contact Avatar & Name (Clickable Profile) */}
@@ -6255,11 +6355,11 @@ export default function ChatConversation() {
                     role="button"
                     tabIndex={0}
                     aria-label="View contact profile and encryption details"
-                    className="group flex min-w-0 cursor-pointer select-none items-center gap-2.5 transition-all hover:opacity-90 active:scale-[0.99]"
+                    className="group flex min-w-0 cursor-pointer select-none items-center gap-2 sm:gap-2.5 transition-all hover:opacity-90 active:scale-[0.99]"
                     title="Click to view contact profile & encryption details"
                   >
                     <div className="relative shrink-0">
-                      <div className={`flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border text-sm font-semibold transition-transform group-hover:scale-[1.03] ${
+                      <div className={`flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center overflow-hidden rounded-xl border text-sm font-semibold transition-transform group-hover:scale-[1.03] ${
                         isLight 
                           ? 'border-slate-200 bg-amber-50 text-amber-800' 
                           : 'border-white/10 bg-[#1a1d22] text-amber-300'
@@ -6283,12 +6383,12 @@ export default function ChatConversation() {
                       ) : null}
                     </div>
 
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <h3 className={`flex min-w-0 items-center gap-1.5 truncate text-[15px] font-semibold tracking-tight ${
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
+                        <h3 className={`flex min-w-0 items-center gap-1.5 truncate text-[14px] sm:text-[15px] font-semibold tracking-tight ${
                           isLight ? 'text-slate-900' : 'text-white'
                         }`}>
-                          <span className="truncate">{getContactDisplayName(activeConversation)}</span>
+                          <span className="truncate max-w-[105px] xs:max-w-[150px] sm:max-w-[240px] md:max-w-[360px]">{getContactDisplayName(activeConversation)}</span>
                           {getContactCustomNickname(activeConversation) && (
                             <span className="hidden sm:inline-block text-[9px] font-mono px-1 py-0.2 rounded bg-amber-500/15 text-amber-500 dark:text-[#facc15] font-bold shrink-0 border border-amber-500/25" title={`Custom device name (Original: ${activeConversation.contact_name})`}>
                               custom
@@ -6368,8 +6468,8 @@ export default function ChatConversation() {
                           </button>
                         )}
                       </div>
-                      <p className="text-[11px] font-medium flex items-center gap-1.5">
-                        <span className={`text-[10.5px] font-bold flex items-center gap-1.5 ${
+                      <p className="text-[10.5px] sm:text-[11px] font-medium flex items-center gap-1 sm:gap-1.5">
+                        <span className={`font-bold flex items-center gap-1 sm:gap-1.5 ${
                           peerTyping 
                             ? 'text-amber-500 animate-pulse' 
                             : isContactOnline 
@@ -6382,8 +6482,8 @@ export default function ChatConversation() {
                           <span>{peerTyping ? 'typing…' : (isContactOnline ? 'Online' : 'Offline')}</span>
                         </span>
                         <span className={`opacity-30 ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>•</span>
-                        <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400" title="End-to-End Encrypted Messaging">
-                          <Lock className="w-2.5 h-2.5" />
+                        <span className="flex items-center gap-1 text-[9.5px] sm:text-[10px] font-medium text-emerald-600 dark:text-emerald-400 truncate" title="End-to-End Encrypted Messaging">
+                          <Lock className="w-2.5 h-2.5 shrink-0" />
                           <span>{activeConversation?.contact_public_key ? 'Text E2EE' : 'Encrypted text'}</span>
                         </span>
                       </p>
@@ -6392,7 +6492,7 @@ export default function ChatConversation() {
                 </div>
 
                 {/* Active Chat Header Quick Actions: Voice Call, Video Call, Search, More */}
-                <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 ml-2">
+                <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0 ml-1 sm:ml-2">
                   {/* Voice Call */}
                   <button
                     type="button"
@@ -6407,9 +6507,9 @@ export default function ChatConversation() {
                     title="Start voice call"
                     aria-label="Start voice call"
                     disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
-                    className="ui-icon-btn h-9 w-9"
+                    className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
                   >
-                    <Phone className={`w-4 h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
+                    <Phone className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
                   </button>
 
                   {/* Video Call */}
@@ -6426,9 +6526,9 @@ export default function ChatConversation() {
                     title="Start video call"
                     aria-label="Start video call"
                     disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
-                    className="ui-icon-btn h-9 w-9"
+                    className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
                   >
-                    <Video className={`w-4 h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
+                    <Video className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
                   </button>
 
                   {/* Search in conversation */}
@@ -6443,9 +6543,9 @@ export default function ChatConversation() {
                     }}
                     title={isSearchingChat ? "Close search" : "Search in conversation"}
                     aria-label={isSearchingChat ? "Close search" : "Search in conversation"}
-                    className={`ui-icon-btn h-9 w-9 ${isSearchingChat ? 'bg-amber-500/15 text-amber-500 dark:text-[#facc15]' : ''}`}
+                    className={`ui-icon-btn h-8 w-8 sm:h-9 sm:w-9 ${isSearchingChat ? 'bg-amber-500/15 text-amber-500 dark:text-[#facc15]' : ''}`}
                   >
-                    <Search className="w-4 h-4" />
+                    <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </button>
 
                   {/* Contact Info & Settings */}
@@ -6457,9 +6557,9 @@ export default function ChatConversation() {
                     }}
                     title="Contact info & settings"
                     aria-label="Contact info & settings"
-                    className="ui-icon-btn h-9 w-9"
+                    className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
                   >
-                    <MoreVertical className="w-4 h-4" />
+                    <MoreVertical className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </button>
                 </div>
               </div>
@@ -7504,7 +7604,7 @@ export default function ChatConversation() {
                       className="fixed inset-0 z-30"
                       onClick={() => setShowAttachmentTray(false)}
                     />
-                    <div className={`absolute bottom-full left-2 sm:left-4 mb-3 p-3.5 rounded-3xl border shadow-2xl z-40 grid grid-cols-3 gap-3.5 sm:gap-5 animate-popover-spring origin-bottom-left backdrop-blur-2xl ${
+                    <div className={`absolute bottom-full left-2 sm:left-4 mb-3 p-3 sm:p-3.5 rounded-3xl border shadow-2xl z-40 grid grid-cols-3 gap-3 sm:gap-5 animate-popover-spring origin-bottom-left backdrop-blur-2xl ${
                       isLight
                         ? 'bg-white/95 border-slate-200 shadow-slate-300/70'
                         : 'bg-[#18181b]/95 border-white/10 shadow-black/80'
@@ -7591,7 +7691,7 @@ export default function ChatConversation() {
                         : 'bg-[#18181b]/95 border-white/10 shadow-black/80'
                     }`}>
                       {/* Emoji Header with Category Tabs */}
-                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 gap-1 overflow-x-auto custom-scrollbar">
+                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 gap-1 overflow-x-auto custom-scrollbar touch-scroll">
                         <div className="flex items-center gap-1">
                           {QUICK_EMOJI_CATEGORIES.map((cat, idx) => (
                             <button
@@ -7746,7 +7846,7 @@ export default function ChatConversation() {
                     )}
                   </div>
                 )}
-                <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-end gap-2 relative">
+                <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-end gap-1.5 sm:gap-2 relative">
                   <input
                     type="file"
                     ref={fileInputRef}
@@ -8716,10 +8816,10 @@ export default function ChatConversation() {
               isLight ? 'border-slate-200 bg-slate-100/60' : 'border-white/[0.07] bg-[#141418]'
             }`}>
               {[
-                { id: 'profile', label: 'Profile', Icon: User },
-                { id: 'settings', label: 'Settings', Icon: Settings },
-                { id: 'security', label: 'Security & Data', Icon: ShieldCheck }
-              ].map(({ id, label, Icon }) => {
+                { id: 'profile', label: 'Profile', shortLabel: 'Profile', Icon: User },
+                { id: 'settings', label: 'Settings', shortLabel: 'Settings', Icon: Settings },
+                { id: 'security', label: 'Security & Data', shortLabel: 'Security', Icon: ShieldCheck }
+              ].map(({ id, label, shortLabel, Icon }) => {
                 const active = profileTab === id || (id === 'settings' && profileTab === 'preferences')
                 return (
                   <button
@@ -8729,7 +8829,7 @@ export default function ChatConversation() {
                       triggerHaptic('light')
                       setProfileTab(id)
                     }}
-                    className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    className={`flex-1 py-2 px-1.5 sm:px-2.5 rounded-xl text-xs font-black flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer min-w-0 ${
                       active
                         ? isLight
                           ? 'bg-white text-slate-900 shadow-sm border border-slate-200/80'
@@ -8739,8 +8839,9 @@ export default function ChatConversation() {
                           : 'text-zinc-400 hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    <Icon className="w-3.5 h-3.5" />
-                    <span className="truncate">{label}</span>
+                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate hidden sm:inline">{label}</span>
+                    <span className="truncate sm:hidden">{shortLabel || label}</span>
                   </button>
                 )
               })}

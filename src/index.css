@@ -2537,10 +2537,39 @@ html.jdlx-blank-capture #jdlx-blank-overlay {
   .app-scroll-root {
     padding-bottom: env(safe-area-inset-bottom);
   }
-  main > div {
+  .login-sheet main > div {
     border-radius: 0 !important;
     min-height: unset !important;
   }
+  /* Prevent automatic browser viewport zoom when tapping inputs on mobile */
+  input[type="text"],
+  input[type="password"],
+  input[type="email"],
+  input[type="tel"],
+  input[type="number"],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Touch & tap polish for Android & mobile devices */
+button, a, [role="button"], input, textarea, select {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.touch-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+
+.pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
 }
 
 /* Reduce motion for prefers-reduced-motion */

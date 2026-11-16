@@ -15,6 +15,7 @@ import {
   restoreIdentityFromJwkString,
   encryptRoomMessageV2,
   decryptRoomMessageV2,
+  deriveRoomKeyV2,
   isV2Message,
   isEncryptedMessage,
   encryptIdentityBackup,
@@ -1097,6 +1098,32 @@ export const useChatStore = create((set, get) => ({
 
   // Publish this device's ECDH public key. Only public key material is sent
   // here; the optional recovery backup is encrypted with the user's PIN.
+  // Warm the E2EE room-key cache in the background when a conversation with a
+  // published peer key is opened, so the first send is instant instead of
+  // waiting on the ECDH + HKDF derivation. Mirrors the identity bootstrap used
+  // by the send path; never blocks the caller (fire-and-forget at call site).
+  preDeriveRoomKey: async (roomId, peerKey) => {
+    if (!roomId || !peerKey) return
+    let identity = get().identityKeypair
+    if (!identity) {
+      const uid = get().chatUser?.id
+      identity = uid ? await getOrCreateIdentityKeypair(uid) : null
+      if (identity) {
+        set({
+          identityKeypair: identity,
+          identityPublicKey: identity.publicKeyB64,
+          identityUserId: String(uid),
+          identityNeedsPassphrase: false
+        })
+      }
+    }
+    if (!identity?.privateKey) return
+    const key = await deriveRoomKeyV2(identity.privateKey, peerKey, String(roomId))
+    if (key && sameId(get().activeRoomId, roomId)) {
+      set({ derivedRoomKey: key })
+    }
+  },
+
   initE2EE: async (userId) => {
     const token = get().chatToken
     const uid = userId || get().chatUser?.id

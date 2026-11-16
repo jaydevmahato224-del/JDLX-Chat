@@ -938,12 +938,13 @@ def get_chat_realtime_token():
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id FROM official_chat_rooms "
-            "WHERE user_id = ? OR user_two_id = ? "
-            "ORDER BY id DESC LIMIT 100",
-            (my_id, my_id)
+            """SELECT id FROM official_chat_rooms WHERE user_id = ? OR user_two_id = ?
+               UNION
+               SELECT room_id FROM official_chat_group_members WHERE user_id = ?
+               ORDER BY 1 DESC LIMIT 100""",
+            (my_id, my_id, my_id)
         )
-        topics = [f"chat_room_{row['id']}" for row in cursor.fetchall()]
+        topics = [f"chat_room_{row[0]}" for row in cursor.fetchall()]
     finally:
         conn.close()
 
@@ -1987,11 +1988,8 @@ def edit_chat_message(message_id):
             return error_response("Message not found", 404)
         msg = dict(row)
 
-        cursor.execute(
-            "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?", (msg['room_id'],)
-        )
-        room = cursor.fetchone()
-        if not room or (room['user_id'] != my_id and room['user_two_id'] != my_id):
+        room, room_allowed = get_chat_room_for_user(cursor, msg['room_id'], my_id)
+        if not room_allowed:
             return error_response("Access denied to this chat room", 403)
         if msg['user_id'] != my_id:
             return error_response("You can only edit your own messages", 403)
@@ -2068,11 +2066,8 @@ def delete_chat_message(message_id):
         if not msg:
             return error_response("Message not found", 404)
 
-        cursor.execute(
-            "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?", (msg['room_id'],)
-        )
-        room = cursor.fetchone()
-        if not room or (room['user_id'] != my_id and room['user_two_id'] != my_id):
+        room, room_allowed = get_chat_room_for_user(cursor, msg['room_id'], my_id)
+        if not room_allowed:
             return error_response("Access denied to this chat room", 403)
 
         if scope == 'me':
@@ -2132,11 +2127,8 @@ def react_to_chat_message(message_id):
         if not msg:
             return error_response("Message not found", 404)
 
-        cursor.execute(
-            "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?", (msg['room_id'],)
-        )
-        room = cursor.fetchone()
-        if not room or (room['user_id'] != my_id and room['user_two_id'] != my_id):
+        room, room_allowed = get_chat_room_for_user(cursor, msg['room_id'], my_id)
+        if not room_allowed:
             return error_response("Access denied to this chat room", 403)
 
         cursor.execute(
@@ -2275,13 +2267,10 @@ def report_chat_user():
                 room_id = int(room_id)
             except (TypeError, ValueError):
                 return error_response("Invalid room", 400)
-            cursor.execute(
-                "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?", (room_id,)
-            )
-            room = cursor.fetchone()
+            room, room_allowed = get_chat_room_for_user(cursor, room_id, my_id)
             if not room:
                 return error_response("Chat room not found", 404)
-            if room['user_id'] != my_id and room['user_two_id'] != my_id:
+            if not room_allowed:
                 return error_response("Access denied to this chat room", 403)
         else:
             room_id = None
@@ -4047,15 +4036,14 @@ def upload_chat_media():
 
         conn = get_db()
         try:
-            room_row = conn.execute(
-                "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?",
-                (room_id,)
-            ).fetchone()
+            room_row, room_allowed = get_chat_room_for_user(
+                conn.cursor(), room_id, uploader_id
+            )
         finally:
             conn.close()
         if not room_row:
             return error_response("Chat room not found", 404)
-        if room_row['user_id'] != uploader_id and room_row['user_two_id'] != uploader_id:
+        if not room_allowed:
             return error_response("Access denied to this chat room", 403)
 
     if 'file' not in request.files:
@@ -4346,13 +4334,10 @@ def set_room_typing(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?", (room_id,)
-        )
-        room = cursor.fetchone()
+        room, room_allowed = get_chat_room_for_user(cursor, room_id, my_id)
         if not room:
             return error_response("Chat room not found", 404)
-        if room['user_id'] != my_id and room['user_two_id'] != my_id:
+        if not room_allowed:
             return error_response("Access denied to this chat room", 403)
 
         cursor.execute(
@@ -4389,13 +4374,10 @@ def poll_room_events(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?", (room_id,)
-        )
-        room = cursor.fetchone()
+        room, room_allowed = get_chat_room_for_user(cursor, room_id, my_id)
         if not room:
             return error_response("Chat room not found", 404)
-        if room['user_id'] != my_id and room['user_two_id'] != my_id:
+        if not room_allowed:
             return error_response("Access denied to this chat room", 403)
 
         other_id = room['user_two_id'] if room['user_id'] == my_id else room['user_id']
@@ -4571,14 +4553,10 @@ def clear_room_history(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT user_id, user_two_id FROM official_chat_rooms WHERE id = ?",
-            (room_id,)
-        )
-        room = cursor.fetchone()
+        room, room_allowed = get_chat_room_for_user(cursor, room_id, my_id)
         if not room:
             return error_response("Chat room not found", 404)
-        if room['user_id'] != my_id and room['user_two_id'] != my_id:
+        if not room_allowed:
             return error_response("Access denied to this chat room", 403)
 
         cursor.execute(

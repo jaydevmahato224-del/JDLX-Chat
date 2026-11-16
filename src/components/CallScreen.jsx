@@ -66,7 +66,7 @@ export default function CallScreen() {
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] animate-in fade-in duration-200"
       role="dialog"
       aria-modal="true"
       aria-label="Active call"
@@ -75,10 +75,10 @@ export default function CallScreen() {
       <audio ref={remoteAudioRef} autoPlay playsInline />
 
       <div
-        className="w-full max-w-md rounded-[32px] border border-white/10 bg-[#090a0c] shadow-2xl overflow-hidden flex flex-col"
+        className="w-full max-w-md max-h-[94dvh] rounded-3xl sm:rounded-[32px] border border-white/10 bg-[#090a0c] shadow-2xl overflow-hidden flex flex-col"
       >
         {/* Header */}
-        <div className="flex items-center justify-between gap-3 px-6 py-5 border-b border-white/5">
+        <div className="flex items-center justify-between gap-3 px-5 sm:px-6 py-4 sm:py-5 border-b border-white/5 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="h-10 w-10 shrink-0 rounded-2xl border border-white/10 flex items-center justify-center bg-white/5">
               {isVideo ? <Video className="h-5 w-5 text-[#facc15]" /> : <Phone className="h-5 w-5 text-[#facc15]" />}
@@ -87,7 +87,7 @@ export default function CallScreen() {
               <p className="text-xs font-medium text-zinc-400 uppercase tracking-wider truncate">
                 {isCallerRinging ? 'Calling…' : isVideo ? 'Video Call' : 'Voice Call'} · {peerName}
               </p>
-              <p className="text-[18px] sm:text-[20px] font-semibold text-white">
+              <p className="text-[17px] sm:text-[20px] font-semibold text-white">
                 {isCallerRinging ? 'Ringing…' : formatTime(callTimerSeconds)}
               </p>
             </div>
@@ -103,9 +103,9 @@ export default function CallScreen() {
         </div>
 
         {/* Body */}
-        <div className="flex-1 flex flex-col items-center justify-center py-8 px-6">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col items-center justify-center py-6 sm:py-8 px-4 sm:px-6">
           {/* Remote video (video mode) or large avatar (voice) */}
-          <div className="relative w-full aspect-square max-w-[220px] mx-auto mb-6">
+          <div className="relative w-full aspect-square max-w-[190px] xs:max-w-[220px] sm:max-w-[240px] mx-auto mb-5 sm:mb-6">
             {isVideo && callRemoteStream ? (
               <video
                 ref={remoteVideoRef}
@@ -115,13 +115,13 @@ export default function CallScreen() {
               />
             ) : (
               <div className="w-full h-full rounded-full border-2 border-amber-500/30 bg-[#0f1114] flex items-center justify-center shadow-xl shadow-amber-500/5">
-                <User className="h-16 w-16 text-zinc-400" />
+                <User className="h-14 w-14 sm:h-16 sm:w-16 text-zinc-400" />
               </div>
             )}
 
             {/* Local preview (video mode) or mic indicator (voice) */}
             {isVideo && callLocalStream ? (
-              <div className="absolute -right-2 -bottom-2 w-20 h-20 rounded-2xl overflow-hidden border-2 border-white/20 shadow-xl bg-black">
+              <div className="absolute -right-2 -bottom-2 w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden border-2 border-white/20 shadow-xl bg-black">
                 <video
                   ref={localVideoRef}
                   autoPlay
@@ -137,18 +137,18 @@ export default function CallScreen() {
             )}
           </div>
 
-          <div className="text-center mb-6">
+          <div className="text-center mb-5 sm:mb-6">
             <p className="text-zinc-400 text-xs sm:text-sm font-medium tracking-wide">
               {isVideo ? 'Video' : 'Voice'} call in progress
             </p>
           </div>
 
           {/* Controls */}
-          <div className="flex w-full justify-center gap-5 px-4 pb-2">
+          <div className="flex w-full justify-center gap-4 sm:gap-5 px-2 pb-2">
             <button
               type="button"
               onClick={toggleMute}
-              className={`h-12 w-12 shrink-0 rounded-2xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+              className={`h-12 w-12 sm:h-13 sm:w-13 shrink-0 rounded-2xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
                 callIsMuted
                   ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
                   : 'bg-white/5 border-white/10 text-white hover:bg-white/10'
@@ -161,7 +161,7 @@ export default function CallScreen() {
             <button
               type="button"
               onClick={toggleSpeaker}
-              className={`h-12 w-12 shrink-0 rounded-2xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+              className={`h-12 w-12 sm:h-13 sm:w-13 shrink-0 rounded-2xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
                 callIsSpeakerOn
                   ? 'bg-amber-500/20 border-yellow-500/40 text-[#facc15]'
                   : 'bg-white/5 border-white/10 text-white hover:bg-white/10'
@@ -178,7 +178,7 @@ export default function CallScreen() {
             <button
               type="button"
               onClick={endCall}
-              className="h-12 w-12 shrink-0 rounded-2xl border border-rose-500/50 bg-rose-600 flex items-center justify-center text-white shadow-[0_0_20px_rgba(239,68,68,0.35)] transition-all hover:bg-rose-500 active:scale-95 cursor-pointer"
+              className="h-12 w-12 sm:h-13 sm:w-13 shrink-0 rounded-2xl border border-rose-500/50 bg-rose-600 flex items-center justify-center text-white shadow-[0_0_20px_rgba(239,68,68,0.35)] transition-all hover:bg-rose-500 active:scale-95 cursor-pointer"
               title="End call"
               aria-label="End call"
             >
