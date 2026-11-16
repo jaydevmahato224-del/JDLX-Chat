@@ -336,11 +336,9 @@ export default function ChatLogin() {
         } catch {}
         window.history.replaceState({}, document.title, window.location.pathname)
 
-        if (!verifier) {
-          setErrorMsg('Google sign-in session expired. Please try again.')
-          return
-        }
-
+        // A missing verifier is fine for challenge-less codes (stale-page
+        // rollout path): the backend enforces the PKCE binding for codes that
+        // were issued with one, so nothing is weakened by attempting anyway.
         exchangeOAuthHandoff(codeParam, verifier)
           .then((data) => {
             try {

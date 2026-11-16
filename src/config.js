@@ -54,11 +54,15 @@ export const SUPABASE_ANON_KEY = (
   'sb_publishable_3WwQgzqA7iTFcu4sry90LQ_xYc43CqG'
 ).trim()
 
-// Opt-in: requires SUPABASE_JWT_SECRET on the backend and the RLS policies in
-// supabase/realtime_rls.sql. Off by default so existing deployments keep the
-// public-channel fallback until the Supabase project is configured.
+// Private Supabase Realtime channels: messages are published only to
+// per-user/participant-scoped topics instead of public ones. Requires the
+// backend to hold SUPABASE_JWT_SECRET (the project signing key) so it can
+// mint per-user Realtime JWTs and publish privately. Enabled by default now
+// that production is configured — when the token endpoint is unavailable or
+// rejects, the store automatically falls back to public channels after two
+// failed joins, so unconfigured deployments keep working.
 export const SUPABASE_PRIVATE_CHANNELS = (
-  String(import.meta.env.VITE_SUPABASE_PRIVATE_CHANNELS || '').toLowerCase() === 'true'
+  String(import.meta.env.VITE_SUPABASE_PRIVATE_CHANNELS || 'true').toLowerCase() !== 'false'
 )
 
 export function isUsingProdBackend() {

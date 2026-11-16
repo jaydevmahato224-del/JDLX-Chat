@@ -791,8 +791,11 @@ def chat_exchange_handoff():
     data = request.get_json(silent=True) or {}
     code = str(data.get('code') or '').strip()
     verifier = str(data.get('verifier') or '').strip()
-    if not code or not verifier:
-        return error_response("code and verifier are required", 400)
+    if not code:
+        return error_response("code is required", 400)
+    # The verifier is optional here on purpose: PKCE-bound codes enforce the
+    # verifier match inside consume_handoff_code; challenge-less codes (legacy
+    # web rollout path) are single-use and short-lived instead.
 
     conn = get_db()
     try:
@@ -5367,7 +5370,11 @@ def chat_call_end(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        _call_peer_ids(cursor, room_id, my_id)  # access check
+        peer_id = _call_peer_ids(cursor, room_id, my_id)
+        if peer_id is None:
+            # Same membership check as every other call endpoint — without it
+            # any authenticated user could end the call of any room by id.
+            return error_response("Access denied to this chat room", 403)
         cursor.execute(
             "SELECT id FROM official_chat_calls WHERE room_id = ? AND state IN ('ringing','active') ORDER BY id DESC LIMIT 1",
             (room_id,)

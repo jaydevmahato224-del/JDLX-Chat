@@ -112,8 +112,13 @@ def consume_handoff_code(cursor, code, verifier):
 
     ``reason`` is a short machine-readable string used for logging — the API
     response stays deliberately generic so it cannot be used to probe valid codes.
+
+    PKCE-bound codes require a verifier whose SHA-256 matches the stored
+    challenge. Challenge-less codes (issued for stale web clients during
+    rollout) are redeemed without one — single-use and the short TTL are
+    what protect them; the code itself never contains the session tokens.
     """
-    if not code or not verifier:
+    if not code:
         return None, "missing_params"
 
     row = cursor.execute(
@@ -140,9 +145,14 @@ def consume_handoff_code(cursor, code, verifier):
             return None, "expired"
 
     expected = str(row["challenge"] or "")
-    actual = challenge_for_verifier(verifier)
-    if not expected or not hmac.compare_digest(expected, actual):
-        return None, "challenge_mismatch"
+    if expected:
+        # PKCE-bound code: the verifier is mandatory and must match.
+        if not verifier:
+            return None, "challenge_mismatch"
+        actual = challenge_for_verifier(verifier)
+        if not hmac.compare_digest(expected, actual):
+            return None, "challenge_mismatch"
+    # Challenge-less code: no verifier to check; single-use + TTL still hold.
 
     try:
         user_data = json.loads(row["user_json"]) if row["user_json"] else None

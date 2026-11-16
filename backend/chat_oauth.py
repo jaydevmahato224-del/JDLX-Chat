@@ -180,6 +180,27 @@ def _chat_handoff(frontend_url, native, challenge, google_sub, email, name, pict
                 frontend_url, native, {"code": code, "flow": "chat"}
             )
 
+        if frontend_url.startswith(("http://", "https://")):
+            # Web client without a PKCE challenge (a stale cached login page
+            # from an older deployment). Never release session tokens through
+            # the URL for web: bind the session behind a challenge-less
+            # one-time code instead — single-use, short TTL, and the URL only
+            # ever carries the code. The frontend exchanges it for the session
+            # over HTTPS.
+            code = issue_handoff_code(
+                cursor,
+                user["id"],
+                handoff_user,
+                token,
+                "",
+            )
+            conn.commit()
+            return _login_redirect(
+                frontend_url, False, {"code": code, "flow": "chat"}
+            )
+
+        # Native deep-link fallback (packaged apps released before the PKCE
+        # rollout): keep the legacy token flow so old clients keep signing in.
         response = _login_redirect(
             frontend_url,
             False,

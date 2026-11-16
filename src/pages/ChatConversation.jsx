@@ -8,6 +8,7 @@ import {
   CheckCheck, 
   Check, 
   ShieldCheck, 
+  ShieldAlert,
   Bell, 
   X, 
   AlertCircle, 
@@ -91,6 +92,8 @@ import { copyTextToClipboard } from '../utils/clipboard'
 import { useDialogA11y } from '../hooks/useDialogA11y'
 import { 
   useScreenProtection, 
+  useScreenProtectionState,
+  dismissShield,
   pauseBlurShield,
   isScreenSecurityEnabled, 
   setScreenSecurityEnabled, 
@@ -2096,6 +2099,7 @@ export default function ChatConversation() {
   })
   const [screenSecurity, setScreenSecurity] = useState(() => isScreenSecurityEnabled())
   const [stealthMode, setStealthMode] = useState(() => isStealthModeEnabled())
+  const { showShield } = useScreenProtectionState()
 
   useEffect(() => {
     const handleStealthChange = (e) => {
@@ -2970,6 +2974,11 @@ export default function ChatConversation() {
   const mediaRecorderRef = useRef(null)
   const activeRecordingStreamRef = useRef(null)
   const recordingChunksRef = useRef([])
+  // Double-start protection: getUserMedia is async, so the recording state is
+  // not visible to a second call made during initialization; and touch devices
+  // fire a synthetic click right after touchend on the mic button.
+  const recordingStartInFlightRef = useRef(false)
+  const lastVoiceTouchEndAtRef = useRef(0)
   // Friend-request toast bookkeeping: ids already announced, plus the time
   // this session started (so old pending requests never toast on app open).
   const seenRequestIdsRef = useRef(null)
@@ -4225,6 +4234,17 @@ export default function ChatConversation() {
       toast.error('Unblock this user to send voice notes')
       return
     }
+    // Single recorder at a time. On touch devices this same button receives
+    // BOTH the gesture events and the synthetic click browsers fire after
+    // touchend — without these guards one tap launches two MediaRecorders
+    // into the shared chunk buffer (corrupt note + a leaked mic stream), and
+    // a click after hold-release instantly starts a stray new recording.
+    if (recordingStartInFlightRef.current || mediaRecorderRef.current || activeRecordingStreamRef.current) {
+      return
+    }
+    if (Date.now() - lastVoiceTouchEndAtRef.current < 600) {
+      return
+    }
     if (!activeRoomId) {
       toast.error('Please select a conversation first')
       return
@@ -4243,6 +4263,7 @@ export default function ChatConversation() {
       setVoiceReview(null)
     }
     let stream = null
+    recordingStartInFlightRef.current = true
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       activeRecordingStreamRef.current = stream
@@ -4327,6 +4348,8 @@ export default function ChatConversation() {
         toast.error('Could not start recording. Please try again.')
       }
       console.warn('Voice recording error:', err)
+    } finally {
+      recordingStartInFlightRef.current = false
     }
   }
 
@@ -4440,6 +4463,9 @@ export default function ChatConversation() {
   const handleMicTouchEnd = () => {
     if (!isTouchRecordingRef.current) return
     isTouchRecordingRef.current = false
+    // Stamp the gesture end: the browser fires a synthetic click on the mic
+    // button right after this, which must not start a new recording.
+    lastVoiceTouchEndAtRef.current = Date.now()
     setVoiceSlideX(0)
     setVoiceSlideY(0)
 
@@ -9347,7 +9373,7 @@ export default function ChatConversation() {
                               confirmLabel: 'Clear',
                               destructive: true,
                               onConfirm: async () => {
-                                const cleared = await clearChatHistory()
+                                const cleared = await clearChatHistory(activeRoomId)
                                 if (cleared) toast.success('Conversation cleared')
                                 else toast.error('Could not clear this conversation')
                               },
@@ -13786,6 +13812,40 @@ export default function ChatConversation() {
                 <span>{confirmDialog.confirmLabel || 'Confirm'}</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DESKTOP PRIVACY SHIELD OVERLAY (ACTIVATES ON PRINT-SCREEN, SNIPPING TOOL & DESKTOP WINDOW BLUR) ── */}
+      {showShield && (
+        <div
+          onClick={dismissShield}
+          role="alert"
+          aria-live="assertive"
+          className="fixed inset-0 z-[999999] flex flex-col items-center justify-center p-6 text-center select-none bg-[#090a0c]/98 backdrop-blur-2xl animate-in fade-in duration-75 cursor-pointer"
+        >
+          <div className="relative mb-5 flex items-center justify-center">
+            <div className="absolute -inset-4 rounded-full bg-gradient-to-tr from-amber-500/30 to-yellow-400/20 blur-xl animate-pulse" />
+            <div className="relative w-20 h-20 rounded-3xl bg-amber-500/15 border-2 border-yellow-500/40 text-[#facc15] flex items-center justify-center shadow-2xl shadow-yellow-500/20">
+              <ShieldAlert className="w-10 h-10" />
+            </div>
+          </div>
+          
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-yellow-500/15 border border-yellow-500/30 text-[#facc15] text-[11px] font-black uppercase tracking-wider mb-3">
+            <Lock className="w-3.5 h-3.5" />
+            <span>Screenshot &amp; Screen Capture Restricted</span>
+          </div>
+
+          <h2 className="text-xl sm:text-2xl font-black text-white max-w-md tracking-tight">
+            JDLX Privacy Shield Active
+          </h2>
+
+          <p className="text-xs sm:text-sm text-zinc-400 max-w-sm mt-2 leading-relaxed">
+            This chat, profile and media are protected. Screen capture, snipping tool, and unauthorized recordings are blocked to safeguard privacy.
+          </p>
+
+          <div className="mt-6 flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs text-zinc-300 font-medium hover:bg-white/10 transition">
+            <span>Click anywhere to resume</span>
           </div>
         </div>
       )}

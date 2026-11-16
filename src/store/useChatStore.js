@@ -2934,12 +2934,25 @@ export const useChatStore = create((set, get) => ({
         )
         // The API now returns only the newly created message: replace the
         // optimistic bubble with the server copy.
-        const current = get().messages.filter((m) => !sameId(m.id, tempId))
+        // Room-switch guard: while the request was in flight the user may have
+        // switched conversations, so the live messages array can belong to a
+        // DIFFERENT room. Never merge this room's message into that list, and
+        // never write the other room's list into this room's cache — build the
+        // target room's list from its own live view (still active) or its own
+        // cache, and only publish to the live view while still on screen.
+        const uid = get().chatUser?.id
+        const stillActive = sameId(get().activeRoomId, targetRoomId)
+        const current = (stillActive
+          ? get().messages
+          : (uid ? getCachedMessages(uid, targetRoomId) : [])
+        ).filter((m) => !sameId(m.id, tempId))
         const seen = new Set(current.map((m) => m.id))
         const merged = [...current, ...decryptedMsgs.filter((m) => !seen.has(m.id))]
         merged.sort(sortChatMessages)
-        set({ messages: merged, sending: false })
-        const uid = get().chatUser?.id
+        set((state) => ({
+          sending: false,
+          messages: sameId(state.activeRoomId, targetRoomId) ? merged : state.messages
+        }))
         if (uid) {
           setCachedMessages(uid, targetRoomId, merged)
         }
@@ -2951,7 +2964,10 @@ export const useChatStore = create((set, get) => ({
         // 1. Instant WebSocket broadcast to active room (<30ms delivery)
         const rawCreated = rawMsgs[0]
         const roomChannel = get().supabaseRoomChannel
-        if (roomChannel && rawCreated) {
+        // Only fan out on the live room channel while this room is still the
+        // one on screen — the channel object tracks the ACTIVE room, so after
+        // a switch it would broadcast this message into the wrong room.
+        if (roomChannel && rawCreated && stillActive) {
           const broadcastMsg = {
             ...rawCreated,
             sender_public_key: identity?.publicKeyB64 || get().identityPublicKey,
@@ -4042,6 +4058,11 @@ export const useChatStore = create((set, get) => ({
   // room from user_id and delete the history for both participants.
   clearChatHistory: async (targetRoomId) => {
     const token = get().chatToken
+    // Resolve the room once: explicit id from the caller, or the conversation
+    // currently open (the profile-drawer "Clear Messages" button calls this
+    // without an id). Room scope mirrors the backend endpoint:
+    // POST /chat/rooms/<room_id>/clear.
+    const roomId = targetRoomId || get().activeRoomId
     if (!roomId) return false
     try {
       const res = await apiFetch(`/chat/rooms/${roomId}/clear`, {
