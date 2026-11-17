@@ -3079,6 +3079,9 @@ export default function ChatConversation() {
   // fire a synthetic click right after touchend on the mic button.
   const recordingStartInFlightRef = useRef(false)
   const lastVoiceTouchEndAtRef = useRef(0)
+  // The conversation the recording was STARTED in — a voice note always
+  // belongs to that room, even if the user navigates away mid-recording.
+  const voiceRecordingRoomRef = useRef(null)
   // Friend-request toast bookkeeping: ids already announced, plus the time
   // this session started (so old pending requests never toast on app open).
   const seenRequestIdsRef = useRef(null)
@@ -3566,6 +3569,10 @@ export default function ChatConversation() {
     triggerHaptic('light')
     if (activeRoomId && !sameId(activeRoomId, conv.id)) {
       updateDraft(activeRoomId, inputText)
+      // Editing/Reply belong to the room they were started in — they must not
+      // survive the switch or the composer would target the wrong chat.
+      if (editingId) { setEditingId(null); setEditDraft('') }
+      if (replyTo) setReplyTo(null)
     }
     const savedDraft = drafts[conv.id] || ''
     setInputText(savedDraft)
@@ -4027,7 +4034,13 @@ export default function ChatConversation() {
         if (addMoreImagesInputRef.current) addMoreImagesInputRef.current.value = ''
         return null
       }
-      const nextActive = Math.min(prev.activeIndex, nextItems.length - 1)
+      // Removing an item BEFORE the active one shifts the active index left —
+      // otherwise the viewport/caption silently move to a different photo
+      // while the user keeps typing for the one they removed.
+      const nextActive = Math.max(0, Math.min(
+        prev.activeIndex > indexToRemove ? prev.activeIndex - 1 : prev.activeIndex,
+        nextItems.length - 1
+      ))
       return {
         ...prev,
         items: nextItems,
@@ -4349,6 +4362,7 @@ export default function ChatConversation() {
       toast.error('Please select a conversation first')
       return
     }
+    voiceRecordingRoomRef.current = activeRoomId
     if (
       typeof navigator === 'undefined'
       || !navigator.mediaDevices?.getUserMedia
@@ -4415,7 +4429,10 @@ export default function ChatConversation() {
               currentTime: 0,
             })
           } else {
-            await uploadChatMedia(file, 'audio')
+            // Anchor the send to the room the recording was STARTED in — the
+            // recorder can outlive a room switch, and uploadChatMedia would
+            // otherwise resolve the room at call time (wrong conversation).
+            await uploadChatMedia(file, 'audio', null, voiceRecordingRoomRef.current)
           }
         }
       }
@@ -4622,6 +4639,13 @@ export default function ChatConversation() {
       try { URL.revokeObjectURL(voiceReview.url) } catch {}
       setVoiceReview(null)
     }
+    // An in-progress recording belongs to the room it started in: switching
+    // conversations cancels it instead of letting the user send it from (or
+    // into) the wrong chat.
+    if (mediaRecorderRef.current || activeRecordingStreamRef.current) {
+      cancelVoiceRecording()
+    }
+    voiceRecordingRoomRef.current = null
   }, [activeRoomId])
 
   const sendReviewedVoiceNote = async () => {
@@ -4631,11 +4655,14 @@ export default function ChatConversation() {
     if (reviewAudioRef.current) {
       try { reviewAudioRef.current.pause() } catch {}
     }
-    setVoiceReview(null)
     setReviewPlaybackRate(1)
-    try {
-      await uploadChatMedia(fileToSend, 'audio')
-    } finally {
+    // uploadChatMedia never throws — it returns true only on success. The
+    // review bar must stay mounted on failure: the review's File is the only
+    // reference to the recording, so clearing it up front destroyed the note
+    // on any failed upload, leaving the user with just a toast.
+    const ok = await uploadChatMedia(fileToSend, 'audio')
+    if (ok) {
+      setVoiceReview(null)
       try { URL.revokeObjectURL(urlToRevoke) } catch {}
     }
   }

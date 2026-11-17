@@ -156,6 +156,13 @@ def media_proxy(media_ref):
     ref = (media_ref or "").strip()
     if not ref:
         abort(404)
+    # Signed-URL gate: media referenced with a signature must carry a valid
+    # one (legacy signature-less references keep working with softer caching).
+    provided_sig = request.args.get("m")
+    if provided_sig:
+        from media_signing import verify_media_signature
+        if not verify_media_signature(os.path.basename(ref), provided_sig):
+            abort(403)
     if ref.startswith(("http://", "https://")):
         candidate = ref.rsplit("/", 1)[-1]
     else:
@@ -202,9 +209,22 @@ def serve_upload(filename):
     if ext not in _ALLOWED_EXTENSIONS:
         abort(403)
 
+    # Signed-URL gate: media referenced with a signature must carry a valid
+    # one. Legacy signature-less URLs (older messages) keep working, but are
+    # served with a softened cache policy instead of long-lived immutable.
+    provided_sig = request.args.get("m")
+    signed = bool(provided_sig)
+    if signed:
+        from media_signing import verify_media_signature
+        if not verify_media_signature(os.path.basename(filename), provided_sig):
+            abort(403)
+
     file_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
     if os.path.isfile(file_path):
-        return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+        response = send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+        if signed:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
     conn = get_db()
     try:
@@ -237,7 +257,9 @@ def serve_upload(filename):
 
     response = Response(data, mimetype=mime_type)
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    response.headers["Cache-Control"] = (
+        "public, max-age=31536000, immutable" if signed else "public, max-age=86400"
+    )
     return response
 
 

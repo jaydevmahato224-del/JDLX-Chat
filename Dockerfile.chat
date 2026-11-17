@@ -16,4 +16,4 @@ EXPOSE 10000
 
 # migrations_boot is idempotent and uses the same Turso/SQLite schema as the
 # main backend.  Do not run two different migration mechanisms here.
-CMD ["sh", "-c", "python migrations_boot.py && exec gunicorn --bind 0.0.0.0:${PORT} --workers ${WEB_CONCURRENCY:-2} --timeout 120 --access-logfile - --error-logfile - chat_app:app"]
+CMD ["sh", "-c", "python migrations_boot.py && exec gunicorn --bind 0.0.0.0:${PORT} --worker-class gthread --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-8} --timeout 120 --access-logfile - --error-logfile - chat_app:app"]

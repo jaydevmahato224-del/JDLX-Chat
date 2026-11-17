@@ -18,6 +18,7 @@ import jwt
 
 from database import get_db
 from jwt_config import get_jwt_secret
+from media_signing import signed_media_url
 from utils.response_utils import success_response, error_response
 from auth.oauth_handoff import consume_handoff_code, delete_handoff_code
 
@@ -1991,6 +1992,13 @@ def edit_chat_message(message_id):
         room, room_allowed = get_chat_room_for_user(cursor, msg['room_id'], my_id)
         if not room_allowed:
             return error_response("Access denied to this chat room", 403)
+        # Official specialist/admin rows carry the customer's own user_id
+        # (schema legacy), so the user_id check alone would let a customer
+        # rewrite or tombstone messages shown as sent by "JDLX Senior
+        # Specialist". Staff-authored content is identified by sender_type and
+        # is never editable by chat users.
+        if (msg.get('sender_type') or 'user') != 'user':
+            return error_response("You can only edit your own messages", 403)
         if msg['user_id'] != my_id:
             return error_response("You can only edit your own messages", 403)
         if msg.get('deleted'):
@@ -2059,7 +2067,7 @@ def delete_chat_message(message_id):
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, room_id, user_id FROM official_chat_messages WHERE id = ?",
+            "SELECT id, room_id, user_id, sender_type FROM official_chat_messages WHERE id = ?",
             (message_id,)
         )
         msg = cursor.fetchone()
@@ -2078,6 +2086,11 @@ def delete_chat_message(message_id):
             conn.commit()
             return success_response({'message_id': message_id, 'scope': 'me'}, "Message deleted for you")
 
+        if (msg['sender_type'] or 'user') != 'user':
+            # Specialist/admin rows are authored by staff (sender_type), even
+            # though their user_id is the customer's own — never tombstoneable
+            # by the customer ("delete for everyone").
+            return error_response("You can only delete your own message for everyone", 403)
         if msg['user_id'] != my_id:
             return error_response("You can only delete your own message for everyone", 403)
 
@@ -2451,7 +2464,7 @@ def get_chat_conversations():
                LEFT JOIN (
                    SELECT room_id, COUNT(*) AS cnt
                    FROM official_chat_messages
-                   WHERE user_id != ? AND is_read = 0
+                   WHERE (user_id != ? OR sender_type != 'user') AND is_read = 0
                    GROUP BY room_id
                ) unread ON unread.room_id = r.id
                LEFT JOIN official_chat_messages last_msg ON last_msg.id = (
@@ -3029,26 +3042,36 @@ def get_room_messages(room_id):
                 m['recipient_public_key'] = my_pubkey
             _sanitize_chat_message(m)
 
-        # Mark messages sent by others as read
-        cursor.execute(
-            "UPDATE official_chat_messages SET is_read = 1 WHERE room_id = ? AND user_id != ? AND is_read = 0",
-            (room_id, my_id)
-        )
-
-        # Read receipts: remember how far the caller has read so the sender's
-        # realtime loop can turn its ticks into ✓✓ for exactly those messages.
-        cursor.execute(
-            "SELECT MAX(id) AS max_id FROM official_chat_messages WHERE room_id = ? AND user_id != ?",
-            (room_id, my_id)
-        )
-        read_row = cursor.fetchone()
-        max_read_id = int(read_row['max_id'] or 0) if read_row else 0
-        if max_read_id:
+        # Mark messages sent by others as read. SKIPPED for history-pagination
+        # fetches (before_id): the viewer is scrolling OLDER content they
+        # already knew about — flipping every unread message in the room (and
+        # jumping the read watermark to the newest id) reported the peer's
+        # ticks as ✓✓ for content that was never displayed.
+        if before_id is None:
             cursor.execute(
-                """INSERT OR REPLACE INTO official_chat_read_state
-                   (room_id, user_id, last_read_id, updated_at) VALUES (?, ?, ?, ?)""",
-                (room_id, my_id, max_read_id, int(time.time()))
+                """UPDATE official_chat_messages SET is_read = 1
+                   WHERE room_id = ? AND is_read = 0
+                     AND (user_id != ? OR sender_type != 'user')""",
+                (room_id, my_id)
             )
+
+            # Read receipts: remember how far the caller has read so the sender's
+            # realtime loop can turn its ticks into ✓✓ for exactly those messages.
+            # Staff-authored rows (sender_type) carry the viewer's own user_id,
+            # so authorship — not user_id — decides what counts as incoming.
+            cursor.execute(
+                """SELECT MAX(id) AS max_id FROM official_chat_messages
+                   WHERE room_id = ? AND (user_id != ? OR sender_type != 'user')""",
+                (room_id, my_id)
+            )
+            read_row = cursor.fetchone()
+            max_read_id = int(read_row['max_id'] or 0) if read_row else 0
+            if max_read_id:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO official_chat_read_state
+                       (room_id, user_id, last_read_id, updated_at) VALUES (?, ?, ?, ?)""",
+                    (room_id, my_id, max_read_id, int(time.time()))
+                )
 
         conn.commit()
 
@@ -3079,8 +3102,9 @@ def mark_chat_room_read(room_id):
         if max_id:
             cursor.execute(
                 """UPDATE official_chat_messages SET is_read = 1
-                   WHERE room_id = ? AND user_id != ? AND id <= ? AND is_read = 0""",
-                (room_id, my_id, max_id)
+                   WHERE room_id = ? AND id <= ? AND is_read = 0
+                     AND (user_id != ? OR sender_type != 'user')""",
+                (room_id, max_id, my_id)
             )
             cursor.execute(
                 """INSERT OR REPLACE INTO official_chat_read_state
@@ -3090,11 +3114,13 @@ def mark_chat_room_read(room_id):
         else:
             cursor.execute(
                 """UPDATE official_chat_messages SET is_read = 1
-                   WHERE room_id = ? AND user_id != ? AND is_read = 0""",
+                   WHERE room_id = ? AND is_read = 0
+                     AND (user_id != ? OR sender_type != 'user')""",
                 (room_id, my_id)
             )
             cursor.execute(
-                "SELECT COALESCE(MAX(id), 0) AS max_id FROM official_chat_messages WHERE room_id = ? AND user_id != ?",
+                """SELECT COALESCE(MAX(id), 0) AS max_id FROM official_chat_messages
+                   WHERE room_id = ? AND (user_id != ? OR sender_type != 'user')""",
                 (room_id, my_id)
             )
             last_id = cursor.fetchone()['max_id'] or 0
@@ -3359,7 +3385,7 @@ def _chat_social_state(cursor, my_id):
            FROM official_chat_messages m
            JOIN official_chat_rooms r ON m.room_id = r.id
            WHERE (r.user_id = ? OR r.user_two_id = ?)
-             AND m.user_id != ? AND m.is_read = 0""",
+             AND (m.user_id != ? OR m.sender_type != 'user') AND m.is_read = 0""",
         (my_id, my_id, my_id)
     )
     msg_state = cursor.fetchone()
@@ -4144,7 +4170,7 @@ def upload_chat_media():
     finally:
         conn.close()
 
-    media_url = f"/static/uploads/{unique_filename}"
+    media_url = signed_media_url(f"/static/uploads/{unique_filename}")
     return success_response({
         'url': media_url,
         'filename': unique_filename,
@@ -4252,10 +4278,17 @@ def get_chat_unread_count():
             """SELECT COUNT(*) AS unread_msgs
                FROM official_chat_messages m
                JOIN official_chat_rooms r ON m.room_id = r.id
+               LEFT JOIN official_chat_room_clears cc
+                 ON cc.room_id = m.room_id AND cc.user_id = ?
                WHERE m.is_read = 0
-                 AND (r.user_id = ? OR r.user_two_id = ?)
-                 AND (m.user_id != ? OR m.sender_type != 'user')""",
-            (user_id, user_id, user_id)
+                 AND (
+                   r.user_id = ? OR r.user_two_id = ?
+                   OR m.room_id IN (SELECT room_id FROM official_chat_group_members WHERE user_id = ?)
+                 )
+                 AND (m.user_id != ? OR m.sender_type != 'user')
+                 AND m.id > COALESCE(cc.cleared_upto_id, 0)
+                 AND m.id NOT IN (SELECT message_id FROM chat_message_hides WHERE user_id = ?)""",
+            (user_id, user_id, user_id, user_id, user_id, user_id)
         )
         unread_msgs = cursor.fetchone()['unread_msgs'] or 0
 
@@ -4494,14 +4527,18 @@ def poll_room_events(room_id):
                 )
 
                 if rows:
-                    # Reading via long-poll counts as read too (badge + receipts)
+                    # Reading via long-poll counts as read too (badge + receipts).
+                    # Same authorship rule as the clear endpoint: staff rows carry
+                    # the viewer's own user_id, so they must still mark as read.
                     cursor.execute(
                         """UPDATE official_chat_messages SET is_read = 1
-                           WHERE room_id = ? AND user_id != ? AND is_read = 0""",
+                           WHERE room_id = ? AND is_read = 0
+                             AND (user_id != ? OR sender_type != 'user')""",
                         (room_id, my_id)
                     )
                     cursor.execute(
-                        "SELECT MAX(id) AS max_id FROM official_chat_messages WHERE room_id = ? AND user_id != ?",
+                        """SELECT MAX(id) AS max_id FROM official_chat_messages
+                           WHERE room_id = ? AND (user_id != ? OR sender_type != 'user')""",
                         (room_id, my_id)
                     )
                     latest = cursor.fetchone()
@@ -5063,7 +5100,7 @@ def upload_chat_logo():
         print(f"[CHAT LOGO UPLOAD] Failed to save to disk: {e}")
 
     # 2. Persist in uploaded_media and system_settings in a single fast, immediate DB transaction
-    media_url = f"/static/uploads/{unique_filename}"
+    media_url = signed_media_url(f"/static/uploads/{unique_filename}")
     conn = get_db()
     try:
         cursor = conn.cursor()

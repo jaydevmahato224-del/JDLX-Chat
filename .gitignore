@@ -42,6 +42,7 @@ backend/jdlx.db
 backend/.env
 backend/.jwt_secret
 backend/*.db
+backend/static/
 
 # GitHub Actions workflows (PAT lacks workflow scope)
 .github/

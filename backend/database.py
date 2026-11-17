@@ -1814,6 +1814,12 @@ def init_db():
         ('message_type', "TEXT DEFAULT 'text'"),
         ('is_read', 'INTEGER DEFAULT 0'),
         ('username', 'TEXT'),
+        # Author identity for staff/specialist rows. Databases created before
+        # this column existed (the standalone service's first deploy) would
+        # otherwise 500 on EVERY message insert/fetch — the send/receive flow
+        # dies with "no column named sender_type". DEFAULT keeps old rows
+        # readable as regular user messages.
+        ('sender_type', "TEXT DEFAULT 'user'"),
         # Reply/quote, edit + tombstone support for the messenger UI.
         ('reply_to_id', 'INTEGER'),
         ('deleted', 'INTEGER DEFAULT 0'),
@@ -1888,6 +1894,14 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_calls_room_state ON official_chat_calls(room_id, state)')
     ensure_columns('official_chat_calls', [
         ('candidates', 'TEXT'),
+        # ICE/SDP signalling columns referenced by the call endpoints; older
+        # call tables (pre-dating the standalone service) may lack these.
+        ('callee_id', 'INTEGER'),
+        ('call_type', "TEXT DEFAULT 'voice'"),
+        ('state', "TEXT DEFAULT 'idle'"),
+        ('offer_sdp', 'TEXT'),
+        ('answer_sdp', 'TEXT'),
+        ('ended_at', 'TIMESTAMP'),
     ])
 
     # Group membership is the ONLY access-control source for group rooms.
@@ -1998,6 +2012,11 @@ def init_db():
         ('gender', 'TEXT'),
         # User profile bio / status (WhatsApp style about statement)
         ('bio', "TEXT DEFAULT 'Hey there! I am using JDLX Chat'"),
+        # Presence + profile fields referenced by the inbox and group member
+        # queries (is_online badges). Databases predating these columns would
+        # otherwise 500 the conversations endpoint.
+        ('profile_image', 'TEXT'),
+        ('last_seen_at', 'TIMESTAMP'),
     ])
 
     # --- Official Chat Web Push (VAPID) Subscriptions ---

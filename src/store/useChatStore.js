@@ -937,8 +937,12 @@ export const useChatStore = create((set, get) => ({
     if (userChanged) {
       // Drop the previous account's realtime subscriptions before applying the
       // new account's cache; otherwise old room events can still land here.
+      // Also tear down any live call state so a CallScreen/mic stream from the
+      // previous account never survives an account switch.
       get().stopRealtime()
       get().stopSocialRealtime()
+      get().stopCallWatcher()
+      get().cleanupCallResources()
       resetSupabaseRealtimeAuth()
       resetRealtimePrivateFallback()
     }
@@ -1005,6 +1009,12 @@ export const useChatStore = create((set, get) => ({
     const uid = get().chatUser?.id
     get().stopRealtime()
     get().stopSocialRealtime()
+    // Tear down any live call: without this, the per-second call timer, the
+    // RTCPeerConnection, the polling loop, the incoming-call watcher and the
+    // microphone stream all survive logout (mic stays captured on a dead
+    // session and the CallScreen can outlive an account switch).
+    get().stopCallWatcher()
+    get().cleanupCallResources()
     resetSupabaseRealtimeAuth()
     resetRealtimePrivateFallback()
     // Drop this APK device's FCM token before the session is cleared, so a
@@ -2136,6 +2146,10 @@ export const useChatStore = create((set, get) => ({
             // payload and fetch the authoritative message through the API.
             if (!payload || !payload.id) return
             await get().fetchRoomMessages(roomId).catch(() => {})
+            // Room-switch guard: fetchRoomMessages is async; if the user
+            // switched rooms while it ran, get().messages belongs to the other
+            // room and receipts computed below would carry foreign ids.
+            if (!sameId(get().realtimeRoomId, roomId)) return
 
             const currentMyId = get().chatUser?.id
             const peerMsgs = get().messages.filter(
@@ -2438,6 +2452,13 @@ export const useChatStore = create((set, get) => ({
 
           const incoming = Array.isArray(data.messages) ? data.messages : []
           if (incoming.length) {
+            // Room-switch guard: everything below awaits (identity load +
+            // WebCrypto decrypt passes over up to ~50 messages) and then writes
+            // BOTH the live messages list and this room's cache. If the user
+            // switched rooms while those awaits ran, get().messages is the
+            // OTHER room's list — merging here would pollute it and corrupt
+            // this room's cache, so abort this cycle instead.
+            if (controller.signal.aborted || !sameId(get().activeRoomId, roomId)) return
             const identity = get().identityKeypair || await ensureLocalIdentity(get, set)
             let activeConv = (get().activeConversation && sameId(get().activeConversation.id, roomId))
               ? get().activeConversation
@@ -2451,6 +2472,9 @@ export const useChatStore = create((set, get) => ({
             const decrypted = await Promise.all(
               incoming.map((m) => decryptStoredMessage(m, roomId, activeConv, identity))
             )
+            // Second guard: decryption is the long await — re-verify before
+            // touching the (possibly new room's) live state.
+            if (controller.signal.aborted || !sameId(get().activeRoomId, roomId)) return
             // Also attempt to re-decrypt any previously locked messages in existing state
             const redecryptedExisting = await Promise.all(
               get().messages.map(async (m) => {
@@ -2699,10 +2723,29 @@ export const useChatStore = create((set, get) => ({
     )
     const revert = () => {
       if (!before) return
-      const current = get().messages.some((m) => sameId(m.id, messageId))
-        ? get().messages.map((m) => (sameId(m.id, messageId) ? before : m))
-        : [...get().messages, before].sort(sortChatMessages)
-      applyMessages(current)
+      const uid = get().chatUser?.id
+      const targetRoom = before.room_id || get().activeRoomId
+      const stillActive = sameId(get().activeRoomId, targetRoom)
+      if (stillActive) {
+        const current = get().messages.some((m) => sameId(m.id, messageId))
+          ? get().messages.map((m) => (sameId(m.id, messageId) ? before : m))
+          : [...get().messages, before].sort(sortChatMessages)
+        set({ messages: current })
+        if (uid) setCachedMessages(uid, targetRoom, current)
+        return
+      }
+      // User switched rooms while the request was in flight: revert inside the
+      // deleted message's own room cache instead of clobbering the now-active
+      // room's live list. Skip when the room has no cache to rebuild from.
+      if (uid) {
+        const cached = getCachedMessages(uid, targetRoom)
+        if (cached.length > 0) {
+          const current = cached.some((m) => sameId(m.id, messageId))
+            ? cached.map((m) => (sameId(m.id, messageId) ? before : m))
+            : [...cached, before].sort(sortChatMessages)
+          setCachedMessages(uid, targetRoom, current)
+        }
+      }
     }
 
     try {
@@ -2717,14 +2760,16 @@ export const useChatStore = create((set, get) => ({
 
       get().fetchConversations()
 
-      // Instant Supabase WebSocket broadcast for deletions
+      // Instant Supabase WebSocket broadcast for deletions. The receiver
+      // validates the payload against my id / the conversation peer id, so
+      // user_id must ride along or the tombstone is silently dropped.
       if (scope === 'everyone') {
         const roomChannel = get().supabaseRoomChannel
         if (roomChannel) {
           roomChannel.send({
             type: 'broadcast',
             event: 'message_deleted',
-            payload: { message_id: messageId }
+            payload: { message_id: messageId, user_id: get().chatUser?.id }
           }).catch(() => {})
         }
       }
@@ -2744,6 +2789,7 @@ export const useChatStore = create((set, get) => ({
 
     // 1. OPTIMISTIC UPDATE: calculate and apply reaction locally with 0ms delay!
     const prevMessages = get().messages
+    const reactionRoomId = get().activeRoomId
     const targetMsg = prevMessages.find((m) => sameId(m.id, messageId))
     if (!targetMsg) return false
 
@@ -2803,8 +2849,11 @@ export const useChatStore = create((set, get) => ({
       })
       const json = await res.json()
       if (!res.ok || !json.success) {
-        // Revert on error
-        set({ messages: prevMessages })
+        // Revert on error — only while the same room is still on screen;
+        // prevMessages is a snapshot of that room, never of the current one.
+        if (sameId(get().activeRoomId, reactionRoomId)) {
+          set({ messages: prevMessages })
+        }
         return false
       }
       const serverReactions = json.data?.reactions || optimisticReactions
@@ -2815,8 +2864,10 @@ export const useChatStore = create((set, get) => ({
       })
       return true
     } catch (e) {
-      // Revert on network failure
-      set({ messages: prevMessages })
+      // Revert on network failure (same room guard as above)
+      if (sameId(get().activeRoomId, reactionRoomId)) {
+        set({ messages: prevMessages })
+      }
       console.warn('Reaction error:', e)
       return false
     }
