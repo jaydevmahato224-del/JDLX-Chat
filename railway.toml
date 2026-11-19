@@ -1,0 +1,12 @@
+# Railway deploy config for the standalone JDLX Chat backend.
+# Without this, Railway sees package.json in the repo root and builds the
+# React/Vite frontend as a Node app, so the Flask chat API never starts.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.chat"
+
+[deploy]
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
