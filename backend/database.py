@@ -82,6 +82,68 @@ class LibsqlRow:
     def __iter__(self):
         return iter(zip(self._keys, self._tuple))
 
+# Turso's Hrana transport can drop or expire a stream at any moment (not only
+# after a long idle period): the server closes it, the network resets it, or an
+# edge returns a transient HTTP error. The previous code turned that into a
+# one-off 500 even though the very same statement succeeds on the next request.
+# These markers identify transport-level failures that are safe to replay on a
+# brand-new connection. SQL/semantic errors are deliberately NOT in this list.
+_TRANSIENT_CONNECTION_MARKERS = (
+    "stream expired",
+    "stream has been closed",
+    "stream error",
+    "client stream",
+    "no result has been returned",
+    "unexpected response from server",
+    "unexpected empty response",
+    "unexpected multiple responses",
+    "cursor stream ended prematurely",
+    "failed to connect",
+    "connection reset",
+    "connection refused",
+    "connection aborted",
+    "connection closed",
+    "broken pipe",
+    "unexpected eof",
+    "http error",
+    "http dispatch error",
+    "temporarily unavailable",
+    "database is locked",
+    "database busy",
+    "databasebusy",
+    "databaselocked",
+    "network",
+    # Turso itself is briefly unavailable / rate limiting. A single immediate
+    # replay after reconnecting is enough; the DB layer never loops.
+    "status=429",
+    "status=500",
+    "status=502",
+    "status=503",
+    "status=504",
+)
+_NON_TRANSIENT_ERROR_MARKERS = (
+    "no such column",
+    "no such table",
+    "no such function",
+    "no such index",
+    "constraint",
+    "syntax error",
+    "type mismatch",
+    "readonly",
+    "read-only",
+)
+
+
+def _is_transient_connection_error(error):
+    """True for dead-stream/transport failures that a reconnect can fix."""
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    text = str(error).lower()
+    if any(marker in text for marker in _NON_TRANSIENT_ERROR_MARKERS):
+        return False
+    return any(marker in text for marker in _TRANSIENT_CONNECTION_MARKERS)
+
+
 class LibsqlCursorWrapper:
     # Statements that never open a write transaction. Everything else
     # (INSERT/UPDATE/DELETE/CREATE/BEGIN/WITH-CTE-writes/...) marks the
@@ -104,23 +166,38 @@ class LibsqlCursorWrapper:
     def fetchall(self):
         rows = self._cursor.fetchall()
         return [self.row_factory(self._cursor, row) for row in rows] if self.row_factory else rows
+    def _run(self, method_name, sql, parameters):
+        """Run a statement, replaying ONCE on a fresh connection if the stream died.
+
+        Replay is only allowed while the connection holds no uncommitted write
+        (``_recover_from_transient`` enforces that), so a dead pooled stream can
+        never turn a message send into a random 500 or corrupt an open
+        transaction. The old stream is discarded in the background.
+        """
+        try:
+            getattr(self._cursor, method_name)(sql, parameters)
+            return
+        except Exception as e:
+            if self._conn is None or not self._conn._recover_from_transient(e):
+                if self._conn is not None: self._conn._mark_unhealthy()
+                _raise_turso_config_error(e)
+        # The fresh connection has a new cursor; rebind and replay the statement.
+        # Resolve the method again so it comes from the new cursor, not the dead one.
+        self._cursor = self._conn._conn.cursor()
+        try:
+            getattr(self._cursor, method_name)(sql, parameters)
+        except Exception as e:
+            self._conn._mark_unhealthy()
+            _raise_turso_config_error(e)
     def execute(self, sql, parameters=()):
         if isinstance(parameters, list): parameters = tuple(parameters)
-        try:
-            self._cursor.execute(sql, parameters)
-        except Exception as e:
-            if self._conn is not None: self._conn._mark_unhealthy()
-            _raise_turso_config_error(e)
+        self._run('execute', sql, parameters)
         if self._conn is not None and not sql.lstrip().upper().startswith(self._READ_ONLY_PREFIXES):
             self._conn._dirty = True
         return self
     def executemany(self, sql, seq_of_parameters):
         seq_of_parameters = [tuple(p) if isinstance(p, list) else p for p in seq_of_parameters]
-        try:
-            self._cursor.executemany(sql, seq_of_parameters)
-        except Exception as e:
-            if self._conn is not None: self._conn._mark_unhealthy()
-            _raise_turso_config_error(e)
+        self._run('executemany', sql, seq_of_parameters)
         if self._conn is not None:
             self._conn._dirty = True
         return self
@@ -151,6 +228,32 @@ class LibsqlConnectionWrapper:
 
     def _mark_unhealthy(self):
         self._discarded = True
+
+    def _recover_from_transient(self, error):
+        """Swap in a fresh raw connection after a dead-stream/transport error.
+
+        Returns False (and leaves the caller to raise) when the statement is not
+        retryable: either it is a real SQL error, or this connection already has
+        uncommitted writes — silently replaying on a new stream would drop that
+        transaction. In the retryable case the failed statement never reached a
+        committed state, so replaying it is safe.
+        """
+        if self._discarded or self._dirty:
+            return False
+        if not _is_transient_connection_error(error):
+            return False
+        try:
+            replacement = _create_turso_connection()
+        except Exception:
+            return False
+        old_raw = self._conn
+        self._conn = replacement._conn
+        # The replacement is now owned by this wrapper; make sure its wrapper
+        # can never release/close the same raw stream later.
+        replacement._conn = None
+        self._dirty = False
+        _destroy_raw_handle_async(old_raw)
+        return True
 
     def cursor(self): return LibsqlCursorWrapper(self._conn.cursor(), self.row_factory, self)
     def execute(self, sql, parameters=()):
@@ -223,8 +326,16 @@ def _get_pool():
         return _POOL
 
 def _destroy_raw_connection(conn):
+    # Accepts either a connection wrapper or a raw libsql handle. Resolving the
+    # handle up-front matters when the wrapper was reconnected in the meantime.
+    _close_raw_handle(getattr(conn, "_conn", conn))
+
+
+def _close_raw_handle(raw_handle):
+    if raw_handle is None:
+        return
     try:
-        conn._conn.close()
+        raw_handle.close()
     except Exception:
         pass
 
@@ -241,7 +352,7 @@ _DESTROY_LOCK = threading.Lock()
 _MAX_DESTROY_THREADS = 8
 
 
-def _destroy_raw_connection_async(conn):
+def _destroy_raw_handle_async(raw_handle):
     global _DESTROY_THREADS
     with _DESTROY_LOCK:
         if _DESTROY_THREADS >= _MAX_DESTROY_THREADS:
@@ -254,7 +365,7 @@ def _destroy_raw_connection_async(conn):
     def _run():
         global _DESTROY_THREADS
         try:
-            _destroy_raw_connection(conn)
+            _close_raw_handle(raw_handle)
         finally:
             with _DESTROY_LOCK:
                 _DESTROY_THREADS -= 1
@@ -264,6 +375,12 @@ def _destroy_raw_connection_async(conn):
     except Exception:
         with _DESTROY_LOCK:
             _DESTROY_THREADS -= 1
+
+
+def _destroy_raw_connection_async(conn):
+    # Resolve the raw handle BEFORE spawning: a wrapper that reconnects in the
+    # meantime must not cause the thread to close its new, healthy stream.
+    _destroy_raw_handle_async(getattr(conn, "_conn", conn))
 
 def _create_turso_connection():
     max_retries = 3

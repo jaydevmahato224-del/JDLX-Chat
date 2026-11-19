@@ -3079,10 +3079,17 @@ export const useChatStore = create((set, get) => ({
 
         return { success: true }
       } else {
+        // Some proxies/servers return objects in `message`/`error`; passing one
+        // to Error() rendered the useless "[object Object]". Only string text is
+        // shown, with the server's diagnostic detail kept for the console.
+        const serverMessage = [json?.message, json?.error].find(
+          (value) => typeof value === 'string' && value.trim()
+        )
         const sendError = new Error(
-          json?.message || json?.error || `Send failed (HTTP ${res.status})`
+          serverMessage || `Send failed (HTTP ${res.status})`
         )
         sendError.httpStatus = res.status
+        sendError.serverDetail = typeof json?.detail === 'string' ? json.detail : null
         throw sendError
       }
     } catch (err) {
@@ -3091,7 +3098,11 @@ export const useChatStore = create((set, get) => ({
       const failReason = isTimeout
         ? 'Timed out after 35s'
         : (err?.httpStatus ? `HTTP ${err.httpStatus}: ${err.message}` : (err?.message || 'Network error'))
-      console.warn('[chat] message send failed', { roomId: targetRoomId, reason: failReason })
+      console.warn('[chat] message send failed', {
+        roomId: targetRoomId,
+        reason: failReason,
+        detail: err?.serverDetail || undefined
+      })
 
       // Check if message was ALREADY confirmed via realtime broadcast or inbox sync while HTTP was in flight!
       const currentMsgs = get().messages
