@@ -2,7 +2,6 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import ChatErrorBoundary from './ChatErrorBoundary.jsx'
-import { installBackendWarmUp } from './utils/backendWarmup.js'
 import './index.css'
 
 // Standalone JDLX Official Chat app — completely separate from the storefront.
@@ -50,10 +49,6 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
     })
   })
 }
-
-// Wake a sleeping backend (Render free tier) before the user places a call,
-// otherwise call signaling waits out a 30-60s cold start.
-installBackendWarmUp()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
