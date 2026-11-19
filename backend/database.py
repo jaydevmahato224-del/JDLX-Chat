@@ -220,7 +220,7 @@ _POOL_IDLE_KEEP = int(os.environ.get("DB_POOL_IDLE_KEEP", "4"))
 # pooled connections that have been idle longer than this — re-handshaking on
 # quiet periods is exactly the pre-pool behavior (correct, just slower), while
 # burst traffic (the common case) still reuses warm sub-second-old connections.
-_POOL_MAX_IDLE_SECONDS = float(os.environ.get("DB_POOL_MAX_IDLE_SECONDS", "45"))
+_POOL_MAX_IDLE_SECONDS = float(os.environ.get("DB_POOL_MAX_IDLE_SECONDS", "20"))
 
 def _get_pool():
     global _POOL
@@ -276,17 +276,26 @@ def _acquire_connection():
 def _release_connection(conn):
     """Returns a healthy remote connection to the pool, trimming idle excess."""
     pool = _get_pool()
+    victims = []
+    overflow = False
     with _POOL_LOCK:
         while pool.qsize() >= _POOL_IDLE_KEEP:
             try:
-                victim = pool.get_nowait()
+                victims.append(pool.get_nowait())
             except queue.Empty:
                 break
-            _destroy_raw_connection(victim)
-    conn._released_at = time.monotonic()
-    try:
-        pool.put_nowait(conn)
-    except queue.Full:
+        conn._released_at = time.monotonic()
+        try:
+            pool.put_nowait(conn)
+        except queue.Full:
+            overflow = True
+    # Closing a remote connection is a network call and can stall on a dead
+    # stream. It must never run while holding _POOL_LOCK: one stuck close used
+    # to block every other request's release, which surfaced as messages
+    # "Timed out after 35s" across the whole app.
+    for victim in victims:
+        _destroy_raw_connection(victim)
+    if overflow:
         _destroy_raw_connection(conn)
 
 if not FORCE_LOCAL_DB and TURSO_URL and TURSO_TOKEN:
