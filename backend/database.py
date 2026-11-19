@@ -108,6 +108,14 @@ _TRANSIENT_CONNECTION_MARKERS = (
     "http error",
     "http dispatch error",
     "temporarily unavailable",
+    "stream closed",
+    "channel closed",
+    "inactive stream",
+    "inactivestreamid",
+    "send error",
+    "recv error",
+    "io error",
+    "timed out",
     "database is locked",
     "database busy",
     "databasebusy",
@@ -159,12 +167,52 @@ class LibsqlCursorWrapper:
         # reusing a connection in an unknown state) and a write can mark it
         # dirty (release-time rollback hygiene).
         self._conn = conn
+        # Last read statement, kept so a row fetch that dies on the wire can be
+        # replayed on a fresh stream. Only safe while NO rows were consumed yet:
+        # replaying after a partial read would duplicate/lose rows.
+        self._last_read = None
+        self._rows_fetched = 0
     def _wrap_row(self, row):
         if row is None: return None
         return self.row_factory(self._cursor, row) if self.row_factory else row
-    def fetchone(self): return self._wrap_row(self._cursor.fetchone())
+    def _fetch(self, method_name, *args):
+        """Fetch rows, replaying the last read once if the stream died mid-read.
+
+        libsql can fail inside fetchone()/fetchall() (not only inside execute()):
+        the Hrana stream is consumed lazily, so the transport error surfaces on
+        the first fetch. The statement is replayed only when it succeeded, is a
+        read, and no rows were consumed yet — a partial read is never replayed.
+        """
+        try:
+            return getattr(self._cursor, method_name)(*args)
+        except Exception as e:
+            if self._conn is None or self._last_read is None or self._rows_fetched:
+                if self._conn is not None:
+                    self._conn._mark_unhealthy()
+                raise
+            if not self._conn._recover_from_transient(e):
+                self._conn._mark_unhealthy()
+                raise
+            sql, parameters = self._last_read
+            self._cursor = self._conn._conn.cursor()
+            try:
+                self._cursor.execute(sql, parameters)
+                return getattr(self._cursor, method_name)(*args)
+            except Exception as e2:
+                self._conn._mark_unhealthy()
+                _raise_turso_config_error(e2)
+    def fetchone(self):
+        row = self._fetch('fetchone')
+        if row is not None:
+            self._rows_fetched += 1
+        return self._wrap_row(row)
+    def fetchmany(self, size=None):
+        rows = self._fetch('fetchmany') if size is None else self._fetch('fetchmany', size)
+        self._rows_fetched += len(rows)
+        return [self.row_factory(self._cursor, row) for row in rows] if self.row_factory else rows
     def fetchall(self):
-        rows = self._cursor.fetchall()
+        rows = self._fetch('fetchall')
+        self._rows_fetched += len(rows)
         return [self.row_factory(self._cursor, row) for row in rows] if self.row_factory else rows
     def _run(self, method_name, sql, parameters):
         """Run a statement, replaying ONCE on a fresh connection if the stream died.
@@ -191,25 +239,31 @@ class LibsqlCursorWrapper:
             _raise_turso_config_error(e)
     def execute(self, sql, parameters=()):
         if isinstance(parameters, list): parameters = tuple(parameters)
+        is_read = sql.lstrip().upper().startswith(self._READ_ONLY_PREFIXES)
         self._run('execute', sql, parameters)
-        if self._conn is not None and not sql.lstrip().upper().startswith(self._READ_ONLY_PREFIXES):
+        if self._conn is not None and not is_read:
             self._conn._dirty = True
+        self._rows_fetched = 0
+        self._last_read = (sql, parameters) if is_read else None
         return self
     def executemany(self, sql, seq_of_parameters):
         seq_of_parameters = [tuple(p) if isinstance(p, list) else p for p in seq_of_parameters]
         self._run('executemany', sql, seq_of_parameters)
         if self._conn is not None:
             self._conn._dirty = True
+        self._rows_fetched = 0
+        self._last_read = None
         return self
     def __getattr__(self, name): return getattr(self._cursor, name)
     def __iter__(self):
         # libsql_experimental.Cursor has no __iter__ method. Fetch rows sequentially
-        # so DB-API 2.0 cursor iteration (`for row in cur:`) works seamlessly.
+        # so DB-API 2.0 cursor iteration (`for row in cur:`) works seamlessly —
+        # and goes through fetchone() so a dying stream is replayed safely.
         while True:
-            row = self._cursor.fetchone()
+            row = self.fetchone()
             if row is None:
                 break
-            yield self._wrap_row(row)
+            yield row
 
 class LibsqlConnectionWrapper:
     def __init__(self, conn):
@@ -305,18 +359,18 @@ class LibsqlConnectionWrapper:
 # ------------------------------------------------------------------------------
 _POOL = None
 _POOL_LOCK = threading.Lock()
-# Upper bound matches gunicorn's 8 threads per worker (Procfile); idle keep is
-# small so quiet periods don't hold many open remote connections.
+# Upper bound matches gunicorn's 8 threads per worker (Procfile); idle keep
+# keeps enough warm streams for burst traffic without holding dozens open.
 _POOL_MAX_SIZE = int(os.environ.get("DB_POOL_MAX_SIZE", "16"))
-_POOL_IDLE_KEEP = int(os.environ.get("DB_POOL_IDLE_KEEP", "4"))
-# Turso's Hrana server expires streams that sit idle for a while ("stream
-# expired due to inactivity" — tursodatabase/libsql-python#41). A connection
-# recycled from the pool after such an expiry fails its first execute, which
-# used to surface as a random one-off 500 that succeeded on retry. Discard
-# pooled connections that have been idle longer than this — re-handshaking on
-# quiet periods is exactly the pre-pool behavior (correct, just slower), while
-# burst traffic (the common case) still reuses warm sub-second-old connections.
-_POOL_MAX_IDLE_SECONDS = float(os.environ.get("DB_POOL_MAX_IDLE_SECONDS", "20"))
+_POOL_IDLE_KEEP = int(os.environ.get("DB_POOL_IDLE_KEEP", "8"))
+# Turso's Hrana server expires streams that sit idle for a while
+# ("stream expired due to inactivity" — tursodatabase/libsql-python#41).
+# Stale streams are now replayed transparently (execute AND fetch), so a
+# connection can safely stay pooled far longer: keep the TLS/Hrana handshake
+# warm across normal chat gaps and pay the reconnect cost only after minutes
+# of silence. Shorter windows made almost every send open a brand-new
+# connection — a multi-second latency hit on a distant Turso region.
+_POOL_MAX_IDLE_SECONDS = float(os.environ.get("DB_POOL_MAX_IDLE_SECONDS", "300"))
 
 def _get_pool():
     global _POOL

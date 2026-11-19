@@ -326,8 +326,27 @@ def _sweep_chat_rate_limits(conn, now):
         logger.warning("Chat rate-limit sweep failed: %s", e)
 
 
-def check_chat_rate_limit(scope, key, max_requests=25, window_seconds=60):
-    """Allow or reject one request for (scope, key) in a fixed window.
+_CHAT_RATE_UPSERT = """
+    INSERT INTO chat_rate_limits (key, window_start, count) VALUES (?, ?, 1)
+    ON CONFLICT(key) DO UPDATE SET
+        count = CASE
+            WHEN excluded.window_start - chat_rate_limits.window_start >= ?
+            THEN 1 ELSE chat_rate_limits.count + 1 END,
+        window_start = CASE
+            WHEN excluded.window_start - chat_rate_limits.window_start >= ?
+            THEN excluded.window_start ELSE chat_rate_limits.window_start END
+    RETURNING count
+"""
+
+
+def check_chat_rate_limits(entries):
+    """Check several (scope, key, max_requests, window_seconds) budgets at once.
+
+    One UPSERT+RETURNING per budget replaces the old SELECT + write pair, and
+    every budget shares a single commit — the send path used to spend six
+    Turso round-trips on rate limiting alone. Fixed-window semantics are
+    unchanged: the window resets once ``window_seconds`` have elapsed and a
+    request is allowed while the post-increment count is <= max_requests.
 
     Shared across workers through the DB. Fails OPEN if the DB is unavailable:
     a limiter outage must never take chat down (the error is logged).
@@ -337,37 +356,50 @@ def check_chat_rate_limit(scope, key, max_requests=25, window_seconds=60):
     if os.environ.get("DISABLE_RATE_LIMIT") == "1":
         return True
 
-    full_key = f"{scope}:{key}"
     now = int(time.time())
+    allowed = True
     try:
         conn = get_db()
         try:
-            row = conn.execute(
-                "SELECT window_start, count FROM chat_rate_limits WHERE key = ?",
-                (full_key,)
-            ).fetchone()
-            if not row or now - row["window_start"] >= window_seconds:
-                conn.execute(
-                    """INSERT INTO chat_rate_limits (key, window_start, count) VALUES (?, ?, 1)
-                       ON CONFLICT(key) DO UPDATE SET window_start = excluded.window_start, count = 1""",
-                    (full_key, now)
-                )
-                conn.commit()
-                _sweep_chat_rate_limits(conn, now)
-                return True
-            if row["count"] >= max_requests:
-                return False
-            conn.execute(
-                "UPDATE chat_rate_limits SET count = count + 1 WHERE key = ?",
-                (full_key,)
-            )
+            for scope, key, max_requests, window_seconds in entries:
+                # fetchall(), not fetchone(): libsql keeps a RETURNING statement
+                # "in progress" until its rows are exhausted, and commit() then
+                # raises "cannot commit transaction - SQL statements in progress".
+                rows = conn.execute(
+                    _CHAT_RATE_UPSERT,
+                    (f"{scope}:{key}", now, window_seconds, window_seconds)
+                ).fetchall()
+                row = rows[0] if rows else None
+                if not row or row["count"] > max_requests:
+                    allowed = False
             conn.commit()
-            return True
+            _sweep_chat_rate_limits(conn, now)
+            return allowed
         finally:
             conn.close()
     except Exception as e:
         logger.warning("Chat rate limiter unavailable, allowing request: %s", e)
         return True
+
+
+def check_chat_rate_limit(scope, key, max_requests=25, window_seconds=60):
+    """Allow or reject one request for (scope, key) in a fixed window."""
+    return check_chat_rate_limits([(scope, key, max_requests, window_seconds)])
+
+
+def _is_new_chat_account(raw_created_at):
+    """True while a chat account is younger than 24h (stricter send budget)."""
+    try:
+        created_at = datetime.datetime.fromisoformat(
+            str(raw_created_at).replace(' ', 'T').replace('Z', '+00:00')
+        )
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+        return (
+            datetime.datetime.now(datetime.timezone.utc) - created_at
+        ).total_seconds() < 86400
+    except Exception:
+        return False
 
 
 def get_client_ip_address():
@@ -480,7 +512,7 @@ def chat_token_required(f):
             conn = get_db()
             try:
                 row = conn.execute(
-                    "SELECT is_active, min_token_iat FROM chat_users WHERE id = ?",
+                    "SELECT is_active, min_token_iat, created_at FROM chat_users WHERE id = ?",
                     (user_id,)
                 ).fetchone()
             finally:
@@ -499,7 +531,10 @@ def chat_token_required(f):
             'name': payload.get('name', ''),
             'username': payload.get('username', ''),
             'role': payload.get('role', 'user'),
-            'type': payload.get('type', 'official_chat')
+            'type': payload.get('type', 'official_chat'),
+            # Account age drives the stricter new-account send budget. Carried
+            # from the auth row so hot routes never spend an extra query on it.
+            'created_at': row['created_at']
         }
         return f(*args, **kwargs)
     return decorated
@@ -3141,7 +3176,14 @@ def mark_chat_room_read(room_id):
 def send_room_message(room_id):
     """Send a message inside a specific 1-to-1 or group room."""
     my_id = request.chat_user['user_id']
-    if not check_chat_rate_limit("send_message", f"user_{my_id}", max_requests=40, window_seconds=60):
+    is_new_account = _is_new_chat_account(request.chat_user.get('created_at'))
+    # One round-trip (plus one shared commit) for both send budgets instead of
+    # the old SELECT+write+commit per budget — rate limiting was a large slice
+    # of the send latency on remote Turso.
+    budgets = [("send_message", f"user_{my_id}", 40, 60)]
+    if is_new_account:
+        budgets.append(("new_account_send", f"user_{my_id}", 300, 3600))
+    if not check_chat_rate_limits(budgets):
         return error_response("You are sending messages too fast. Please slow down.", 429)
     data = request.get_json(silent=True) or {}
     message_text = (data.get('message') or '').strip()
@@ -3161,48 +3203,52 @@ def send_room_message(room_id):
             return error_response("Access denied to this chat room", 403)
 
         is_group_room = room_dict.get('room_type') == 'group'
+        recipient_id = None
+        if room_dict.get('user_two_id') and not is_group_room:
+            recipient_id = room_dict['user_two_id'] if room_dict['user_id'] == my_id else room_dict['user_id']
 
         # Safety: direct messages require BOTH an accepted friendship and no
         # block in either direction. Group access is enforced by membership
-        # above and deliberately skips the 1-to-1 friendship gate.
-        if room_dict.get('user_two_id') and not is_group_room:
-            other_id = room_dict['user_two_id'] if room_dict['user_id'] == my_id else room_dict['user_id']
-            if chat_block_exists(cursor, my_id, other_id):
+        # above and deliberately skips the 1-to-1 friendship gate. The safety
+        # flags and both profiles come back in one statement — this used to be
+        # three sequential round-trips on every send.
+        cursor.execute(
+            """SELECT
+                 EXISTS(SELECT 1 FROM chat_blocks
+                        WHERE (blocker_id = ? AND blocked_id = ?)
+                           OR (blocker_id = ? AND blocked_id = ?)) AS blocked,
+                 EXISTS(SELECT 1 FROM official_chat_friend_requests
+                        WHERE ((sender_id = ? AND receiver_id = ?)
+                            OR (sender_id = ? AND receiver_id = ?))
+                          AND status = 'accepted') AS friends,
+                 me.name AS my_name,
+                 me.username AS my_username,
+                 me.public_key AS my_pubkey,
+                 peer.public_key AS peer_pubkey
+               FROM chat_users me
+               LEFT JOIN chat_users peer ON peer.id = ?
+               WHERE me.id = ?""",
+            (my_id, recipient_id, recipient_id, my_id,
+             my_id, recipient_id, recipient_id, my_id,
+             recipient_id, my_id)
+        )
+        profile_row = cursor.fetchone()
+        if recipient_id:
+            if profile_row and profile_row['blocked']:
                 return error_response(
                     "You can't message this user. Unblock or ask them to unblock you.",
                     403
                 )
-            if not chat_friendship_accepted(cursor, my_id, other_id):
+            if not profile_row or not profile_row['friends']:
                 return error_response(
                     "You can only message someone after they accept your friend request.",
                     403
                 )
 
-        # Sender profile and spam protection for fresh accounts (single consolidated query)
-        cursor.execute("SELECT name, username, created_at, public_key FROM chat_users WHERE id = ?", (my_id,))
-        me = cursor.fetchone()
-        my_name = me['name'] if me and me['name'] else 'Friend'
-        my_username = me['username'] if me and me['username'] else f"user_{my_id}"
-        my_pubkey = me['public_key'] if me and me['public_key'] else None
-
-        try:
-            created_at = datetime.datetime.fromisoformat(
-                str(me['created_at']).replace(' ', 'T').replace('Z', '+00:00')
-            )
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=datetime.timezone.utc)
-            is_new_account = (
-                datetime.datetime.now(datetime.timezone.utc) - created_at
-            ).total_seconds() < 86400
-        except Exception:
-            is_new_account = False
-        if is_new_account and not check_chat_rate_limit(
-            "new_account_send", f"user_{my_id}", max_requests=300, window_seconds=3600
-        ):
-            return error_response(
-                "You are sending messages too quickly. Please try again later.",
-                429
-            )
+        my_name = profile_row['my_name'] if profile_row and profile_row['my_name'] else 'Friend'
+        my_username = profile_row['my_username'] if profile_row and profile_row['my_username'] else f"user_{my_id}"
+        my_pubkey = profile_row['my_pubkey'] if profile_row and profile_row['my_pubkey'] else None
+        peer_pubkey = profile_row['peer_pubkey'] if profile_row and profile_row['peer_pubkey'] else None
 
         e2e_sec = room_dict.get('e2e_secret')
         if not e2e_sec:
@@ -3226,11 +3272,16 @@ def send_room_message(room_id):
             if not cursor.fetchone():
                 return error_response("Reply target not found in this chat", 400)
 
+        # Build the response row from known values instead of SELECT-ing the
+        # row back: one less Turso round-trip on every send, identical shape.
+        now_ts = int(time.time())
+        created_at_value = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        stored_message = message_text or "Sent an attachment"
         cursor.execute(
             """INSERT INTO official_chat_messages 
-               (room_id, user_id, sender_type, sender_name, message, media_url, message_type, is_read, username, reply_to_id, updated_at)
-               VALUES (?, ?, 'user', ?, ?, ?, ?, 0, ?, ?, ?)""",
-            (room_id, my_id, my_name, message_text or "Sent an attachment", media_url, message_type, my_username, reply_to_id, int(time.time()))
+               (room_id, user_id, sender_type, sender_name, message, media_url, message_type, is_read, username, reply_to_id, updated_at, created_at)
+               VALUES (?, ?, 'user', ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
+            (room_id, my_id, my_name, stored_message, media_url, message_type, my_username, reply_to_id, now_ts, created_at_value)
         )
         new_msg_id = cursor.lastrowid
 
@@ -3251,15 +3302,9 @@ def send_room_message(room_id):
             (preview or "Attachment", room_id)
         )
 
-        # Notify recipient in direct chat and resolve peer public key
-        recipient_id = None
-        peer_pubkey = None
-        if room_dict.get('user_two_id'):
-            recipient_id = room_dict['user_two_id'] if room_dict['user_id'] == my_id else room_dict['user_id']
-            cursor.execute("SELECT public_key FROM chat_users WHERE id = ?", (recipient_id,))
-            peer_row = cursor.fetchone()
-            if peer_row and peer_row['public_key']:
-                peer_pubkey = peer_row['public_key']
+        # Notify recipient in direct chat (peer public key was fetched with
+        # the sender profile above — no extra round-trip here).
+        if recipient_id:
             cursor.execute(
                 """INSERT INTO official_chat_notifications (user_id, room_id, title, message)
                    VALUES (?, ?, ?, ?)""",
@@ -3292,37 +3337,47 @@ def send_room_message(room_id):
 
         # Return ONLY the message just created. Sending used to reply with the
         # whole room history, so each send re-downloaded the conversation.
-        cursor.execute(
-            f"""SELECT {CHAT_MESSAGE_COLUMNS} FROM official_chat_messages WHERE id = ?""",
-            (new_msg_id,)
-        )
-        row = cursor.fetchone()
-        created = dict(row) if row else None
-        if created:
-            created['reactions'] = []
-            created['sender_public_key'] = my_pubkey
-            created['recipient_public_key'] = peer_pubkey
-            created['contact_public_key'] = peer_pubkey
-            created['e2e_secret'] = e2e_sec if message_text.startswith('enc:v1:') else None
-            _sanitize_chat_message(created)
+        created = {
+            'id': new_msg_id,
+            'room_id': room_id,
+            'user_id': my_id,
+            'sender_type': 'user',
+            'sender_name': my_name,
+            'message': stored_message,
+            'media_url': media_url,
+            'message_type': message_type,
+            'is_read': 0,
+            'created_at': created_at_value,
+            'username': my_username,
+            'reply_to_id': reply_to_id,
+            'deleted': 0,
+            'edited_at': None,
+            'updated_at': now_ts,
+        }
+        created['reactions'] = []
+        created['sender_public_key'] = my_pubkey
+        created['recipient_public_key'] = peer_pubkey
+        created['contact_public_key'] = peer_pubkey
+        created['e2e_secret'] = e2e_sec if message_text.startswith('enc:v1:') else None
+        _sanitize_chat_message(created)
 
-            # Instant Server-Side Realtime Broadcast via Supabase (<30ms)
-            # Guarantees recipient receives message immediately even if sender's client socket was sleeping
-            broadcast_items = [
-                (f"chat_room_{room_id}", "new_message", created)
-            ]
-            if recipient_id:
-                broadcast_items.append((
-                    f"chat_user_{recipient_id}",
-                    "incoming_chat",
-                    {
-                        "room_id": room_id,
-                        "sender_id": my_id,
-                        "message_id": new_msg_id
-                    }
-                ))
-            broadcast_supabase_chat_event(broadcast_items)
-        return success_response([created] if created else [], "Message sent")
+        # Instant Server-Side Realtime Broadcast via Supabase (<30ms)
+        # Guarantees recipient receives message immediately even if sender's client socket was sleeping
+        broadcast_items = [
+            (f"chat_room_{room_id}", "new_message", created)
+        ]
+        if recipient_id:
+            broadcast_items.append((
+                f"chat_user_{recipient_id}",
+                "incoming_chat",
+                {
+                    "room_id": room_id,
+                    "sender_id": my_id,
+                    "message_id": new_msg_id
+                }
+            ))
+        broadcast_supabase_chat_event(broadcast_items)
+        return success_response([created], "Message sent")
     finally:
         conn.close()
 
