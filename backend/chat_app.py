@@ -270,7 +270,17 @@ def close_request_db(exception=None):
     conn = g.pop("_jdlx_request_db", None)
     if conn is not None:
         try:
-            conn.close()
+            # The request wrapper's close() is a deliberate no-op (routes call
+            # it in their own ``finally`` blocks). Only ``_hard_close()``
+            # actually releases the underlying connection, which is what puts
+            # it back in the Unix pool for reuse. Calling close() here instead
+            # leaked every connection: each request paid a fresh Turso
+            # handshake and old connections were never closed.
+            hard_close = getattr(conn, "_hard_close", None)
+            if hard_close is not None:
+                hard_close()
+            else:
+                conn.close()
         except Exception:
             pass
 

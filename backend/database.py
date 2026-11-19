@@ -333,7 +333,7 @@ class _RequestScopedConnection:
     handler); sharing ONE connection per request instead of opening two saves a
     full connect round-trip on every request (a remote handshake on Turso).
     ``close()`` becomes a no-op and ``_hard_close()`` is invoked by
-    ``teardown_appcontext`` in app.py.
+    ``teardown_appcontext`` in chat_app.py.
 
     Outside a Flask app context (scripts, migrations, scheduler jobs, background
     threads) ``get_db`` keeps its original behavior: a fresh connection that
