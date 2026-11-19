@@ -1,9 +1,9 @@
 // Official Chat — API configuration.
 // The chat frontend is deployed on its OWN origin (e.g. chat.jdlxmobile.in).
-// The backend lives on Render; chat identity (chat_users) and chat data are
+// The backend lives on Railway; chat identity (chat_users) and chat data are
 // fully separate from the JDLX storefront. Chat has NO links back to the store.
-const DEFAULT_PROD_BACKEND_URL = 'https://jdlx-chat.onrender.com/api'
-const DEFAULT_PROD_BACKEND_ORIGIN = 'https://jdlx-chat.onrender.com'
+const DEFAULT_PROD_BACKEND_URL = 'https://jdlx-chat-production.up.railway.app/api'
+const DEFAULT_PROD_BACKEND_ORIGIN = 'https://jdlx-chat-production.up.railway.app'
 
 const CONFIGURED_CHAT_API_URL = (
   import.meta.env.VITE_CHAT_API_BASE_URL ||
@@ -15,7 +15,8 @@ export function isCapacitorNative() {
   return typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.())
 }
 
-// The standalone chat service (jdlx-chat.onrender.com) is the default backend.
+// The standalone chat service (jdlx-chat-production.up.railway.app) is the
+// default backend.
 // VITE_CHAT_API_BASE_URL in .env overrides it for dev or custom deployments.
 export const API_BASE_URL = (
   CONFIGURED_CHAT_API_URL || DEFAULT_PROD_BACKEND_URL
