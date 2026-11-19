@@ -313,7 +313,21 @@ def payload_too_large(_error):
 @app.errorhandler(500)
 def internal_error(error):
     logger.exception("Unhandled chat service error: %s", error)
-    return jsonify({"success": False, "message": "Internal server error"}), 500
+    # TEMPORARY diagnostics: an intermittent 500 on message send could not be
+    # traced without runtime logs, so the response names the exception class
+    # (and a short text in ``detail``). No user data or credentials are added —
+    # remove once the failing exception is identified.
+    original = getattr(error, "original_exception", None) or error
+    error_class = type(original).__name__
+    try:
+        detail = str(original)[:180]
+    except Exception:
+        detail = ""
+    return jsonify({
+        "success": False,
+        "message": f"Internal server error [{error_class}]",
+        "detail": detail,
+    }), 500
 
 
 if __name__ == "__main__":
