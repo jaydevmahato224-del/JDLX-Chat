@@ -176,22 +176,15 @@ class LibsqlConnectionWrapper:
             return
         self._in_pool = True
         if self._discarded:
-            _destroy_raw_connection(self)
+            _destroy_raw_connection_async(self)
             return
-        # Clear any open transaction before pooling. Previously a connection
-        # was destroyed on close, which implicitly discarded uncommitted
-        # writes; a pooled connection must do that explicitly so an
-        # uncommitted rollback path can never leak into the next request.
-        # Pristine connections (nothing ever executed) skip this entirely.
+        # A connection with an uncommitted write is never pooled: dropping it
+        # aborts the transaction server-side, exactly like the rollback this
+        # used to run inline. The inline rollback was another network call in
+        # the request path that could stall forever on a dead stream.
         if self._dirty:
-            try:
-                self._conn.rollback()
-            except Exception:
-                _destroy_raw_connection(self)
-                return
-            # Reset so the next borrower's release doesn't repeat the
-            # rollback round-trip for work it never did.
-            self._dirty = False
+            _destroy_raw_connection_async(self)
+            return
         _release_connection(self)
     def sync(self):
         if hasattr(self._conn, 'sync'): self._conn.sync()
@@ -235,6 +228,43 @@ def _destroy_raw_connection(conn):
     except Exception:
         pass
 
+
+# Closing a remote Turso connection is a network round-trip and libsql has no
+# close timeout: a dead/stalled stream can block the caller forever. It used to
+# run inside the request (release path and ``close()``), so a handful of stalled
+# closes consumed every gunicorn thread and the whole chat stopped answering
+# (TCP/TLS connected, no HTTP response) until the container was restarted.
+# Destroys therefore run on throwaway daemon threads; a stuck close now costs one
+# background thread instead of a request slot.
+_DESTROY_THREADS = 0
+_DESTROY_LOCK = threading.Lock()
+_MAX_DESTROY_THREADS = 8
+
+
+def _destroy_raw_connection_async(conn):
+    global _DESTROY_THREADS
+    with _DESTROY_LOCK:
+        if _DESTROY_THREADS >= _MAX_DESTROY_THREADS:
+            # Every slot is already stuck closing something. Drop this object
+            # instead of spawning another stuck thread; the server expires the
+            # abandoned stream on its own.
+            return
+        _DESTROY_THREADS += 1
+
+    def _run():
+        global _DESTROY_THREADS
+        try:
+            _destroy_raw_connection(conn)
+        finally:
+            with _DESTROY_LOCK:
+                _DESTROY_THREADS -= 1
+
+    try:
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        with _DESTROY_LOCK:
+            _DESTROY_THREADS -= 1
+
 def _create_turso_connection():
     max_retries = 3
     for attempt in range(max_retries):
@@ -266,12 +296,12 @@ def _acquire_connection():
         # first execute (random one-off 500). Re-handshake instead — same as
         # the pre-pool behavior for quiet periods.
         if time.monotonic() - getattr(conn, "_released_at", 0.0) > _POOL_MAX_IDLE_SECONDS:
-            _destroy_raw_connection(conn)
+            _destroy_raw_connection_async(conn)
             continue
         if not conn._discarded:
             return conn
         # A stale/unhealthy entry somehow sitting in the pool — drop it.
-        _destroy_raw_connection(conn)
+        _destroy_raw_connection_async(conn)
 
 def _release_connection(conn):
     """Returns a healthy remote connection to the pool, trimming idle excess."""
@@ -294,9 +324,9 @@ def _release_connection(conn):
     # to block every other request's release, which surfaced as messages
     # "Timed out after 35s" across the whole app.
     for victim in victims:
-        _destroy_raw_connection(victim)
+        _destroy_raw_connection_async(victim)
     if overflow:
-        _destroy_raw_connection(conn)
+        _destroy_raw_connection_async(conn)
 
 if not FORCE_LOCAL_DB and TURSO_URL and TURSO_TOKEN:
     try:
