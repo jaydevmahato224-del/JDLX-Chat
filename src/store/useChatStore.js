@@ -3002,8 +3002,11 @@ export const useChatStore = create((set, get) => ({
       })
       clearTimeout(timeoutId)
 
-      const json = await res.json()
-      if (res.ok && json.success) {
+      // A non-JSON error body (Railway 502 HTML, proxy page) must not mask the
+      // HTTP status: keep the status in the thrown error so the failed bubble
+      // can show what actually happened.
+      const json = await res.json().catch(() => null)
+      if (res.ok && json?.success) {
         const rawMsgs = json.data || []
         const decryptedMsgs = await Promise.all(
           rawMsgs.map((m) => decryptStoredMessage(
@@ -3076,11 +3079,19 @@ export const useChatStore = create((set, get) => ({
 
         return { success: true }
       } else {
-        throw new Error(json.message || 'Failed to send message')
+        const sendError = new Error(
+          json?.message || json?.error || `Send failed (HTTP ${res.status})`
+        )
+        sendError.httpStatus = res.status
+        throw sendError
       }
     } catch (err) {
       clearTimeout(timeoutId)
       const isTimeout = err?.name === 'AbortError'
+      const failReason = isTimeout
+        ? 'Timed out after 35s'
+        : (err?.httpStatus ? `HTTP ${err.httpStatus}: ${err.message}` : (err?.message || 'Network error'))
+      console.warn('[chat] message send failed', { roomId: targetRoomId, reason: failReason })
 
       // Check if message was ALREADY confirmed via realtime broadcast or inbox sync while HTTP was in flight!
       const currentMsgs = get().messages
@@ -3099,7 +3110,9 @@ export const useChatStore = create((set, get) => ({
       set((state) => ({
         sending: false,
         messages: state.messages.map((m) =>
-          sameId(m.id, tempId) ? { ...m, _pending: false, _failed: true } : m
+          sameId(m.id, tempId)
+            ? { ...m, _pending: false, _failed: true, _failReason: failReason }
+            : m
         )
       }))
       return { success: false, error: isTimeout ? 'Message sending timed out. Please check connection and try again.' : (err?.message || 'Failed to send message') }

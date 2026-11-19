@@ -84,6 +84,11 @@ CORS(
     supports_credentials=True,
     allow_headers=["Authorization", "Content-Type", "X-Requested-With", "Accept"],
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    # Cache the CORS preflight for a day. Without this the browser re-sent an
+    # OPTIONS round-trip before EVERY authenticated call (an extra ~0.5s hop to
+    # Railway from India on every message send), and any hiccup on that
+    # preflight surfaced as a failed send.
+    max_age=86400,
 )
 
 app.register_blueprint(chat_bp)

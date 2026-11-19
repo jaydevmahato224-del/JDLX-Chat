@@ -7536,6 +7536,14 @@ export default function ChatConversation() {
                                               : 'text-zinc-400 font-medium'
                                         }`}
                                       >
+                                        {isUser && m._failed && m._failReason && (
+                                          <span
+                                            className="text-[9px] font-bold text-rose-700/90 truncate max-w-[190px]"
+                                            title={m._failReason}
+                                          >
+                                            {m._failReason}
+                                          </span>
+                                        )}
                                         <span title="Encrypted message (AES-GCM)" className="inline-flex items-center opacity-60">
                                           <Lock className="w-2.5 h-2.5" />
                                         </span>
