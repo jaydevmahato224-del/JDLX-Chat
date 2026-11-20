@@ -6,6 +6,7 @@ import { supabase, setSupabaseRealtimeAuth } from '../utils/supabaseClient'
 import { SUPABASE_PRIVATE_CHANNELS } from '../config'
 import { subscribeToChatPush, unsubscribeFromChatPush } from '../utils/push'
 import { disableChatNativePush } from '../utils/nativePush'
+import { startNativeCallAudio, setNativeSpeaker, stopNativeCallAudio } from '../utils/callAudio'
 import {
   encryptChatMessage,
   decryptChatMessage,
@@ -1485,9 +1486,11 @@ export const useChatStore = create((set, get) => ({
   // Update Profile details (name, username, bio, gender, profile_image)
   updateChatProfile: async ({ name, username, bio, gender, profile_image }) => {
     const token = get().chatToken
-    if (!token) return { success: false, error: 'Not authenticated' }
-
     set({ loading: true })
+    if (!token) {
+      set({ loading: false })
+      return { success: false, error: 'Not authenticated' }
+    }
     try {
       const res = await apiFetch('/chat/profile', {
         method: 'PUT',
@@ -3949,6 +3952,26 @@ export const useChatStore = create((set, get) => ({
     { urls: 'stun:stun1.l.google.com:19302' },
   ],
 
+  // STUN only connects peers that can reach each other directly. The backend
+  // adds a TURN relay when configured, which is what makes calls work on
+  // mobile carrier NAT (the APK especially). Fetched per call so rotated
+  // credentials are honoured; falls back to public STUN on any failure.
+  fetchCallIceServers: async () => {
+    const token = get().chatToken
+    if (!token) return get()._callStunServers
+    try {
+      const res = await apiFetch('/chat/ice-servers', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const json = await res.json().catch(() => null)
+      const servers = json?.data?.ice_servers
+      if (res.ok && Array.isArray(servers) && servers.length) return servers
+    } catch (e) {
+      console.warn('fetch ICE servers error:', e)
+    }
+    return get()._callStunServers
+  },
+
   startCallTimer: () => {
     const state = get()
     if (state.callTimerRef) return
@@ -3966,6 +3989,7 @@ export const useChatStore = create((set, get) => ({
 
   cleanupCallResources: () => {
     const state = get()
+    stopNativeCallAudio()
     get().stopCallTimer()
     if (state.callAbortController) {
       try { state.callAbortController.abort() } catch {}
@@ -4013,7 +4037,10 @@ export const useChatStore = create((set, get) => ({
   },
 
   toggleSpeaker: () => {
-    set((state) => ({ callIsSpeakerOn: !state.callIsSpeakerOn }))
+    const next = !get().callIsSpeakerOn
+    set({ callIsSpeakerOn: next })
+    // Web cannot route output; the APK plugin switches speaker/earpiece.
+    setNativeSpeaker(next)
   },
 
   // Chrome >= M100 emits `a=extmap-allow-mixed`, which Firefox's SDP parser
@@ -4034,19 +4061,30 @@ export const useChatStore = create((set, get) => ({
   },
 
   // Create an RTCPeerConnection with ICE + track handling wired to the store.
-  createCallPeerConnection: (onTrack, onIceCandidate, onStateChange) => {
-    const pc = new RTCPeerConnection({ iceServers: get()._callStunServers })
+  createCallPeerConnection: (onTrack, onIceCandidate, onStateChange, iceServers) => {
+    const pc = new RTCPeerConnection({
+      iceServers: Array.isArray(iceServers) && iceServers.length ? iceServers : get()._callStunServers
+    })
     pc.onicecandidate = (ev) => {
       if (ev.candidate) onIceCandidate(ev.candidate)
     }
     pc.ontrack = (ev) => {
-      const [track] = ev.streams
-      if (track) {
-        const rs = get().callRemoteStream
-        if (!rs || !rs.getAudioTracks().length) {
-          set({ callRemoteStream: new MediaStream([track]) })
-        }
+      // ev.streams[0] is the peer's MediaStream and ev.track the new track.
+      // This used to destructure ev.streams into a variable named `track` and
+      // wrap that MediaStream in `new MediaStream([stream])`, which throws —
+      // so no remote track ever reached callRemoteStream and calls stayed
+      // silent (and video calls never showed the peer).
+      const remoteTrack = ev.track
+      if (!remoteTrack) return
+      let rs = get().callRemoteStream
+      if (!rs) {
+        rs = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream()
+        set({ callRemoteStream: rs })
       }
+      if (!rs.getTracks().some((t) => t.id === remoteTrack.id)) {
+        rs.addTrack(remoteTrack)
+      }
+      if (typeof onTrack === 'function') onTrack(remoteTrack)
     }
     pc.onconnectionstatechange = () => onStateChange(pc.connectionState)
     return pc
@@ -4059,17 +4097,23 @@ export const useChatStore = create((set, get) => ({
     if (!roomId) roomId = activeRoomId
     if (!roomId) return { success: false, error: 'No room' }
 
+    const roomConversation = get().conversations.find((c) => sameId(c.id, roomId))
+    const iceServers = await get().fetchCallIceServers()
+
     let localStream
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: callType === 'video'
+        // Echo cancellation / noise suppression matter enormously on a phone
+        // speaker and Android WebView honours these constraints.
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: callType === 'video' ? { facingMode: 'user' } : false
       })
     } catch (e) {
       console.warn('Microphone access denied:', e)
       return { success: false, error: 'Microphone access denied' }
     }
     set({ callLocalStream: localStream, callIsMuted: false })
+    startNativeCallAudio({ video: callType === 'video', speaker: get().callIsSpeakerOn })
 
     const pc = get().createCallPeerConnection(
       (track) => {
@@ -4094,7 +4138,8 @@ export const useChatStore = create((set, get) => ({
       },
       (state) => {
         if (state === 'failed' || state === 'closed') get().cleanupCallResources()
-      }
+      },
+      iceServers
     )
     set({ callPeerConnection: pc })
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
@@ -4131,10 +4176,13 @@ export const useChatStore = create((set, get) => ({
           callerId: chatUser.id,
           calleeId: null,
           state: 'ringing',
-          startedAt: Date.now()
+          startedAt: Date.now(),
+          peerName: roomConversation?.contact_name || roomConversation?.other_user?.name || null,
+          peerAvatar: roomConversation?.contact_avatar || roomConversation?.other_user?.profile_image || null
         }
       })
-      get().startCallTimer()
+      // The timer starts when the call is actually answered (pollCallState), so
+      // the displayed duration excludes the ringing period.
       get().pollCallState(roomId, true)
       return { success: true }
     } catch (e) {
@@ -4144,19 +4192,27 @@ export const useChatStore = create((set, get) => ({
   },
 
   // Answer an incoming call (callee side).
-  answerCall: async (callId) => {
+  answerCall: async () => {
     const { chatToken, chatUser, activeCall, activeRoomId } = get()
     if (!chatToken || !chatUser) return { success: false, error: 'Not signed in' }
-    const roomId = activeRoomId
+    // The ringing call knows its own room; activeRoomId may be null or a
+    // different conversation now that incoming calls are detected globally.
+    const roomId = activeCall?.roomId || activeRoomId
     if (!roomId) return { success: false, error: 'No room' }
+    const isVideo = activeCall?.callType === 'video'
+    const iceServers = await get().fetchCallIceServers()
 
     let localStream
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: isVideo ? { facingMode: 'user' } : false
+      })
     } catch (e) {
-      return { success: false, error: 'Microphone access denied' }
+      return { success: false, error: isVideo ? 'Camera or microphone access denied' : 'Microphone access denied' }
     }
     set({ callLocalStream: localStream, callIsMuted: false })
+    startNativeCallAudio({ video: isVideo, speaker: get().callIsSpeakerOn })
 
     try {
       const pc = get().createCallPeerConnection(
@@ -4182,7 +4238,8 @@ export const useChatStore = create((set, get) => ({
         },
         (state) => {
           if (state === 'failed' || state === 'closed') get().cleanupCallResources()
-        }
+        },
+        iceServers
       )
       set({ callPeerConnection: pc })
       localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
@@ -4298,6 +4355,8 @@ export const useChatStore = create((set, get) => ({
           set((s) => ({
             activeCall: { ...s.activeCall, state: 'active', calleeId: call.callee_id || s.activeCall?.calleeId }
           }))
+          // Start the duration at answer time, not at offer time.
+          get().startCallTimer()
           // Only the CALLER applies the remote answer: the callee already set
           // this SDP as its LOCAL description when it answered.
           if (call.answer_sdp && isCaller && !answerApplied) {
@@ -4349,8 +4408,7 @@ export const useChatStore = create((set, get) => ({
   // exists after initiateCall runs). Cheap GET poll — the endpoint has no rate
   // limit — and it pauses itself automatically while a call is in progress,
   // resuming (and watching for the NEXT call) once that call ends.
-  startCallWatcher: async (roomId) => {
-    if (!roomId) return
+  startCallWatcher: async () => {
     const prev = get().callWatchAbortController
     if (prev) {
       try { prev.abort() } catch {}
@@ -4360,14 +4418,27 @@ export const useChatStore = create((set, get) => ({
     set({ callWatchAbortController: abort })
 
     while (!abort.signal.aborted) {
-      if (get().activeCall) {
-        // A call is running; its own poller (pollCallState) is in charge.
+      const currentCall = get().activeCall
+      // Skip polling only while an outgoing ring or an active call is running
+      // (their own poller is in charge). A ringing INCOMING call keeps polling
+      // so a caller hang-up dismisses the modal instead of ringing for 45s.
+      const isIncomingRing = currentCall
+        && currentCall.state === 'ringing'
+        && currentCall.callerId !== get().chatUser?.id
+      if (currentCall && !isIncomingRing) {
         await new Promise((r) => setTimeout(r, 2000))
         continue
       }
       if (!get().chatToken) break
+      // Do not hammer the backend while the tab/app is in the background.
+      if (typeof document !== 'undefined' && document.hidden) {
+        await new Promise((r) => setTimeout(r, 5000))
+        continue
+      }
       try {
-        const res = await apiFetch(`/chat/rooms/${roomId}/call/state`, {
+        // Global lookup: a ringing call from ANY chat must surface, not just
+        // one whose conversation happens to be open.
+        const res = await apiFetch('/chat/calls/incoming', {
           headers: { Authorization: `Bearer ${get().chatToken}` },
           signal: abort.signal,
           timeoutMs: 0
@@ -4382,15 +4453,25 @@ export const useChatStore = create((set, get) => ({
         ) {
           set({
             activeCall: {
-              roomId,
+              roomId: call.room_id,
+              callId: call.call_id,
               callType: call.call_type || 'voice',
               callerId: call.caller_id,
-              calleeId: call.callee_id || null,
+              calleeId: call.callee_id || get().chatUser?.id || null,
               state: 'ringing',
               offerSdp: call.offer_sdp || null,
-              startedAt: call.started_at ? new Date(call.started_at).getTime() : Date.now()
+              startedAt: call.started_at ? new Date(call.started_at).getTime() : Date.now(),
+              peerName: call.caller_name || call.caller_username || 'Incoming call',
+              peerAvatar: call.caller_avatar || null
             }
           })
+        } else if (
+          get().activeCall?.state === 'ringing'
+          && get().activeCall?.callerId !== get().chatUser?.id
+          && call.state !== 'ringing'
+        ) {
+          // The caller hung up (or the offer expired) before we answered.
+          get().cleanupCallResources()
         }
         await new Promise((r) => setTimeout(r, 2000))
       } catch (e) {

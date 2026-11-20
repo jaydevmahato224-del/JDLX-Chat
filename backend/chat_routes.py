@@ -5485,6 +5485,92 @@ def _parse_candidates(raw):
         return []
 
 
+@chat_bp.route('/ice-servers', methods=['GET'])
+@chat_token_required
+def chat_ice_servers():
+    """ICE servers for WebRTC calls (STUN + optional TURN relay).
+
+    STUN alone only connects peers that can reach each other directly; mobile
+    carrier NAT and strict corporate networks need a TURN relay. Configure a
+    TURN provider on the backend (TURN_URLS/TURN_USERNAME/TURN_CREDENTIAL, or a
+    complete list via ICE_SERVERS_JSON) and both the web app and the APK pick
+    it up without a rebuild.
+    """
+    servers = []
+
+    raw = (os.getenv('ICE_SERVERS_JSON') or '').strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                servers = [s for s in parsed if isinstance(s, dict) and s.get('urls')]
+        except (ValueError, TypeError):
+            logger.warning('ICE_SERVERS_JSON is not valid JSON; ignoring it')
+
+    if not servers:
+        stun_env = os.getenv('STUN_URLS') or 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302'
+        stun_urls = [u.strip() for u in stun_env.split(',') if u.strip()]
+        servers = [{'urls': u} for u in stun_urls]
+
+        turn_urls = [u.strip() for u in (os.getenv('TURN_URLS') or os.getenv('TURN_URL') or '').split(',') if u.strip()]
+        turn_username = (os.getenv('TURN_USERNAME') or '').strip()
+        turn_credential = (os.getenv('TURN_CREDENTIAL') or os.getenv('TURN_PASSWORD') or '').strip()
+        if turn_urls and turn_username and turn_credential:
+            servers.append({
+                'urls': turn_urls if len(turn_urls) > 1 else turn_urls[0],
+                'username': turn_username,
+                'credential': turn_credential,
+            })
+
+    return success_response({'ice_servers': servers}, 'ICE servers')
+
+
+@chat_bp.route('/calls/incoming', methods=['GET'])
+@chat_token_required
+def chat_incoming_call():
+    """The ringing call waiting for the caller, across every room.
+
+    Without this the callee only learns about a call while that exact room is
+    open (the room-scoped /call/state poll), so calls from any other chat rang
+    nowhere. Polled while the app is open; cheap indexed lookup.
+    """
+    my_id = request.chat_user['user_id']
+    now = int(time.time())
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT c.id, c.room_id, c.caller_id, c.callee_id, c.call_type,
+                      c.offer_sdp, c.started_at,
+                      u.name AS caller_name, u.username AS caller_username,
+                      u.profile_image AS caller_avatar
+               FROM official_chat_calls c
+               LEFT JOIN chat_users u ON u.id = c.caller_id
+               WHERE c.callee_id = ? AND c.state = 'ringing'
+                 AND c.started_at IS NOT NULL AND ? - c.started_at <= 90
+               ORDER BY c.id DESC LIMIT 1""",
+            (my_id, now)
+        )
+        call = cursor.fetchone()
+        if not call:
+            return success_response({"state": "idle"}, "No incoming call")
+        return success_response({
+            "call_id": call['id'],
+            "state": "ringing",
+            "room_id": call['room_id'],
+            "caller_id": call['caller_id'],
+            "callee_id": call['callee_id'],
+            "call_type": call['call_type'] or 'voice',
+            "offer_sdp": call['offer_sdp'],
+            "started_at": call['started_at'],
+            "caller_name": call['caller_name'],
+            "caller_username": call['caller_username'],
+            "caller_avatar": call['caller_avatar'],
+        }, "Incoming call")
+    finally:
+        conn.close()
+
+
 @chat_bp.route('/rooms/<int:room_id>/call/offer', methods=['POST'])
 @chat_token_required
 def chat_call_offer(room_id):

@@ -2185,9 +2185,10 @@ export default function ChatConversation() {
   const dragCounterRef = useRef(0)
 
   // ── EDITABLE PROFILE & LUXURY SETTINGS STATE ──
-  const [profileTab, setProfileTab] = useState('profile') // 'profile' | 'preferences' | 'security'
+  const [profileTab, setProfileTab] = useState('profile') // 'profile' | 'settings' | 'security'
   const [editName, setEditName] = useState('')
   const [editUsername, setEditUsername] = useState('')
+  const [usernameError, setUsernameError] = useState('')
   const [editBio, setEditBio] = useState('')
   const [editGender, setEditGender] = useState('prefer_not_to_say')
   const [isSavingProfile, setIsSavingProfile] = useState(false)
@@ -3490,18 +3491,17 @@ export default function ChatConversation() {
     return () => stopRealtime()
   }, [activeRoomId, mobileView, startRealtime, stopRealtime])
 
-  // 2b-1. Incoming-call watcher for the open room: the callee side learns about
-  // an incoming call this way and IncomingCallModal appears. Runs only while
-  // this screen is mounted with a room open; it pauses itself while a call is
-  // in progress and resumes watching once that call ends.
+  // 2b-1. Incoming-call watcher: polls for a ringing call in ANY of this
+  // user's chats, so a call rings even when its conversation (or no
+  // conversation at all) is open. Pauses itself while a call is in progress.
   useEffect(() => {
-    if (!activeRoomId || !chatUser) {
+    if (!chatUser) {
       stopCallWatcher()
       return undefined
     }
-    startCallWatcher(activeRoomId)
+    startCallWatcher()
     return () => stopCallWatcher()
-  }, [activeRoomId, chatUser?.id, startCallWatcher, stopCallWatcher])
+  }, [chatUser?.id, startCallWatcher, stopCallWatcher])
 
   // 2c. Friend requests & accepts arrive instantly instead of on the next
   // 30-second refresh (the poll below stays only as a safety net).
@@ -6780,7 +6780,10 @@ export default function ChatConversation() {
                   {!activeConversation?.is_group && <button
                     type="button"
                     onClick={async () => {
-                      if (!activeRoomId) return
+                      if (!activeRoomId) {
+                        toast.error('Cannot start voice call: conversation room not available')
+                        return
+                      }
                       triggerHaptic('light')
                       const res = await initiateCall(activeRoomId, 'voice')
                       if (res && res.success === false) {
@@ -6799,7 +6802,10 @@ export default function ChatConversation() {
                   {!activeConversation?.is_group && <button
                     type="button"
                     onClick={async () => {
-                      if (!activeRoomId) return
+                      if (!activeRoomId) {
+                        toast.error('Cannot start video call: conversation room not available')
+                        return
+                      }
                       triggerHaptic('light')
                       const res = await initiateCall(activeRoomId, 'video')
                       if (res && res.success === false) {
@@ -9075,14 +9081,14 @@ export default function ChatConversation() {
                   type="button"
                   onClick={() => {
                     triggerHaptic('light')
-                    setProfileTab(profileTab === 'settings' || profileTab === 'preferences' ? 'profile' : 'settings')
+                    setProfileTab(profileTab === 'profile' ? 'settings' : 'profile')
                   }}
                   className={`p-2 rounded-xl transition-colors cursor-pointer ${
-                    profileTab === 'settings' || profileTab === 'preferences'
-                      ? isLight ? 'bg-amber-100 text-amber-800' : 'bg-yellow-500/20 text-[#facc15]'
-                      : isLight ? 'hover:bg-slate-200 text-slate-500' : 'hover:bg-[#27272a] text-zinc-400 hover:text-white'
+                    profileTab === 'profile'
+                      ? isLight ? 'bg-slate-200 text-slate-500' : 'hover:bg-[#27272a] text-zinc-400 hover:text-white'
+                      : isLight ? 'bg-amber-100 text-amber-800' : 'bg-yellow-500/20 text-[#facc15]'
                   }`}
-                  title={profileTab === 'settings' || profileTab === 'preferences' ? 'Back to Profile' : 'Open Settings'}
+                  title={profileTab === 'profile' ? 'Open Settings' : 'Back to Profile'}
                 >
                   <Settings className="w-5 h-5" />
                 </button>
@@ -9111,7 +9117,7 @@ export default function ChatConversation() {
                 { id: 'settings', label: 'Settings', shortLabel: 'Settings', Icon: Settings },
                 { id: 'security', label: 'Security & Data', shortLabel: 'Security', Icon: ShieldCheck }
               ].map(({ id, label, shortLabel, Icon }) => {
-                const active = profileTab === id || (id === 'settings' && profileTab === 'preferences')
+                const active = profileTab === id
                 return (
                   <button
                     key={id}
@@ -9306,7 +9312,16 @@ export default function ChatConversation() {
                       <input
                         type="text"
                         value={editUsername}
-                        onChange={(e) => setEditUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                        onChange={(e) => {
+                          const raw = e.target.value
+                          const cleaned = raw.toLowerCase().replace(/[^a-z0-9_]/g, '')
+                          setEditUsername(cleaned)
+                          if (cleaned !== raw.toLowerCase()) {
+                            setUsernameError('Only lowercase letters, numbers and underscores are allowed')
+                          } else {
+                            setUsernameError('')
+                          }
+                        }}
                         placeholder="your_handle"
                         maxLength={30}
                         className={`w-full pl-8 pr-4 py-2.5 rounded-2xl border text-sm font-mono font-bold transition-all outline-none ${
@@ -9315,6 +9330,11 @@ export default function ChatConversation() {
                             : 'bg-[#18181b] border-white/[0.07] text-white focus:border-[#facc15] focus:ring-2 focus:ring-yellow-500/20'
                         }`}
                       />
+                      {usernameError && (
+                        <p className={`text-[10px] font-medium mt-0.5 text-rose-500 ${isLight ? '' : 'dark:text-rose-400'}`}>
+                          {usernameError}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -9469,7 +9489,7 @@ export default function ChatConversation() {
               )}
 
               {/* TAB 2: COMPREHENSIVE SETTINGS HUB */}
-              {(profileTab === 'settings' || profileTab === 'preferences') && (
+              {(profileTab === 'settings') && (
                 <div className="space-y-5 animate-in fade-in duration-150">
                   {/* 1. Appearance Theme Selector */}
                   <div className="space-y-2.5">
@@ -12021,7 +12041,12 @@ export default function ChatConversation() {
                       type="button"
                       onClick={async () => {
                         triggerHaptic('light')
-                        const handle = `@${activeConversation.contact_username}`
+                        const username = activeConversation.contact_username
+                        if (!username) {
+                          toast.error('This contact has no username set')
+                          return
+                        }
+                        const handle = `@${username}`
                         const copied = await copyTextToClipboard(handle)
                         if (copied) {
                           setCopiedUsername(true)
@@ -12040,14 +12065,20 @@ export default function ChatConversation() {
                       }`}
                       title="Click to copy handle"
                     >
-                      <span>@{activeConversation.contact_username}</span>
-                      {copiedUsername ? (
+                      {activeConversation.contact_username ? (
                         <>
-                          <Check className="w-3.5 h-3.5 text-emerald-500 animate-in zoom-in duration-200" />
-                          <span className="text-[10px] font-sans font-black text-emerald-500 tracking-tight">Copied!</span>
+                          <span>@{activeConversation.contact_username}</span>
+                          {copiedUsername ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-500 animate-in zoom-in duration-200" />
+                              <span className="text-[10px] font-sans font-black text-emerald-500 tracking-tight">Copied!</span>
+                            </>
+                          ) : (
+                            <Copy className="w-3 h-3 opacity-60" />
+                          )}
                         </>
                       ) : (
-                        <Copy className="w-3 h-3 opacity-60" />
+                        <span className="text-rose-400">No username</span>
                       )}
                     </button>
                   </div>
@@ -12090,7 +12121,10 @@ export default function ChatConversation() {
                 <button
                   type="button"
                   onClick={async () => {
-                    if (!activeRoomId) return
+                    if (!activeRoomId) {
+                      toast.error('Cannot start voice call: conversation room not available')
+                      return
+                    }
                     triggerHaptic('light')
                     setShowContactInfoModal(false)
                     const res = await initiateCall(activeRoomId, 'voice')
@@ -12119,7 +12153,10 @@ export default function ChatConversation() {
                 <button
                   type="button"
                   onClick={async () => {
-                    if (!activeRoomId) return
+                    if (!activeRoomId) {
+                      toast.error('Cannot start video call: conversation room not available')
+                      return
+                    }
                     triggerHaptic('light')
                     setShowContactInfoModal(false)
                     const res = await initiateCall(activeRoomId, 'video')
@@ -13237,7 +13274,9 @@ export default function ChatConversation() {
                   <ShieldCheck className={`w-4.5 h-4.5 ${verifiedContacts[activeConversation.id] ? 'text-emerald-500' : 'text-zinc-400'}`} />
                 </h3>
                 <p className="text-xs text-zinc-400 max-w-xs mx-auto leading-relaxed">
-                  Messages and files with @{activeConversation.contact_username} are cryptographically secured with client-side ECDH keys.
+                  {activeConversation.contact_username
+                    ? `Messages and files with @${activeConversation.contact_username} are cryptographically secured with client-side ECDH keys.`
+                    : 'Messages and files with this contact are cryptographically secured with client-side ECDH keys.'}
                 </p>
               </div>
 

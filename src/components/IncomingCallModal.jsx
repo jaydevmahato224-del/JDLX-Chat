@@ -34,9 +34,13 @@ export default function IncomingCallModal() {
   // CallScreen ("Calling…") instead of an incoming-call prompt for themselves.
   if (activeCall.callerId === chatUser?.id) return null
 
+  // activeConversation may be a different chat (or absent) now that calls are
+  // detected globally; the ringing call carries the caller's name.
   const displayName =
-    activeConversation?.other_user?.name ||
-    activeConversation?.other_user?.username ||
+    activeCall.peerName ||
+    (String(activeConversation?.id) === String(activeCall.roomId)
+      ? activeConversation?.other_user?.name || activeConversation?.other_user?.username
+      : null) ||
     'Incoming Call'
 
   return (
@@ -102,7 +106,7 @@ export default function IncomingCallModal() {
               type="button"
               onClick={async () => {
                 try {
-                  const res = await answerCall(activeCall.callerId)
+                  const res = await answerCall()
                   if (res && !res.success) toast.error(res.error || 'Call failed')
                 } catch (e) {
                   toast.error(e?.message || 'Call failed')

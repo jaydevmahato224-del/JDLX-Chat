@@ -22,6 +22,12 @@ export default function CallScreen() {
   const remoteVideoRef = useRef(null)
   const localVideoRef = useRef(null)
 
+  // The call may belong to a conversation other than the one open behind it
+  // (incoming calls are detected globally), so resolve its own room.
+  const callConversation = useChatStore((state) =>
+    state.conversations.find((c) => String(c.id) === String(activeCall?.roomId))
+  )
+
   const isVideo = activeCall?.callType === 'video'
 
   // Bind remote audio stream so call voice/audio is heard
@@ -54,8 +60,13 @@ export default function CallScreen() {
   if (activeCall.state !== 'active' && !isCallerRinging) return null
 
   const peerName =
+    activeCall?.peerName ||
+    (String(activeConversation?.id) === String(activeCall?.roomId)
+      ? activeConversation?.contact_name || activeConversation?.other_user?.name
+      : null) ||
+    callConversation?.contact_name ||
+    callConversation?.other_user?.name ||
     activeConversation?.other_user?.name ||
-    activeConversation?.other_user?.username ||
     'Call'
 
   const formatTime = (s) => {
@@ -111,6 +122,7 @@ export default function CallScreen() {
                 ref={remoteVideoRef}
                 autoPlay
                 playsInline
+                muted
                 className="w-full h-full rounded-3xl object-cover bg-zinc-900 shadow-2xl border border-white/10"
               />
             ) : (
