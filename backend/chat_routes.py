@@ -11,12 +11,12 @@ import threading
 import urllib.request
 from functools import wraps
 from urllib.parse import urlparse
-from flask import Blueprint, request, jsonify, current_app, send_file, redirect
+from flask import Blueprint, request, jsonify, current_app, send_file, redirect, g
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
-from database import get_db
+from database import get_db, is_transient_db_error
 from jwt_config import get_jwt_secret
 from media_signing import signed_media_url
 from utils.response_utils import success_response, error_response
@@ -3326,21 +3326,54 @@ def mark_chat_room_read(room_id):
 @chat_bp.route('/rooms/<int:room_id>/messages', methods=['POST'])
 @chat_token_required
 def send_room_message(room_id):
+    """Send a message, retrying once after a transient remote-DB failure.
+
+    Turso can drop a stream after the message write but before/while the
+    response is produced. The client sees a 500 or its 35s timeout and retries;
+    without an idempotency key that produced duplicate bubbles. The retry is
+    only safe when the client supplied ``client_message_id`` (all current
+    builds do), because the implementation returns the already-committed row
+    instead of inserting it again.
+    """
+    try:
+        return _send_room_message_impl(room_id)
+    except Exception as exc:
+        data = request.get_json(silent=True) or {}
+        client_message_id = str(data.get('client_message_id') or '').strip()
+        if not client_message_id or not is_transient_db_error(exc):
+            raise
+        logger.warning("Retrying message send after transient DB error: %s", exc)
+        # The request-scoped wrapper may hold the dead/dirty stream. Hard-close
+        # it and drop the cache so the retry opens a brand-new connection.
+        try:
+            stale = g.pop('_jdlx_request_db', None)
+            if stale is not None:
+                stale._hard_close()
+        except Exception:
+            pass
+        g._jdlx_send_retried = True
+        return _send_room_message_impl(room_id)
+
+
+def _send_room_message_impl(room_id):
     """Send a message inside a specific 1-to-1 or group room."""
     my_id = request.chat_user['user_id']
     is_new_account = _is_new_chat_account(request.chat_user.get('created_at'))
     # One round-trip (plus one shared commit) for both send budgets instead of
     # the old SELECT+write+commit per budget — rate limiting was a large slice
-    # of the send latency on remote Turso.
-    budgets = [("send_message", f"user_{my_id}", 40, 60)]
-    if is_new_account:
-        budgets.append(("new_account_send", f"user_{my_id}", 300, 3600))
-    if not check_chat_rate_limits(budgets):
-        return error_response("You are sending messages too fast. Please slow down.", 429)
+    # of the send latency on remote Turso. A retry must not consume a second
+    # budget for the same logical message.
+    if not getattr(g, '_jdlx_send_retried', False):
+        budgets = [("send_message", f"user_{my_id}", 40, 60)]
+        if is_new_account:
+            budgets.append(("new_account_send", f"user_{my_id}", 300, 3600))
+        if not check_chat_rate_limits(budgets):
+            return error_response("You are sending messages too fast. Please slow down.", 429)
     data = request.get_json(silent=True) or {}
     message_text = (data.get('message') or '').strip()
     media_url = data.get('media_url')
     message_type = data.get('message_type', 'text')
+    client_message_id = str(data.get('client_message_id') or '').strip()[:128]
 
     if not message_text and not media_url:
         return error_response("Message text or media is required", 400)
@@ -3409,6 +3442,35 @@ def send_room_message(room_id):
             conn.commit()
             room_dict['e2e_secret'] = e2e_sec
 
+        def existing_send_response(row):
+            """Return a previously committed send for the same client key."""
+            created = dict(row)
+            _sanitize_chat_message(created)
+            created['reactions'] = []
+            created['sender_public_key'] = my_pubkey
+            created['recipient_public_key'] = peer_pubkey
+            created['contact_public_key'] = peer_pubkey
+            created['e2e_secret'] = (
+                e2e_sec if str(created.get('message') or '').startswith('enc:v1:') else None
+            )
+            return success_response([created], "Message already sent")
+
+        # Idempotency: a client retry (500/timeout/network drop) must return the
+        # message already written instead of inserting a second bubble.
+        if client_message_id:
+            cursor.execute(
+                """SELECT id, room_id, user_id, sender_type, sender_name, message,
+                          media_url, message_type, is_read, created_at, username,
+                          reply_to_id, deleted, edited_at, updated_at, client_message_id
+                   FROM official_chat_messages
+                   WHERE room_id = ? AND user_id = ? AND client_message_id = ?
+                   LIMIT 1""",
+                (room_id, my_id, client_message_id)
+            )
+            already_sent = cursor.fetchone()
+            if already_sent:
+                return existing_send_response(already_sent)
+
         # Insert user message
         # Reply/quote target must belong to this same room.
         reply_to_id = data.get('reply_to_id')
@@ -3429,13 +3491,36 @@ def send_room_message(room_id):
         now_ts = int(time.time())
         created_at_value = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         stored_message = message_text or "Sent an attachment"
-        cursor.execute(
+        # fetchall(), not fetchone(): libsql leaves a RETURNING statement
+        # "in progress" until its rows are exhausted, and the later commit()
+        # then fails with "SQL statements in progress" (a 500 on send).
+        inserted_rows = cursor.execute(
             """INSERT INTO official_chat_messages 
-               (room_id, user_id, sender_type, sender_name, message, media_url, message_type, is_read, username, reply_to_id, updated_at, created_at)
-               VALUES (?, ?, 'user', ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
-            (room_id, my_id, my_name, stored_message, media_url, message_type, my_username, reply_to_id, now_ts, created_at_value)
-        )
-        new_msg_id = cursor.lastrowid
+               (room_id, user_id, sender_type, sender_name, message, media_url, message_type, is_read, username, reply_to_id, updated_at, created_at, client_message_id)
+               VALUES (?, ?, 'user', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+               ON CONFLICT(room_id, user_id, client_message_id) DO NOTHING
+               RETURNING id""",
+            (room_id, my_id, my_name, stored_message, media_url, message_type, my_username, reply_to_id, now_ts, created_at_value, client_message_id or None)
+        ).fetchall()
+        inserted = inserted_rows[0] if inserted_rows else None
+        if not inserted:
+            # A concurrent retry won the unique-key race: return its row and
+            # skip the room bump/notifications/pushes for this attempt.
+            if client_message_id:
+                cursor.execute(
+                    """SELECT id, room_id, user_id, sender_type, sender_name, message,
+                              media_url, message_type, is_read, created_at, username,
+                              reply_to_id, deleted, edited_at, updated_at, client_message_id
+                       FROM official_chat_messages
+                       WHERE room_id = ? AND user_id = ? AND client_message_id = ?
+                       LIMIT 1""",
+                    (room_id, my_id, client_message_id)
+                )
+                already_sent = cursor.fetchone()
+                if already_sent:
+                    return existing_send_response(already_sent)
+            return error_response("Message could not be saved", 500)
+        new_msg_id = inserted['id'] if hasattr(inserted, 'keys') else inserted[0]
 
         is_encrypted = message_text.startswith(('enc:v1:', 'enc:v2:'))
         if is_encrypted:
@@ -3530,6 +3615,7 @@ def send_room_message(room_id):
             'deleted': 0,
             'edited_at': None,
             'updated_at': now_ts,
+            'client_message_id': client_message_id or None,
         }
         created['reactions'] = []
         created['sender_public_key'] = my_pubkey
@@ -5631,8 +5717,35 @@ def chat_call_offer(room_id):
                VALUES (?, ?, ?, ?, 'ringing', ?, '[]', ?)""",
             (room_id, my_id, other_id, call_type, offer_sdp, now)
         )
+        call_id = cursor.lastrowid
+        cursor.execute(
+            "SELECT name, username FROM chat_users WHERE id = ?", (my_id,)
+        )
+        caller = cursor.fetchone()
+        caller_name = ''
+        if caller:
+            caller_name = str(caller['name'] or caller['username'] or '').strip()
         conn.commit()
-        return success_response({"call_type": call_type, "state": "ringing"}, "Call offered")
+
+        # Wake the callee's phone even when the app is backgrounded or killed.
+        # Best-effort and off the request thread: a push failure must never
+        # fail or delay the call offer itself.
+        try:
+            import threading
+            from notifications.notification_service import send_chat_call_push
+
+            threading.Thread(
+                target=send_chat_call_push,
+                args=(other_id, call_id, room_id, call_type, caller_name or 'Someone'),
+                daemon=True,
+            ).start()
+        except Exception as push_err:
+            logger.warning("Call push dispatch failed for %s: %s", other_id, push_err)
+
+        return success_response(
+            {"call_id": call_id, "call_type": call_type, "state": "ringing"},
+            "Call offered"
+        )
     finally:
         conn.close()
 

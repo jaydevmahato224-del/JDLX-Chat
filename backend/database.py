@@ -120,6 +120,8 @@ _TRANSIENT_CONNECTION_MARKERS = (
     "database busy",
     "databasebusy",
     "databaselocked",
+    "statements in progress",
+    "cannot commit transaction",
     "network",
     # Turso itself is briefly unavailable / rate limiting. A single immediate
     # replay after reconnecting is enough; the DB layer never loops.
@@ -140,6 +142,11 @@ _NON_TRANSIENT_ERROR_MARKERS = (
     "readonly",
     "read-only",
 )
+
+
+def is_transient_db_error(error):
+    """Public wrapper used by routes that can safely replay a transaction."""
+    return _is_transient_connection_error(error)
 
 
 def _is_transient_connection_error(error):
@@ -2037,8 +2044,15 @@ def init_db():
         ('deleted', 'INTEGER DEFAULT 0'),
         ('edited_at', 'TIMESTAMP'),
         ('updated_at', 'INTEGER DEFAULT 0'),
+        # Client-generated idempotency key: a timed-out send that is retried
+        # must not create a duplicate bubble. Unique per sender per room.
+        ('client_message_id', 'TEXT'),
     ])
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_msg_room_id ON official_chat_messages(room_id, id DESC)')
+    cursor.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_msg_client_id '
+        'ON official_chat_messages(room_id, user_id, client_message_id)'
+    )
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_msg_unread ON official_chat_messages(room_id, user_id, is_read)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_rooms_user ON official_chat_rooms(user_id, user_two_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_rooms_group ON official_chat_rooms(room_type, status)')

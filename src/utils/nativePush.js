@@ -160,6 +160,13 @@ export async function initChatNativePush() {
         console.warn('[chat push] FCM registration failed:', err)
       }),
       await PushNotifications.addListener('pushNotificationReceived', (notification) => {
+        const data = notification?.data || {}
+        if (data.type === 'incoming_call') {
+          // The in-app call watcher already opens the ringing modal; a toast on
+          // top of it would be noise.
+          window.dispatchEvent(new CustomEvent('jdlx:incoming-call-push', { detail: data }))
+          return
+        }
         const title = notification?.title || 'JDLX Chat'
         const body = notification?.body || ''
         if (body) toast(`${title}: ${body}`, { duration: 5000 })
@@ -186,6 +193,16 @@ export async function initChatNativePush() {
           importance: 5, // IMPORTANCE_HIGH
           visibility: 1, // VISIBILITY_PUBLIC
           vibration: true
+        })
+        await PushNotifications.createChannel({
+          id: 'incoming_call',
+          name: 'Incoming calls',
+          description: 'Voice and video call alerts',
+          importance: 5, // IMPORTANCE_HIGH: heads-up + sound
+          visibility: 1, // VISIBILITY_PUBLIC (show caller on lock screen)
+          vibration: true,
+          lights: true,
+          lightColor: '#22c55e'
         })
       } catch (err) {
         console.warn('[chat push] could not create notification channel:', err)

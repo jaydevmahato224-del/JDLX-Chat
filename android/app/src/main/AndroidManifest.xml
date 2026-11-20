@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -31,7 +32,45 @@
                 <data android:scheme="jdlxchat" android:host="auth" />
             </intent-filter>
 
+            <!-- Answer/Decline from the native incoming-call screen. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="jdlxchat" android:host="call" />
+            </intent-filter>
+
         </activity>
+
+        <!-- Full-screen call UI, shown over the lock screen when the app is not
+             in the foreground. -->
+        <activity
+            android:name=".IncomingCallActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/AppTheme.NoActionBar" />
+
+        <receiver
+            android:name=".CallActionReceiver"
+            android:exported="false" />
+
+        <!-- Capacitor's messaging service is replaced by our subclass so call
+             data messages can open the native screen while normal messages
+             keep their existing behaviour. -->
+        <service
+            android:name="com.capacitorjs.plugins.pushnotifications.MessagingService"
+            tools:node="remove" />
+
+        <service
+            android:name=".CallMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -57,6 +96,10 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <!-- Android 13+ runtime permission for FCM notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 14+ full-screen incoming-call screen. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Android 14+ screen-capture detection for the screenshot alert system. -->
     <uses-permission android:name="android.permission.DETECT_SCREEN_CAPTURE" />
 </manifest>

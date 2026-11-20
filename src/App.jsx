@@ -4,6 +4,8 @@ import { Toaster } from 'react-hot-toast'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from './store/useChatStore'
 import { initChatNativePush, syncChatPushToken } from './utils/nativePush'
+import { configureNativeCalls, clearNativeCalls } from './utils/callNative'
+import { API_BASE_URL, isCapacitorNative } from './config'
 
 // Route-level code splitting: the login screen no longer downloads the ~10k-line
 // chat screen (and QRCode/emoji/lightbox code) before the user is authenticated.
@@ -46,6 +48,17 @@ function App() {
     })
     return () => { cancelled = true }
   }, [chatToken, chatUser?.id])
+
+  // The native incoming-call screen can answer/decline while the WebView is
+  // dead, so keep the current token and API base available on the native side.
+  useEffect(() => {
+    if (!isCapacitorNative()) return
+    if (chatToken) {
+      configureNativeCalls({ token: chatToken, apiBaseUrl: API_BASE_URL })
+    } else {
+      clearNativeCalls()
+    }
+  }, [chatToken])
 
   // Follow the OS appearance while the saved preference is "system".
   useEffect(() => {

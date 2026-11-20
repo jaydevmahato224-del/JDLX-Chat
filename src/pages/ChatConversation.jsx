@@ -1125,6 +1125,7 @@ export default function ChatConversation() {
     activeCall,
     initiateCall,
     answerCall,
+    handleCallDeepLink,
     endCall,
     startCallWatcher,
     stopCallWatcher,
@@ -3802,6 +3803,48 @@ export default function ChatConversation() {
     }
   }, [])
 
+  // Native incoming-call screen / notification action deep link:
+  // jdlxchat://call/<call_id>?action=answer|decline
+  useEffect(() => {
+    if (!isCapacitorNative()) return undefined
+    let active = true
+    let listener = null
+
+    const handleUrl = (rawUrl) => {
+      if (!rawUrl) return
+      try {
+        const parsed = new URL(rawUrl)
+        if (parsed.protocol !== 'jdlxchat:' || parsed.hostname !== 'call') return
+        const callId = parsed.pathname.replace(/^\/+/, '')
+        const action = parsed.searchParams.get('action') === 'decline' ? 'decline' : 'answer'
+        handleCallDeepLink(callId, action).catch(() => {})
+      } catch {
+        /* malformed deep link */
+      }
+    }
+
+    ;(async () => {
+      try {
+        const { App } = await import('@capacitor/app')
+        const sub = await App.addListener('appUrlOpen', ({ url }) => handleUrl(url))
+        if (!active) {
+          sub.remove().catch(() => {})
+          return
+        }
+        listener = sub
+        const launch = await App.getLaunchUrl().catch(() => null)
+        if (launch?.url) handleUrl(launch.url)
+      } catch (e) {
+        console.warn('Call deep link handler unavailable:', e)
+      }
+    })()
+
+    return () => {
+      active = false
+      if (listener) listener.remove().catch(() => {})
+    }
+  }, [handleCallDeepLink])
+
   // 5. Select a conversation thread
   const handleSelectConversation = (conv) => {
     if (!conv) return
@@ -3896,15 +3939,15 @@ export default function ChatConversation() {
 
   const handleRetryMessage = async (failedMsg) => {
     if (!failedMsg || !activeRoomId) return
-    useChatStore.setState((state) => ({
-      messages: state.messages.filter((m) => !sameId(m.id, failedMsg.id))
-    }))
+    // Keep the same optimistic bubble (and its _clientId) so the backend
+    // deduplicates a send that actually committed before the timeout/500.
     await sendRoomMessage(
       activeRoomId,
       failedMsg.message,
       failedMsg.media_url,
       failedMsg.message_type,
-      failedMsg.reply_to_id
+      failedMsg.reply_to_id,
+      failedMsg.id
     )
   }
 

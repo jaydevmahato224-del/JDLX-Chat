@@ -365,27 +365,58 @@ class FcmTokenInvalid(Exception):
     """The provider rejected the device token; it should be deleted."""
 
 
-def _send_fcm_message(service_account, project_id, token, title, body, url='/chat', channel_id='chat'):
-    """POST one FCM HTTP v1 message. Returns True when accepted."""
+def _send_fcm_message(
+    service_account,
+    project_id,
+    token,
+    title,
+    body,
+    url='/chat',
+    channel_id='chat',
+    data=None,
+    ttl=None,
+    notification_priority='default',
+    tag=None,
+    include_notification=True,
+):
+    """POST one FCM HTTP v1 message. Returns True when accepted.
+
+    ``include_notification=False`` sends a data-only message, which the APK's
+    native service turns into a full-screen incoming-call notification. If a
+    notification payload were present, Android would display it itself while
+    the app is backgrounded and the native full-screen UI would never run.
+    """
     access_token = _get_fcm_access_token(service_account)
-    message = {
-        'message': {
-            'token': token,
-            'notification': {'title': title, 'body': body},
-            'data': {'url': str(url or '/chat')},
-            'android': {
-                'priority': 'high',
-                'notification': {
-                    'channel_id': channel_id,
-                    'sound': 'default',
-                    'click_action': 'FCM_PLUGIN_ACTIVITY',
-                },
-            },
-            'apns': {
-                'payload': {'aps': {'sound': 'default'}},
-            },
-        }
+
+    payload_data = {'url': str(url or '/chat')}
+    for key, value in (data or {}).items():
+        if value is not None:
+            payload_data[str(key)] = str(value)
+
+    android = {'priority': 'high'}
+    if ttl:
+        android['ttl'] = str(ttl)
+
+    message_payload = {
+        'token': token,
+        'data': payload_data,
+        'android': android,
     }
+    if include_notification:
+        android_notification = {
+            'channel_id': channel_id,
+            'sound': 'default',
+            'click_action': 'FCM_PLUGIN_ACTIVITY',
+            'priority': notification_priority,
+            'visibility': 'public',
+        }
+        if tag:
+            android_notification['tag'] = str(tag)
+        android['notification'] = android_notification
+        message_payload['notification'] = {'title': title, 'body': body}
+        message_payload['apns'] = {'payload': {'aps': {'sound': 'default'}}}
+
+    message = {'message': message_payload}
     response = requests.post(
         FCM_ENDPOINT.format(project_id=project_id),
         headers={
@@ -440,7 +471,18 @@ def _delete_chat_push_token(token_id):
         conn.close()
 
 
-def send_chat_device_push(chat_user_id, title, body, url='/chat'):
+def send_chat_device_push(
+    chat_user_id,
+    title,
+    body,
+    url='/chat',
+    data=None,
+    channel_id='chat',
+    ttl=None,
+    notification_priority='default',
+    tag=None,
+    include_notification=True,
+):
     """Send an FCM push to every device registered by ``chat_user_id``.
 
     Returns the number of tokens the FCM API accepted.
@@ -471,7 +513,12 @@ def send_chat_device_push(chat_user_id, title, body, url='/chat'):
                 title,
                 body,
                 url,
-                channel_id='chat',
+                channel_id=channel_id,
+                data=data,
+                ttl=ttl,
+                notification_priority=notification_priority,
+                tag=tag,
+                include_notification=include_notification,
             ):
                 sent += 1
         except FcmTokenInvalid:
@@ -482,3 +529,36 @@ def send_chat_device_push(chat_user_id, title, body, url='/chat'):
         except Exception as exc:
             logger.warning('Chat FCM push failed: %s', exc)
     return sent
+
+
+def send_chat_call_push(chat_user_id, call_id, room_id, call_type='voice', caller_name='Someone'):
+    """Wake the callee's phone for a ringing call.
+
+    The push carries only identifiers; the app fetches the SDP offer from
+    /chat/calls/incoming after the user taps (or when it comes to the
+    foreground). High priority + a short TTL keeps a stale ring from arriving
+    long after the call already ended.
+    """
+    is_video = str(call_type).lower() == 'video'
+    title = 'Incoming video call' if is_video else 'Incoming voice call'
+    body = f"{caller_name or 'Someone'} is calling…"
+    return send_chat_device_push(
+        chat_user_id,
+        title,
+        body,
+        url=f'/chat?incoming_call={call_id}',
+        data={
+            'type': 'incoming_call',
+            'call_id': call_id,
+            'room_id': room_id,
+            'call_type': 'video' if is_video else 'voice',
+            'caller_name': caller_name or 'Someone',
+            'title': title,
+            'body': body,
+        },
+        channel_id='incoming_call',
+        ttl='60s',
+        notification_priority='max',
+        tag=f'call_{call_id}',
+        include_notification=False,
+    )

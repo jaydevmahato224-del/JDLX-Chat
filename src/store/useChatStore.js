@@ -851,6 +851,7 @@ export const useChatStore = create((set, get) => ({
   callTimerRef: null,
   callAbortController: null,   // in-call poller (pollCallState)
   callWatchAbortController: null, // passive incoming-call watcher (startCallWatcher)
+  callDeepLinkHandled: null,   // dedupes answer/decline deep links from native UI
 
   fetchChatBranding: async () => {
     try {
@@ -3168,10 +3169,18 @@ export const useChatStore = create((set, get) => ({
     // Show the bubble immediately. The network + encryption still finish in
     // the background; on failure the optimistic bubble stays with a retry indicator.
     const tempId = existingTempId || (-Date.now() - Math.floor(Math.random() * 100000))
+    // Stable idempotency key: retries (including after a 35s timeout) reuse the
+    // same key, so the backend returns the already-saved message instead of
+    // creating duplicate bubbles.
+    const existingBubble = existingTempId
+      ? get().messages.find((m) => sameId(m.id, existingTempId))
+      : null
+    const clientMessageId = existingBubble?._clientId
+      || `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
     if (!existingTempId) {
       const optimisticMessage = {
         id: tempId,
-        _clientId: `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        _clientId: clientMessageId,
         _sentAt: Date.now(),
         _baseMaxId: maxConfirmedMessageId(get().messages),
         room_id: targetRoomId,
@@ -3255,7 +3264,8 @@ export const useChatStore = create((set, get) => ({
           message: payloadMessage,
           media_url: mediaUrl,
           message_type: messageType,
-          reply_to_id: replyToId || null
+          reply_to_id: replyToId || null,
+          client_message_id: clientMessageId
         })
       })
       clearTimeout(timeoutId)
@@ -4016,7 +4026,12 @@ export const useChatStore = create((set, get) => ({
       state.callRemoteStream.getTracks().forEach((t) => t.stop())
       set({ callRemoteStream: null })
     }
-    set({ activeCall: null, callIsMuted: false, callIsSpeakerOn: true })
+    set({
+      activeCall: null,
+      callIsMuted: false,
+      callIsSpeakerOn: true,
+      callDeepLinkHandled: null
+    })
   },
 
   endCall: async () => {
@@ -4409,6 +4424,73 @@ export const useChatStore = create((set, get) => ({
     if (callAbortController) {
       try { callAbortController.abort() } catch {}
       set({ callAbortController: null })
+    }
+  },
+
+  // Native full-screen call screen / notification action lands here through
+  // jdlxchat://call/<id>?action=answer|decline. The app may have been killed,
+  // so fetch the ringing offer fresh instead of relying on in-memory state.
+  handleCallDeepLink: async (callId, action = 'answer') => {
+    const token = get().chatToken
+    if (!token) return { success: false, error: 'Not signed in' }
+
+    const actionKey = `${callId || 'latest'}:${action}`
+    if (get().callDeepLinkHandled === actionKey) return { success: true }
+    if (get().activeCall?.state === 'active' || get().activeCall?.state === 'connecting') {
+      return { success: true }
+    }
+    set({ callDeepLinkHandled: actionKey })
+
+    try {
+      const res = await apiFetch('/chat/calls/incoming', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const json = await res.json()
+      const call = json?.data
+      if (!res.ok || !json.success || call?.state !== 'ringing') {
+        set({ callDeepLinkHandled: null })
+        return { success: false, error: 'This call is no longer ringing.' }
+      }
+      if (callId && String(call.call_id) !== String(callId)) {
+        set({ callDeepLinkHandled: null })
+        return { success: false, error: 'This call is no longer available.' }
+      }
+
+      set({
+        activeCall: {
+          roomId: call.room_id,
+          callId: call.call_id,
+          callType: call.call_type || 'voice',
+          callerId: call.caller_id,
+          calleeId: call.callee_id || get().chatUser?.id || null,
+          state: 'ringing',
+          offerSdp: call.offer_sdp || null,
+          startedAt: call.started_at ? new Date(call.started_at).getTime() : Date.now(),
+          peerName: call.caller_name || call.caller_username || 'Incoming call',
+          peerAvatar: call.caller_avatar || null
+        }
+      })
+
+      if (action === 'decline') {
+        try {
+          await apiFetch(`/chat/rooms/${call.room_id}/call/end`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` }
+          })
+        } catch (e) {
+          console.warn('decline call deep link error:', e)
+        }
+        get().cleanupCallResources()
+        return { success: true }
+      }
+
+      const result = await get().answerCall()
+      if (!result?.success) set({ callDeepLinkHandled: null })
+      return result
+    } catch (e) {
+      console.warn('call deep link error:', e)
+      set({ callDeepLinkHandled: null })
+      return { success: false, error: 'Could not open the call.' }
     }
   },
 
