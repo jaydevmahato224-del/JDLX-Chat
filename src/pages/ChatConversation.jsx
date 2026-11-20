@@ -3569,6 +3569,9 @@ export default function ChatConversation() {
   // some browsers).
   useEffect(() => {
     if (typeof window === 'undefined') return
+    // The APK registers through FCM on login (App.jsx); Web Push/VAPID does
+    // not exist in the WebView and would only produce a server-config error.
+    if (isCapacitorNative()) return
     if (!('Notification' in window) || !('PushManager' in window) || !('serviceWorker' in navigator)) return
     if (Notification.permission === 'granted') {
       enablePushNotifications({ silent: true })

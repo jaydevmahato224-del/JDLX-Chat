@@ -103,6 +103,36 @@ export async function disableChatNativePush() {
   }
 }
 
+/**
+ * Explicit "Enable" action from settings.
+ *
+ * The web push/VAPID flow cannot work in the Android WebView, so the APK must
+ * request the OS notification permission and register with FCM instead. This
+ * is what the settings button calls on native; it never touches VAPID.
+ */
+export async function enableChatNativePush() {
+  if (!isCapacitorNative()) {
+    return { success: false, error: 'Device notifications are only available in the app.' }
+  }
+  try {
+    let permission = (await PushNotifications.checkPermissions()).receive
+    if (permission === 'prompt' || permission === 'prompt-with-rationale') {
+      permission = (await PushNotifications.requestPermissions()).receive
+    }
+    if (permission !== 'granted') {
+      return {
+        success: false,
+        error: 'Notification permission denied. Allow notifications for JDLX Chat in Android settings.'
+      }
+    }
+    await initChatNativePush()
+    return { success: true }
+  } catch (err) {
+    console.warn('[chat push] could not enable native notifications:', err)
+    return { success: false, error: 'Could not enable device notifications.' }
+  }
+}
+
 /** Ask for notification permission and register this device with FCM once. */
 export async function initChatNativePush() {
   if (started || !isCapacitorNative()) return

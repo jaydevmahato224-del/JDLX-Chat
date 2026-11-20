@@ -1030,11 +1030,11 @@ def chat_push_public_key():
     Public by design (it is the browser's subscribe key); `enabled` tells the
     app whether the server has a usable VAPID private key at all.
     """
-    from notifications.notification_service import get_chat_vapid_public_key, VAPID_ENABLED
+    from notifications.notification_service import get_chat_vapid_public_key, is_chat_vapid_enabled
     key = get_chat_vapid_public_key()
     return success_response({
         'public_key': key,
-        'enabled': bool(key and VAPID_ENABLED),
+        'enabled': bool(key and is_chat_vapid_enabled()),
     }, "Chat push configuration")
 
 

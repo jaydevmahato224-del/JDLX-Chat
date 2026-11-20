@@ -3,9 +3,9 @@ import toast from 'react-hot-toast'
 import { apiFetch } from '../utils/apiFetch'
 import { sameId } from '../utils/ids'
 import { supabase, setSupabaseRealtimeAuth } from '../utils/supabaseClient'
-import { SUPABASE_PRIVATE_CHANNELS } from '../config'
+import { SUPABASE_PRIVATE_CHANNELS, isCapacitorNative } from '../config'
 import { subscribeToChatPush, unsubscribeFromChatPush } from '../utils/push'
-import { disableChatNativePush } from '../utils/nativePush'
+import { disableChatNativePush, enableChatNativePush } from '../utils/nativePush'
 import { startNativeCallAudio, setNativeSpeaker, stopNativeCallAudio } from '../utils/callAudio'
 import {
   encryptChatMessage,
@@ -3830,14 +3830,23 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
-  // Web Push (VAPID): friend requests while the app is closed.
+  // Web Push (VAPID) on browsers, FCM on the packaged Android app. The WebView
+  // has no Push API, so routing the APK through VAPID used to fail with
+  // "Push notifications are not configured on the server yet."
   enablePushNotifications: async ({ silent = false } = {}) => {
     if (!get().chatToken) return { success: false, error: 'Not authenticated' }
+    if (isCapacitorNative()) return enableChatNativePush()
     return subscribeToChatPush({ requestPermission: !silent })
   },
 
   disablePushNotifications: async () => {
     if (!get().chatToken) return { success: false, error: 'Not authenticated' }
+    if (isCapacitorNative()) {
+      const disabled = await disableChatNativePush()
+      return disabled
+        ? { success: true }
+        : { success: false, error: 'Could not disable device notifications.' }
+    }
     return unsubscribeFromChatPush()
   },
 

@@ -51,6 +51,15 @@ except ImportError:  # pragma: no cover - dependency is in requirements.txt
     google_service_account = None
     _GOOGLE_AUTH_AVAILABLE = False
 
+try:
+    from cryptography.hazmat.primitives import serialization as crypto_serialization
+    from cryptography.hazmat.primitives.asymmetric import ec as crypto_ec
+    _CRYPTO_AVAILABLE = True
+except ImportError:  # pragma: no cover - pywebpush already depends on it
+    crypto_serialization = None
+    crypto_ec = None
+    _CRYPTO_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging'
@@ -84,19 +93,116 @@ def _normalize_pem(value):
     return value
 
 
-VAPID_PUBLIC_KEY = _env('CHAT_VAPID_PUBLIC_KEY', 'VAPID_PUBLIC_KEY', 'WEB_PUSH_VAPID_PUBLIC_KEY')
-VAPID_PRIVATE_KEY = _normalize_pem(
-    _env('CHAT_VAPID_PRIVATE_KEY', 'VAPID_PRIVATE_KEY', 'WEB_PUSH_VAPID_PRIVATE_KEY')
-)
 VAPID_SUBJECT = (
     _env('CHAT_VAPID_SUBJECT', 'VAPID_SUBJECT', 'VAPID_CLAIMS_SUB') or DEFAULT_VAPID_SUBJECT
 )
-VAPID_ENABLED = bool(_WEBPUSH_AVAILABLE and VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
+
+_vapid_lock = threading.Lock()
+_vapid_cache = None  # (public_key, private_key); (None, None) when unavailable
+
+
+def _generate_vapid_keypair():
+    """Create a P-256 keypair in the raw base64url format pywebpush expects."""
+    if not (_CRYPTO_AVAILABLE and _WEBPUSH_AVAILABLE):
+        return None
+    private_key = crypto_ec.generate_private_key(crypto_ec.SECP256R1())
+    raw_private = base64.urlsafe_b64encode(
+        private_key.private_numbers().private_value.to_bytes(32, 'big')
+    ).rstrip(b'=').decode('ascii')
+    raw_public = base64.urlsafe_b64encode(
+        private_key.public_key().public_bytes(
+            crypto_serialization.Encoding.X962,
+            crypto_serialization.PublicFormat.UncompressedPoint,
+        )
+    ).rstrip(b'=').decode('ascii')
+    return raw_public, raw_private
+
+
+def _load_stored_vapid_keys():
+    """Read the shared keypair persisted in the chat database, if any."""
+    try:
+        from database import get_db
+
+        conn = get_db()
+        try:
+            row = conn.cursor().execute(
+                'SELECT public_key, private_key FROM chat_vapid_keys WHERE id = 1'
+            ).fetchone()
+            if row:
+                return row['public_key'], row['private_key']
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning('Chat VAPID: could not read stored keys: %s', exc)
+    return None, None
+
+
+def _store_vapid_keys(public_key, private_key):
+    try:
+        from database import get_db
+
+        conn = get_db()
+        try:
+            conn.cursor().execute(
+                'INSERT OR IGNORE INTO chat_vapid_keys (id, public_key, private_key) VALUES (1, ?, ?)',
+                (public_key, private_key),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning('Chat VAPID: could not persist generated keys: %s', exc)
+
+
+def _resolve_vapid_keys():
+    """Return (public, private), preferring env then DB, else generate once.
+
+    Railway deployments previously required manually setting VAPID env vars;
+    without them the app showed "push notifications are not configured on the
+    server". Persisting an auto-generated pair removes that setup step while
+    still letting env vars override the stored key.
+    """
+    global _vapid_cache
+    if _vapid_cache is not None:
+        return _vapid_cache
+
+    with _vapid_lock:
+        if _vapid_cache is not None:
+            return _vapid_cache
+
+        public_key = _env('CHAT_VAPID_PUBLIC_KEY', 'VAPID_PUBLIC_KEY', 'WEB_PUSH_VAPID_PUBLIC_KEY')
+        private_key = _normalize_pem(
+            _env('CHAT_VAPID_PRIVATE_KEY', 'VAPID_PRIVATE_KEY', 'WEB_PUSH_VAPID_PRIVATE_KEY')
+        )
+        if not (public_key and private_key):
+            public_key, private_key = _load_stored_vapid_keys()
+
+        if not (public_key and private_key):
+            generated = _generate_vapid_keypair()
+            if generated:
+                _store_vapid_keys(*generated)
+                # Another worker may have won the insert race; read it back so
+                # every process signs with the same key.
+                stored_public, stored_private = _load_stored_vapid_keys()
+                public_key, private_key = (
+                    (stored_public, stored_private)
+                    if stored_public and stored_private
+                    else generated
+                )
+
+        _vapid_cache = (public_key or None, private_key or None)
+        return _vapid_cache
+
+
+def is_chat_vapid_enabled():
+    public_key, private_key = _resolve_vapid_keys()
+    return bool(_WEBPUSH_AVAILABLE and public_key and private_key)
 
 
 def get_chat_vapid_public_key():
     """Browser subscribe key; ``None`` when Web Push is not configured."""
-    return VAPID_PUBLIC_KEY or None
+    public_key, _ = _resolve_vapid_keys()
+    return public_key or None
 
 
 # ─────────────────────────────── Web Push (VAPID) ───────────────────────────────
@@ -138,7 +244,8 @@ def send_chat_push(chat_user_id, title, body, url='/chat', tag=None):
 
     Returns the number of subscriptions the push provider accepted.
     """
-    if not VAPID_ENABLED:
+    public_key, private_key = _resolve_vapid_keys()
+    if not (_WEBPUSH_AVAILABLE and public_key and private_key):
         return 0
 
     try:
@@ -167,7 +274,7 @@ def send_chat_push(chat_user_id, title, body, url='/chat', tag=None):
                     'keys': {'p256dh': sub['p256dh'], 'auth': sub['auth']},
                 },
                 data=payload,
-                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_private_key=private_key,
                 vapid_claims={'sub': VAPID_SUBJECT},
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )

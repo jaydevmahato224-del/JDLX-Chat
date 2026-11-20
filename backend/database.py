@@ -2262,6 +2262,16 @@ def init_db():
     )''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_user ON chat_push_tokens(chat_user_id)")
 
+    # Web Push VAPID keypair. Generated once and persisted here when the
+    # deployment has no VAPID env vars, so browser notifications work without
+    # manual key setup. A single row (id = 1) is shared by every worker.
+    cursor.execute('''CREATE TABLE IF NOT EXISTS chat_vapid_keys (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        public_key TEXT NOT NULL,
+        private_key TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+
     # DB-backed fixed-window counters for Official Chat throttling. Shared by
     # every gunicorn worker (the old in-memory dict was per-process, so the real
     # limit was N x workers, and it grew without bound).
