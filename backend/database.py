@@ -1992,6 +1992,8 @@ def init_db():
         ('user_two_id', 'INTEGER'),
         ('room_type', "TEXT DEFAULT 'direct'"),
         ('e2e_secret', 'TEXT'),
+        # Group profile picture (uploaded via /chat/upload kind=avatar).
+        ('avatar', 'TEXT'),
     ])
 
     cursor.execute('''CREATE TABLE IF NOT EXISTS official_chat_friend_requests (

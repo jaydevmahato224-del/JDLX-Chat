@@ -1173,6 +1173,14 @@ export default function ChatConversation() {
     editMessage,
     deleteMessage,
     toggleReaction,
+    createGroup,
+    fetchGroupDetails,
+    renameGroup,
+    addGroupMembers,
+    removeGroupMember,
+    leaveGroup,
+    uploadGroupAvatar,
+    setGroupMemberRole,
     updateChatProfile,
     uploadProfileAvatar,
     addOptimisticMediaMessage,
@@ -1213,6 +1221,20 @@ export default function ChatConversation() {
   const [showNotificationsDrawer, setShowNotificationsDrawer] = useState(false)
   const [showContactInfoModal, setShowContactInfoModal] = useState(false)
   const [contactMediaTab, setContactMediaTab] = useState('media') // 'media' | 'docs' | 'links'
+  // ── Group chat UI state ──
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [newGroupMemberIds, setNewGroupMemberIds] = useState([])
+  const [creatingGroup, setCreatingGroup] = useState(false)
+  const [groupDetails, setGroupDetails] = useState(null)
+  const [groupDetailsLoading, setGroupDetailsLoading] = useState(false)
+  const [showAddGroupMembers, setShowAddGroupMembers] = useState(false)
+  const [addGroupMemberIds, setAddGroupMemberIds] = useState([])
+  const [groupActionBusy, setGroupActionBusy] = useState(false)
+  const [isEditingGroupName, setIsEditingGroupName] = useState(false)
+  const [groupNameDraft, setGroupNameDraft] = useState('')
+  const [isUploadingGroupAvatar, setIsUploadingGroupAvatar] = useState(false)
+  const groupAvatarInputRef = useRef(null)
   const [isSearchingChat, setIsSearchingChat] = useState(false)
   const [chatSearchQuery, setChatSearchQuery] = useState('')
   const [chatSearchMatchIndex, setChatSearchMatchIndex] = useState(0)
@@ -2252,12 +2274,11 @@ export default function ChatConversation() {
 
   // Prefill editable fields when Profile drawer opens
   useEffect(() => {
-    if (showProfileDrawer && chatUser) {
-      setEditName(chatUser.name || '')
-      setEditUsername(chatUser.username || '')
-      setEditBio(chatUser.bio || 'Hey there! I am using JDLX Chat')
-      setEditGender(chatUser.gender || 'prefer_not_to_say')
-    }
+    if (!showProfileDrawer || !chatUser) return
+    setEditName(chatUser.name || '')
+    setEditUsername(chatUser.username || '')
+    setEditBio(chatUser.bio || 'Hey there! I am using JDLX Chat')
+    setEditGender(chatUser.gender || 'prefer_not_to_say')
   }, [showProfileDrawer, chatUser])
 
   // Reset contact rename & note draft states when modal closes
@@ -2352,7 +2373,7 @@ export default function ChatConversation() {
     try {
       const res = await updateChatProfile({
         name: editName.trim(),
-        username: editUsername.trim() || undefined,
+        username: editUsername.trim() || '',
         bio: editBio.trim(),
         gender: editGender
       })
@@ -2631,10 +2652,225 @@ export default function ChatConversation() {
   const [confirmDialog, setConfirmDialog] = useState(null)
   const requestConfirm = useCallback((options) => setConfirmDialog(options), [])
 
+  // ── Group chat state/actions (member list, rename, add/remove, leave) ──
+  useEffect(() => {
+    if (!showContactInfoModal) {
+      setGroupDetails(null)
+      setIsEditingGroupName(false)
+      setShowAddGroupMembers(false)
+      return undefined
+    }
+    if (!activeConversation?.is_group) return undefined
+    let cancelled = false
+    setGroupDetails(null)
+    setGroupDetailsLoading(true)
+    fetchGroupDetails(activeConversation.id).then((res) => {
+      if (cancelled) return
+      if (res.success) setGroupDetails(res.group)
+      else toast.error(res.error || 'Could not load group details')
+    }).finally(() => {
+      if (!cancelled) setGroupDetailsLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [showContactInfoModal, activeConversation?.id, activeConversation?.is_group, fetchGroupDetails])
+
+  const refreshGroupDetails = useCallback(async (roomId) => {
+    const res = await fetchGroupDetails(roomId)
+    if (res.success) setGroupDetails(res.group)
+    return res
+  }, [fetchGroupDetails])
+
+  const groupMemberIdSet = useMemo(() => new Set(
+    (groupDetails?.members || []).map((m) => Number(m.id))
+  ), [groupDetails])
+
+  const addableGroupFriends = useMemo(() => (
+    (friends || []).filter((f) => {
+      const id = Number(f.friend_id ?? f.id)
+      return Number.isFinite(id) && !groupMemberIdSet.has(id)
+    })
+  ), [friends, groupMemberIdSet])
+
+  const toggleNewGroupMember = (userId) => {
+    const id = Number(userId)
+    if (!Number.isFinite(id)) return
+    setNewGroupMemberIds((prev) => (
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    ))
+  }
+
+  const handleCreateGroup = async () => {
+    if (creatingGroup) return
+    triggerHaptic('light')
+    setCreatingGroup(true)
+    const res = await createGroup({ name: newGroupName, memberIds: newGroupMemberIds })
+    setCreatingGroup(false)
+    if (!res.success) {
+      toast.error(res.error || 'Could not create the group')
+      return
+    }
+    toast.success('Group created')
+    setShowCreateGroupModal(false)
+    setNewGroupName('')
+    setNewGroupMemberIds([])
+    setMobileView('chat')
+  }
+
+  const handleRenameGroup = async () => {
+    if (!activeRoomId || groupActionBusy) return
+    const title = groupNameDraft.trim()
+    if (title.length < 2) {
+      toast.error('Group name must be at least 2 characters')
+      return
+    }
+    setGroupActionBusy(true)
+    const res = await renameGroup(activeRoomId, title)
+    setGroupActionBusy(false)
+    if (!res.success) {
+      toast.error(res.error || 'Could not rename the group')
+      return
+    }
+    setIsEditingGroupName(false)
+    toast.success('Group renamed')
+    refreshGroupDetails(activeRoomId)
+  }
+
+  const handleAddGroupMembers = async () => {
+    if (!activeRoomId || groupActionBusy) return
+    if (!addGroupMemberIds.length) {
+      toast.error('Select at least one friend to add')
+      return
+    }
+    setGroupActionBusy(true)
+    const res = await addGroupMembers(activeRoomId, addGroupMemberIds)
+    setGroupActionBusy(false)
+    if (!res.success) {
+      toast.error(res.error || 'Could not add members')
+      return
+    }
+    setShowAddGroupMembers(false)
+    setAddGroupMemberIds([])
+    toast.success('Members added')
+    refreshGroupDetails(activeRoomId)
+  }
+
+  const handleGroupAvatarChange = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file || !activeRoomId) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose a valid image file (PNG, JPG, WebP)')
+      return
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error('Image size must be under 15MB')
+      return
+    }
+    setIsUploadingGroupAvatar(true)
+    try {
+      const compressedAvatar = await compressAvatarImage(file)
+      const res = await uploadGroupAvatar(activeRoomId, compressedAvatar)
+      if (res.success) {
+        if (res.group) setGroupDetails(res.group)
+        else refreshGroupDetails(activeRoomId)
+        toast.success('Group picture updated')
+      } else {
+        toast.error(res.error || 'Failed to upload the group picture')
+      }
+    } catch (err) {
+      toast.error(err.message || 'Error uploading the group picture')
+    } finally {
+      setIsUploadingGroupAvatar(false)
+      if (groupAvatarInputRef.current) groupAvatarInputRef.current.value = ''
+    }
+  }
+
+  const handleToggleGroupMemberRole = async (member) => {
+    if (!activeRoomId || !member?.id || groupActionBusy) return
+    const nextRole = (member.role || 'member') === 'admin' ? 'member' : 'admin'
+    setGroupActionBusy(true)
+    const res = await setGroupMemberRole(activeRoomId, member.id, nextRole)
+    setGroupActionBusy(false)
+    if (!res.success) {
+      toast.error(res.error || 'Could not update the member role')
+      return
+    }
+    if (res.group) setGroupDetails(res.group)
+    else refreshGroupDetails(activeRoomId)
+    toast.success(
+      nextRole === 'admin'
+        ? `${member.name || member.username || 'Member'} is now an admin`
+        : 'Admin rights removed'
+    )
+  }
+
+  const handleRemoveGroupMember = (member) => {
+    if (!activeRoomId || !member?.id) return
+    const memberName = member.name || member.username || 'this member'
+    triggerHaptic('medium')
+    requestConfirm({
+      title: 'Remove member?',
+      message: `Remove ${memberName} from this group? They will lose access to the group chat.`,
+      confirmLabel: 'Remove',
+      destructive: true,
+      icon: 'trash',
+      onConfirm: async () => {
+        setGroupActionBusy(true)
+        const res = await removeGroupMember(activeRoomId, member.id)
+        setGroupActionBusy(false)
+        if (!res.success) {
+          toast.error(res.error || 'Could not remove the member')
+          return
+        }
+        toast.success('Member removed')
+        refreshGroupDetails(activeRoomId)
+      }
+    })
+  }
+
+  const activeGroupIsAdmin = Boolean(
+    groupDetails?.is_creator
+    || activeConversation?.is_creator
+    || (groupDetails?.my_role || activeConversation?.my_role) === 'admin'
+  )
+  const activeGroupMembers = groupDetails?.members || []
+  const activeGroupMemberCount = (
+    groupDetails?.member_count
+    ?? activeGroupMembers.length
+    ?? activeConversation?.member_count
+    ?? 0
+  )
+
+  const handleLeaveGroup = () => {
+    if (!activeRoomId || groupActionBusy) return
+    triggerHaptic('medium')
+    requestConfirm({
+      title: 'Leave group?',
+      message: 'You will stop receiving messages from this group. This cannot be undone.',
+      confirmLabel: 'Leave',
+      destructive: true,
+      icon: 'trash',
+      onConfirm: async () => {
+        setGroupActionBusy(true)
+        const res = await leaveGroup(activeRoomId)
+        setGroupActionBusy(false)
+        if (!res.success) {
+          toast.error(res.error || 'Could not leave the group')
+          return
+        }
+        setShowContactInfoModal(false)
+        setGroupDetails(null)
+        setMobileView('list')
+        toast.success('You left the group')
+      }
+    })
+  }
+
   // Every modal gets initial focus, a Tab trap, Escape-to-close and focus
   // restoration. The hook only closes the top-most sheet, so Cancel in the
   // confirm sheet does not also dismiss the profile underneath it.
   const contactDialogRef = useDialogA11y(showContactInfoModal, () => setShowContactInfoModal(false))
+  const createGroupDialogRef = useDialogA11y(showCreateGroupModal, () => setShowCreateGroupModal(false))
+  const addGroupMembersDialogRef = useDialogA11y(showAddGroupMembers, () => setShowAddGroupMembers(false))
   const confirmDialogRef = useDialogA11y(Boolean(confirmDialog), () => setConfirmDialog(null))
   const addFriendDialogRef = useDialogA11y(showAddFriendModal, () => {
     setShowAddFriendModal(false)
@@ -5387,6 +5623,20 @@ export default function ChatConversation() {
             )}
           </button>
 
+          {/* New Group Button */}
+          <button type="button"
+            onClick={() => {
+              triggerHaptic('light')
+              setShowCreateGroupModal(true)
+              fetchFriendsAndRequests()
+            }}
+            title="Create a group"
+            aria-label="Create a group"
+            className="ui-icon-btn"
+          >
+            <Users className="w-5 h-5" />
+          </button>
+
           {/* Quick Theme Switcher Button */}
           <button type="button"
             onClick={toggleChatTheme}
@@ -6391,13 +6641,15 @@ export default function ChatConversation() {
                           ? 'border-slate-200 bg-amber-50 text-amber-800' 
                           : 'border-white/10 bg-[#1a1d22] text-amber-300'
                       }`}>
-                        {activeConversation.contact_avatar ? (
+                        {activeConversation?.is_group && !activeConversation.contact_avatar ? (
+                          <Users className="w-5 h-5" />
+                        ) : activeConversation.contact_avatar ? (
                           <img src={resolveMediaUrl(activeConversation.contact_avatar)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
                         ) : (
                           getContactDisplayName(activeConversation)?.[0]?.toUpperCase() || 'U'
                         )}
                       </div>
-                      {peerTyping ? (
+                      {activeConversation?.is_group ? null : peerTyping ? (
                         <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center pointer-events-none" title="Typing…">
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
                           <span className="relative inline-flex h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-500 dark:border-[#0f1114]" />
@@ -6497,16 +6749,20 @@ export default function ChatConversation() {
                       </div>
                       <p className="text-[10.5px] sm:text-[11px] font-medium flex items-center gap-1 sm:gap-1.5">
                         <span className={`font-bold flex items-center gap-1 sm:gap-1.5 ${
-                          peerTyping 
-                            ? 'text-amber-500 animate-pulse' 
-                            : isContactOnline 
-                              ? 'text-emerald-600 dark:text-emerald-400' 
-                              : isLight ? 'text-slate-500' : 'text-zinc-400'
+                          activeConversation?.is_group
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : peerTyping 
+                              ? 'text-amber-500 animate-pulse' 
+                              : isContactOnline 
+                                ? 'text-emerald-600 dark:text-emerald-400' 
+                                : isLight ? 'text-slate-500' : 'text-zinc-400'
                         }`}>
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            peerTyping ? 'bg-amber-400 animate-ping' : isContactOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' : 'bg-zinc-500/50'
+                            activeConversation?.is_group
+                              ? 'bg-amber-400'
+                              : peerTyping ? 'bg-amber-400 animate-ping' : isContactOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' : 'bg-zinc-500/50'
                           }`} />
-                          <span>{peerTyping ? 'typing…' : (isContactOnline ? 'Online' : 'Offline')}</span>
+                          <span>{activeConversation?.is_group ? `${activeConversation?.member_count || 0} members` : peerTyping ? 'typing…' : (isContactOnline ? 'Online' : 'Offline')}</span>
                         </span>
                         <span className={`opacity-30 ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>•</span>
                         <span className="flex items-center gap-1 text-[9.5px] sm:text-[10px] font-medium text-emerald-600 dark:text-emerald-400 truncate" title="End-to-End Encrypted Messaging">
@@ -6520,8 +6776,8 @@ export default function ChatConversation() {
 
                 {/* Active Chat Header Quick Actions: Voice Call, Video Call, Search, More */}
                 <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0 ml-1 sm:ml-2">
-                  {/* Voice Call */}
-                  <button
+                  {/* Voice Call — direct chats only (the call signaling is 1-to-1) */}
+                  {!activeConversation?.is_group && <button
                     type="button"
                     onClick={async () => {
                       if (!activeRoomId) return
@@ -6537,10 +6793,10 @@ export default function ChatConversation() {
                     className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
                   >
                     <Phone className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
-                  </button>
+                  </button>}
 
-                  {/* Video Call */}
-                  <button
+                  {/* Video Call — direct chats only */}
+                  {!activeConversation?.is_group && <button
                     type="button"
                     onClick={async () => {
                       if (!activeRoomId) return
@@ -6556,7 +6812,7 @@ export default function ChatConversation() {
                     className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
                   >
                     <Video className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
-                  </button>
+                  </button>}
 
                   {/* Search in conversation */}
                   <button
@@ -8965,7 +9221,7 @@ export default function ChatConversation() {
                       <span>{isUploadingAvatar ? 'Uploading new photo...' : 'Change Profile Photo'}</span>
                     </button>
                     <p className={`text-[10px] mt-0.5 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>
-                      Supports JPG, PNG or WebP up to 8MB
+                      Supports JPG, PNG or WebP up to 15MB
                     </p>
                   </div>
 
@@ -11104,8 +11360,382 @@ export default function ChatConversation() {
         </div>
       )})()}
 
+      {/* ── GROUP INFO SHEET (members, rename, add/remove, leave) ── */}
+      {showContactInfoModal && activeConversation?.is_group && (
+        <div
+          onClick={() => setShowContactInfoModal(false)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs animate-in fade-in duration-200 md:items-center md:bg-black/50 md:p-4"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Group info"
+            onClick={(e) => e.stopPropagation()}
+            ref={contactDialogRef}
+            tabIndex={-1}
+            className={`flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-[28px] border-t shadow-2xl animate-sheet-spring-up md:rounded-2xl md:border ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
+          >
+            <div className={`flex shrink-0 items-center justify-between border-b px-4 py-3 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-amber-500" />
+                <h3 className="text-sm font-bold">Group Info</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowContactInfoModal(false)}
+                aria-label="Close group info"
+                className="ui-icon-btn h-8 w-8"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="custom-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4 pb-[max(1.5rem,env(safe-area-inset-bottom,0px))]">
+              <div className="flex flex-col items-center gap-2 text-center">
+                <div className="relative">
+                  <div className={`flex h-20 w-20 items-center justify-center overflow-hidden rounded-3xl border text-2xl font-black ${isLight ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-amber-500/25 bg-amber-500/10 text-amber-300'}`}>
+                    {(groupDetails?.avatar || activeConversation.contact_avatar) ? (
+                      <img
+                        src={resolveMediaUrl(groupDetails?.avatar || activeConversation.contact_avatar)}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <Users className="h-8 w-8" />
+                    )}
+                    {isUploadingGroupAvatar && (
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/50">
+                        <Loader2 className="h-6 w-6 animate-spin text-white" />
+                      </span>
+                    )}
+                  </div>
+                  {activeGroupIsAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic('light')
+                        groupAvatarInputRef.current?.click()
+                      }}
+                      disabled={isUploadingGroupAvatar}
+                      className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-amber-500 text-black shadow-md transition-all active:scale-95 disabled:opacity-60 dark:border-[#0f1114]"
+                      title="Change group picture"
+                      aria-label="Change group picture"
+                    >
+                      <Camera className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <input
+                    ref={groupAvatarInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleGroupAvatarChange}
+                  />
+                </div>
+                {isEditingGroupName ? (
+                  <div className="flex w-full items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={groupNameDraft}
+                      onChange={(e) => setGroupNameDraft(e.target.value)}
+                      maxLength={80}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); handleRenameGroup() }
+                        if (e.key === 'Escape') setIsEditingGroupName(false)
+                      }}
+                      className={`w-full rounded-xl border px-3 py-2 text-sm font-bold focus:outline-hidden focus:ring-2 ${isLight ? 'border-amber-300 bg-white text-slate-900 focus:ring-amber-400' : 'border-yellow-500/40 bg-[#18181b] text-zinc-100 focus:ring-yellow-500/30'}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRenameGroup}
+                      disabled={groupActionBusy}
+                      className="shrink-0 rounded-xl bg-amber-500 p-2 text-black disabled:opacity-60"
+                      aria-label="Save group name"
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingGroupName(false)}
+                      className={`shrink-0 rounded-xl border p-2 ${isLight ? 'border-slate-300 bg-slate-100 text-slate-700' : 'border-zinc-700 bg-zinc-800 text-zinc-300'}`}
+                      aria-label="Cancel rename"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center gap-2">
+                    <h3 className="text-lg font-black tracking-tight">{activeConversation.contact_name || 'Group'}</h3>
+                    {activeGroupIsAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGroupNameDraft(activeConversation.contact_name || '')
+                          setIsEditingGroupName(true)
+                        }}
+                        className={`rounded-lg border p-1.5 ${isLight ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-yellow-500/30 bg-yellow-500/10 text-[#facc15]'}`}
+                        title="Rename group"
+                        aria-label="Rename group"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
+                <p className={`text-xs font-medium ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                  {activeGroupMemberCount} member{activeGroupMemberCount === 1 ? '' : 's'}
+                  {activeGroupIsAdmin ? ' · You are an admin' : ''}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {activeGroupIsAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      setAddGroupMemberIds([])
+                      setShowAddGroupMembers(true)
+                      fetchFriendsAndRequests()
+                    }}
+                    className={`flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2.5 text-xs font-bold transition-all active:scale-95 ${isLight ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100' : 'border-amber-500/25 bg-amber-500/10 text-amber-300 hover:bg-amber-500/15'}`}
+                  >
+                    <UserPlus className="h-4 w-4" />
+                    Add members
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleLeaveGroup}
+                  disabled={groupActionBusy}
+                  className={`flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2.5 text-xs font-bold text-rose-500 transition-all active:scale-95 disabled:opacity-60 ${isLight ? 'border-rose-200 bg-rose-50 hover:bg-rose-100' : 'border-rose-500/25 bg-rose-500/10 hover:bg-rose-500/15'} ${activeGroupIsAdmin ? '' : 'col-span-2'}`}
+                >
+                  <LogOut className="h-4 w-4" />
+                  Leave group
+                </button>
+              </div>
+
+              <div>
+                <div className={`mb-1.5 flex items-center justify-between text-[11px] font-black uppercase tracking-wider ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                  <span>Members</span>
+                  {groupDetailsLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                </div>
+                <div className={`divide-y overflow-hidden rounded-2xl border ${isLight ? 'divide-slate-100 border-slate-200' : 'divide-white/[0.05] border-white/[0.07]'}`}>
+                  {activeGroupMembers.length === 0 && groupDetailsLoading ? (
+                    <div className={`px-3 py-4 text-center text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>Loading members…</div>
+                  ) : activeGroupMembers.length === 0 ? (
+                    <div className={`px-3 py-4 text-center text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>No members loaded.</div>
+                  ) : activeGroupMembers.map((member) => {
+                    const memberId = member.id
+                    const isMe = sameId(memberId, chatUser?.id)
+                    const isCreator = sameId(memberId, groupDetails?.creator_id)
+                    const canRemove = activeGroupIsAdmin && !isMe && !isCreator
+                    return (
+                      <div key={memberId} className="flex items-center gap-2.5 px-3 py-2.5">
+                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border text-xs font-bold ${isLight ? 'border-slate-200 bg-amber-50 text-amber-800' : 'border-white/10 bg-[#1a1d22] text-amber-300'}`}>
+                          {member.profile_image ? (
+                            <img src={resolveMediaUrl(member.profile_image)} alt="" loading="lazy" className="h-full w-full object-cover" />
+                          ) : (
+                            (member.name || member.username || 'U')[0]?.toUpperCase()
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className={`truncate text-xs font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                            {member.name || member.username || 'Member'}{isMe ? ' (you)' : ''}
+                          </p>
+                          {member.username && (
+                            <p className={`truncate text-[10px] font-mono ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>@{member.username}</p>
+                          )}
+                        </div>
+                        {(isCreator || member.role === 'admin') && (
+                          <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                            {isCreator ? 'Creator' : 'Admin'}
+                          </span>
+                        )}
+                        {activeGroupIsAdmin && !isMe && !isCreator && (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleGroupMemberRole(member)}
+                            disabled={groupActionBusy}
+                            className={`shrink-0 rounded-lg p-1.5 transition-all active:scale-95 disabled:opacity-60 ${(member.role || 'member') === 'admin' ? 'text-amber-600 hover:bg-amber-500/10 dark:text-amber-400' : (isLight ? 'text-slate-500 hover:bg-slate-100' : 'text-zinc-400 hover:bg-white/10')}`}
+                            title={(member.role || 'member') === 'admin' ? 'Remove admin rights' : 'Make admin'}
+                            aria-label={(member.role || 'member') === 'admin' ? 'Remove admin rights' : 'Make admin'}
+                          >
+                            {(member.role || 'member') === 'admin' ? (
+                              <ShieldAlert className="h-4 w-4" />
+                            ) : (
+                              <ShieldCheck className="h-4 w-4" />
+                            )}
+                          </button>
+                        )}
+                        {canRemove && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveGroupMember(member)}
+                            disabled={groupActionBusy}
+                            className="shrink-0 rounded-lg p-1.5 text-rose-500 transition-all hover:bg-rose-500/10 active:scale-95 disabled:opacity-60"
+                            title={`Remove ${member.name || member.username || 'member'}`}
+                            aria-label={`Remove ${member.name || member.username || 'member'}`}
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ADD GROUP MEMBERS SHEET ── */}
+      {showAddGroupMembers && activeConversation?.is_group && (
+        <div
+          onClick={() => setShowAddGroupMembers(false)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs animate-in fade-in duration-200 md:items-center md:bg-black/50 md:p-4"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add group members"
+            onClick={(e) => e.stopPropagation()}
+            ref={addGroupMembersDialogRef}
+            tabIndex={-1}
+            className={`flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border p-4 shadow-2xl animate-sheet-spring-up md:rounded-2xl ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
+          >
+            <div className={`mb-3 flex items-center justify-between border-b pb-2 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
+              <h3 className="flex items-center gap-2 text-sm font-bold"><UserPlus className="h-4 w-4 text-amber-500" /> Add members</h3>
+              <button type="button" onClick={() => setShowAddGroupMembers(false)} aria-label="Close add members" className="ui-icon-btn h-8 w-8"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="custom-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto py-1">
+              {addableGroupFriends.length === 0 ? (
+                <p className={`px-2 py-6 text-center text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>All your friends are already in this group.</p>
+              ) : addableGroupFriends.map((friend) => {
+                const id = Number(friend.friend_id ?? friend.id)
+                const selected = addGroupMemberIds.includes(id)
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setAddGroupMemberIds((prev) => (selected ? prev.filter((x) => x !== id) : [...prev, id]))}
+                    className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors ${selected ? (isLight ? 'border-amber-300 bg-amber-50' : 'border-amber-500/40 bg-amber-500/10') : (isLight ? 'border-slate-200 bg-white hover:bg-slate-50' : 'border-white/[0.07] bg-[#14161a] hover:bg-white/[0.04]')}`}
+                  >
+                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border text-xs font-bold ${isLight ? 'border-slate-200 bg-slate-100 text-slate-700' : 'border-white/10 bg-[#1a1d22] text-zinc-200'}`}>
+                      {friend.profile_image ? (
+                        <img src={resolveMediaUrl(friend.profile_image)} alt="" loading="lazy" className="h-full w-full object-cover" />
+                      ) : (
+                        (friend.name || friend.username || 'U')[0]?.toUpperCase()
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-bold">{friend.name || friend.username || 'Friend'}</p>
+                      {friend.username && <p className={`truncate text-[10px] font-mono ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>@{friend.username}</p>}
+                    </div>
+                    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${selected ? 'border-amber-500 bg-amber-500 text-black' : isLight ? 'border-slate-300' : 'border-zinc-600'}`}>
+                      {selected && <Check className="h-3.5 w-3.5" />}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className={`mt-3 flex items-center justify-end gap-2 border-t pt-3 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
+              <button type="button" onClick={() => setShowAddGroupMembers(false)} className={`rounded-xl px-3 py-2 text-xs font-bold ${isLight ? 'bg-slate-100 text-slate-700' : 'bg-white/[0.06] text-zinc-300'}`}>Cancel</button>
+              <button
+                type="button"
+                onClick={handleAddGroupMembers}
+                disabled={groupActionBusy || !addGroupMemberIds.length}
+                className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-bold text-black disabled:opacity-60"
+              >
+                {groupActionBusy ? 'Adding…' : `Add ${addGroupMemberIds.length || ''}`.trim()}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── CREATE GROUP SHEET ── */}
+      {showCreateGroupModal && (
+        <div
+          onClick={() => setShowCreateGroupModal(false)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs animate-in fade-in duration-200 md:items-center md:bg-black/50 md:p-4"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Create group"
+            onClick={(e) => e.stopPropagation()}
+            ref={createGroupDialogRef}
+            tabIndex={-1}
+            className={`flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border p-4 shadow-2xl animate-sheet-spring-up md:rounded-2xl ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
+          >
+            <div className={`mb-3 flex items-center justify-between border-b pb-2 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
+              <h3 className="flex items-center gap-2 text-sm font-bold"><Users className="h-4 w-4 text-amber-500" /> New group</h3>
+              <button type="button" onClick={() => setShowCreateGroupModal(false)} aria-label="Close create group" className="ui-icon-btn h-8 w-8"><X className="h-4 w-4" /></button>
+            </div>
+            <input
+              type="text"
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              placeholder="Group name"
+              maxLength={80}
+              className={`mb-3 w-full rounded-xl border px-3 py-2.5 text-sm font-semibold focus:outline-hidden focus:ring-2 ${isLight ? 'border-slate-200 bg-slate-50 text-slate-900 focus:ring-amber-400' : 'border-white/10 bg-[#18181b] text-zinc-100 focus:ring-yellow-500/30'}`}
+            />
+            <div className={`mb-1.5 text-[11px] font-black uppercase tracking-wider ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+              Add friends · {newGroupMemberIds.length} selected
+            </div>
+            <div className="custom-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto py-1">
+              {(friends || []).length === 0 ? (
+                <p className={`px-2 py-6 text-center text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>Add friends first, then create a group with them.</p>
+              ) : friends.map((friend) => {
+                const id = Number(friend.friend_id ?? friend.id)
+                const selected = newGroupMemberIds.includes(id)
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => toggleNewGroupMember(id)}
+                    className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors ${selected ? (isLight ? 'border-amber-300 bg-amber-50' : 'border-amber-500/40 bg-amber-500/10') : (isLight ? 'border-slate-200 bg-white hover:bg-slate-50' : 'border-white/[0.07] bg-[#14161a] hover:bg-white/[0.04]')}`}
+                  >
+                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border text-xs font-bold ${isLight ? 'border-slate-200 bg-slate-100 text-slate-700' : 'border-white/10 bg-[#1a1d22] text-zinc-200'}`}>
+                      {friend.profile_image ? (
+                        <img src={resolveMediaUrl(friend.profile_image)} alt="" loading="lazy" className="h-full w-full object-cover" />
+                      ) : (
+                        (friend.name || friend.username || 'U')[0]?.toUpperCase()
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-bold">{friend.name || friend.username || 'Friend'}</p>
+                      {friend.username && <p className={`truncate text-[10px] font-mono ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>@{friend.username}</p>}
+                    </div>
+                    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${selected ? 'border-amber-500 bg-amber-500 text-black' : isLight ? 'border-slate-300' : 'border-zinc-600'}`}>
+                      {selected && <Check className="h-3.5 w-3.5" />}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className={`mt-3 flex items-center justify-end gap-2 border-t pt-3 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
+              <button type="button" onClick={() => setShowCreateGroupModal(false)} className={`rounded-xl px-3 py-2 text-xs font-bold ${isLight ? 'bg-slate-100 text-slate-700' : 'bg-white/[0.06] text-zinc-300'}`}>Cancel</button>
+              <button
+                type="button"
+                onClick={handleCreateGroup}
+                disabled={creatingGroup || newGroupName.trim().length < 2 || !newGroupMemberIds.length}
+                className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-bold text-black disabled:opacity-60"
+              >
+                {creatingGroup ? 'Creating…' : 'Create group'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── CONTACT PROFILE & SECURITY MODAL (Telegram / WhatsApp Luxury Standard) ── */}
-      {showContactInfoModal && activeConversation && (
+      {showContactInfoModal && activeConversation && !activeConversation?.is_group && (
         <div
           onClick={() => setShowContactInfoModal(false)}
           className="fixed inset-0 bg-black/70 md:bg-black/40 backdrop-blur-xs z-50 flex items-end md:items-stretch justify-center md:justify-end p-0 animate-in fade-in duration-200"

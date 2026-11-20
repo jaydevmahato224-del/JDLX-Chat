@@ -1922,7 +1922,7 @@ def _build_group_conversation(cursor, room_id, user_id):
         'other_user': None,
         'contact_name': room.get('title') or 'Group',
         'contact_username': 'group',
-        'contact_avatar': None,
+        'contact_avatar': room.get('avatar') or None,
         'contact_online': False,
         'contact_public_key': None,
         'contact_bio': f"{member_count} member{'s' if member_count != 1 else ''}",
@@ -1971,6 +1971,7 @@ def _group_details(cursor, room_id, user_id):
         'id': room['id'],
         'title': room.get('title') or 'Group',
         'name': room.get('title') or 'Group',
+        'avatar': room.get('avatar') or None,
         'room_key': room['room_key'],
         'room_type': 'group',
         'e2e_secret': room.get('e2e_secret'),
@@ -2000,6 +2001,45 @@ def _insert_group_notifications(cursor, room_id, member_ids, title, message):
                VALUES (?, ?, ?, ?)""",
             (member_id, room_id, title[:120], message[:500])
         )
+
+
+def _dispatch_chat_pushes(user_ids, title, body, url, tag=None):
+    """Best-effort Web Push + FCM to chat users, off the request thread.
+
+    Used for group fan-out (messages, creation, new members) where a single
+    recipient-loop in the route would duplicate the thread/import boilerplate.
+    Never raises: push delivery must not affect the chat flow.
+    """
+    ids = []
+    for uid in user_ids or []:
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            continue
+        if uid > 0 and uid not in ids:
+            ids.append(uid)
+    if not ids:
+        return
+    try:
+        import threading
+        from notifications.notification_service import send_chat_device_push, send_chat_push
+    except Exception as push_err:
+        logger.warning("Chat push unavailable: %s", push_err)
+        return
+    for uid in ids:
+        try:
+            threading.Thread(
+                target=send_chat_push,
+                args=(uid, title, body, url, tag),
+                daemon=True,
+            ).start()
+            threading.Thread(
+                target=send_chat_device_push,
+                args=(uid, title, body, url),
+                daemon=True,
+            ).start()
+        except Exception as push_err:
+            logger.warning("Chat push dispatch failed for %s: %s", uid, push_err)
 
 
 @chat_bp.route('/messages/<int:message_id>', methods=['PATCH'])
@@ -2750,6 +2790,13 @@ def create_chat_group():
 
         conversation = _build_group_conversation(cursor, room_id, my_id)
         conn.commit()
+        _dispatch_chat_pushes(
+            member_ids,
+            f"Added to {name}",
+            f"@{actor} added you to the group \"{name}\"",
+            f"/chat?room={room_id}",
+            f"group-added-{room_id}",
+        )
         return success_response({
             'group': _group_details(cursor, room_id, my_id),
             'conversation': conversation
@@ -2794,6 +2841,104 @@ def rename_chat_group(room_id):
         cursor.execute("UPDATE official_chat_rooms SET title = ? WHERE id = ?", (name, room_id))
         conn.commit()
         return success_response(_group_details(cursor, room_id, my_id), "Group renamed")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/groups/<int:room_id>/avatar', methods=['PATCH'])
+@chat_token_required
+def update_chat_group_avatar(room_id):
+    """Set or clear the group picture. Admins only.
+
+    The image itself is uploaded through /chat/upload (kind=avatar); this
+    endpoint stores the resulting media URL on the group room.
+    """
+    my_id = request.chat_user['user_id']
+    data = request.get_json(silent=True) or {}
+    avatar = str(data.get('avatar') or '').strip()
+    if avatar:
+        if len(avatar) > 1000:
+            return error_response("Invalid group picture URL", 400)
+        if not (avatar.startswith('/static/') or avatar.startswith('http://') or avatar.startswith('https://')):
+            return error_response("Invalid group picture URL", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        group = _group_details(cursor, room_id, my_id)
+        if not group:
+            return error_response("Group not found or you are not a member", 404)
+        if not _group_member_is_admin(cursor, room_id, my_id):
+            return error_response("Only group admins can change the group picture", 403)
+
+        cursor.execute(
+            "UPDATE official_chat_rooms SET avatar = ? WHERE id = ?",
+            (avatar or None, room_id)
+        )
+        conn.commit()
+        return success_response(
+            _group_details(cursor, room_id, my_id),
+            "Group picture updated" if avatar else "Group picture removed"
+        )
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/groups/<int:room_id>/members/<int:member_id>/role', methods=['PATCH'])
+@chat_token_required
+def update_chat_group_member_role(room_id, member_id):
+    """Promote a member to admin or demote an admin back to member.
+
+    The creator keeps admin rights for the life of the group, and an admin
+    cannot change their own role (so a group always has a reachable admin).
+    """
+    my_id = request.chat_user['user_id']
+    data = request.get_json(silent=True) or {}
+    role = str(data.get('role') or '').strip().lower()
+    if role not in ('admin', 'member'):
+        return error_response("Role must be 'admin' or 'member'", 400)
+    if same_id_check(member_id, my_id):
+        return error_response("You can't change your own role", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        group = _group_details(cursor, room_id, my_id)
+        if not group:
+            return error_response("Group not found or you are not a member", 404)
+        if not _group_member_is_admin(cursor, room_id, my_id):
+            return error_response("Only group admins can change member roles", 403)
+        if same_id_check(group.get('creator_id'), member_id):
+            return error_response("The group creator is always an admin", 400)
+
+        cursor.execute(
+            "SELECT role FROM official_chat_group_members WHERE room_id = ? AND user_id = ?",
+            (room_id, member_id)
+        )
+        member = cursor.fetchone()
+        if not member:
+            return error_response("This person is not in the group", 404)
+
+        if (member['role'] or 'member') == role:
+            return success_response(_group_details(cursor, room_id, my_id), "Role already set")
+
+        cursor.execute(
+            "UPDATE official_chat_group_members SET role = ? WHERE room_id = ? AND user_id = ?",
+            (role, room_id, member_id)
+        )
+        if role == 'admin':
+            title = f"You are now an admin of {group['title']}"
+            message = f"@{request.chat_user.get('username') or my_id} made you an admin of \"{group['title']}\""
+        else:
+            title = f"Admin rights removed in {group['title']}"
+            message = f"You are no longer an admin of \"{group['title']}\""
+        cursor.execute(
+            """INSERT INTO official_chat_notifications (user_id, room_id, title, message)
+               VALUES (?, ?, ?, ?)""",
+            (member_id, room_id, title[:120], message[:500])
+        )
+        conn.commit()
+        return success_response(_group_details(cursor, room_id, my_id), "Member role updated")
     finally:
         conn.close()
 
@@ -2857,6 +3002,13 @@ def add_chat_group_members(room_id):
             f"@{actor} added you to the group \"{group['title']}\""
         )
         conn.commit()
+        _dispatch_chat_pushes(
+            new_ids,
+            f"Added to {group['title']}",
+            f"@{actor} added you to the group \"{group['title']}\"",
+            f"/chat?room={room_id}",
+            f"group-added-{room_id}",
+        )
         return success_response(_group_details(cursor, room_id, my_id), "Members added")
     finally:
         conn.close()
@@ -3311,6 +3463,22 @@ def send_room_message(room_id):
                 (recipient_id, room_id, f"New message from @{my_username}", notif_text)
             )
 
+        # Group rooms have no single recipient: every other member gets an
+        # inbox notification (and, after commit, an OS push) for the message.
+        group_member_ids = []
+        group_push_title = ''
+        group_push_body = ''
+        if is_group_room:
+            group_push_title = f"New message in {room_dict.get('title') or 'Group'}"
+            group_push_body = f"@{my_username}: {notif_text}"
+            group_member_ids = [
+                member_id for member_id in _group_member_ids(cursor, room_id)
+                if not same_id_check(member_id, my_id)
+            ]
+            _insert_group_notifications(
+                cursor, room_id, group_member_ids, group_push_title, group_push_body
+            )
+
         conn.commit()
 
         # OS notifications while the recipient's app is closed: Web Push for
@@ -3334,6 +3502,15 @@ def send_room_message(room_id):
                 ).start()
             except Exception as push_err:
                 logger.warning("Chat message push skipped: %s", push_err)
+
+        if group_member_ids:
+            _dispatch_chat_pushes(
+                group_member_ids,
+                group_push_title,
+                group_push_body,
+                f"/chat?room={room_id}",
+                f"chat-message-{new_msg_id}",
+            )
 
         # Return ONLY the message just created. Sending used to reply with the
         # whole room history, so each send re-downloaded the conversation.
@@ -3369,6 +3546,16 @@ def send_room_message(room_id):
         if recipient_id:
             broadcast_items.append((
                 f"chat_user_{recipient_id}",
+                "incoming_chat",
+                {
+                    "room_id": room_id,
+                    "sender_id": my_id,
+                    "message_id": new_msg_id
+                }
+            ))
+        for member_id in group_member_ids:
+            broadcast_items.append((
+                f"chat_user_{member_id}",
                 "incoming_chat",
                 {
                     "room_id": room_id,
@@ -3435,13 +3622,22 @@ def _chat_social_state(cursor, my_id):
 
     # Realtime inbox awareness: track newest incoming message across user's rooms
     # so messages trigger instant delivery even when user is browsing the conversation list.
+    # Direct rooms are owned through user_id/user_two_id; group rooms through
+    # official_chat_group_members. Without the group arm, a group message never
+    # bumped this revision, so the inbox long-poll stayed asleep for groups.
     cursor.execute(
         """SELECT MAX(m.id) AS max_id, COUNT(m.id) AS unread
            FROM official_chat_messages m
            JOIN official_chat_rooms r ON m.room_id = r.id
-           WHERE (r.user_id = ? OR r.user_two_id = ?)
+           WHERE (
+                   (COALESCE(r.room_type, 'direct') != 'group' AND (r.user_id = ? OR r.user_two_id = ?))
+                   OR (r.room_type = 'group' AND EXISTS (
+                         SELECT 1 FROM official_chat_group_members gm
+                         WHERE gm.room_id = r.id AND gm.user_id = ?
+                       ))
+                 )
              AND (m.user_id != ? OR m.sender_type != 'user') AND m.is_read = 0""",
-        (my_id, my_id, my_id)
+        (my_id, my_id, my_id, my_id)
     )
     msg_state = cursor.fetchone()
     max_msg_id = (msg_state['max_id'] if msg_state else 0) or 0

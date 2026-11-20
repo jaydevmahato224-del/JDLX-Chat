@@ -1679,6 +1679,261 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
+  // ── Group chat ──────────────────────────────────────────────────────────
+  // The chat backend already owns group rooms (members, roles, read state).
+  // These actions keep the inbox/live conversation in sync after each call.
+  createGroup: async ({ name, memberIds = [] } = {}) => {
+    const token = get().chatToken
+    if (!token) return { success: false, error: 'Not authenticated' }
+    const title = String(name || '').trim()
+    const ids = (memberIds || [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+    if (title.length < 2) {
+      return { success: false, error: 'Group name must be at least 2 characters' }
+    }
+    if (!ids.length) {
+      return { success: false, error: 'Add at least one friend to create a group' }
+    }
+
+    try {
+      const res = await apiFetch('/chat/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: title, member_ids: ids })
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.message || json?.error || 'Could not create the group' }
+      }
+      const conversation = json.data?.conversation || null
+      if (conversation) {
+        set((state) => ({
+          conversations: [
+            conversation,
+            ...state.conversations.filter((c) => !sameId(c.id, conversation.id))
+          ]
+        }))
+        await get().selectConversation(conversation)
+        get().fetchConversations().catch(() => {})
+      }
+      return { success: true, group: json.data?.group || null, conversation }
+    } catch (e) {
+      console.warn('Create group error:', e)
+      return { success: false, error: 'Could not create the group. Check your connection.' }
+    }
+  },
+
+  fetchGroupDetails: async (roomId) => {
+    const token = get().chatToken
+    if (!token || !roomId) return { success: false, error: 'Not authenticated' }
+    try {
+      const res = await apiFetch(`/chat/groups/${roomId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.message || json?.error || 'Could not load group details' }
+      }
+      return { success: true, group: json.data || null }
+    } catch (e) {
+      console.warn('Fetch group details error:', e)
+      return { success: false, error: 'Could not load group details' }
+    }
+  },
+
+  renameGroup: async (roomId, name) => {
+    const token = get().chatToken
+    const title = String(name || '').trim()
+    if (!token || !roomId) return { success: false, error: 'Not authenticated' }
+    if (title.length < 2) return { success: false, error: 'Group name must be at least 2 characters' }
+    try {
+      const res = await apiFetch(`/chat/groups/${roomId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: title })
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.message || json?.error || 'Could not rename the group' }
+      }
+      set((state) => ({
+        conversations: state.conversations.map((c) =>
+          sameId(c.id, roomId) ? { ...c, contact_name: title } : c
+        ),
+        activeConversation: state.activeConversation && sameId(state.activeConversation.id, roomId)
+          ? { ...state.activeConversation, contact_name: title }
+          : state.activeConversation
+      }))
+      return { success: true, group: json.data || null }
+    } catch (e) {
+      console.warn('Rename group error:', e)
+      return { success: false, error: 'Could not rename the group' }
+    }
+  },
+
+  addGroupMembers: async (roomId, memberIds = []) => {
+    const token = get().chatToken
+    const ids = (memberIds || [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+    if (!token || !roomId) return { success: false, error: 'Not authenticated' }
+    if (!ids.length) return { success: false, error: 'Select at least one friend to add' }
+    try {
+      const res = await apiFetch(`/chat/groups/${roomId}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ member_ids: ids })
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.message || json?.error || 'Could not add members' }
+      }
+      const group = json.data || null
+      if (group) get().applyGroupCount(roomId, group.member_count)
+      return { success: true, group }
+    } catch (e) {
+      console.warn('Add group members error:', e)
+      return { success: false, error: 'Could not add members' }
+    }
+  },
+
+  removeGroupMember: async (roomId, memberId) => {
+    const token = get().chatToken
+    if (!token || !roomId || !memberId) return { success: false, error: 'Not authenticated' }
+    try {
+      const res = await apiFetch(`/chat/groups/${roomId}/members/${memberId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.message || json?.error || 'Could not remove the member' }
+      }
+      const group = json.data || null
+      if (group) get().applyGroupCount(roomId, group.member_count)
+      return { success: true, group }
+    } catch (e) {
+      console.warn('Remove group member error:', e)
+      return { success: false, error: 'Could not remove the member' }
+    }
+  },
+
+  applyGroupAvatar: (roomId, avatar) => {
+    set((state) => ({
+      conversations: state.conversations.map((c) =>
+        sameId(c.id, roomId) ? { ...c, contact_avatar: avatar || null } : c
+      ),
+      activeConversation: state.activeConversation && sameId(state.activeConversation.id, roomId)
+        ? { ...state.activeConversation, contact_avatar: avatar || null }
+        : state.activeConversation
+    }))
+  },
+
+  uploadGroupAvatar: async (roomId, file) => {
+    const token = get().chatToken
+    if (!token || !roomId || !file) return { success: false, error: 'Not authenticated' }
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('kind', 'avatar')
+      const uploadRes = await apiFetch('/chat/upload', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData
+      })
+      const uploadJson = await uploadRes.json().catch(() => null)
+      if (!uploadRes.ok || !uploadJson?.success || !uploadJson?.data?.url) {
+        return { success: false, error: uploadJson?.message || uploadJson?.error || 'Could not upload the group picture' }
+      }
+      const avatar = uploadJson.data.url
+      const res = await apiFetch(`/chat/groups/${roomId}/avatar`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ avatar })
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.message || json?.error || 'Could not save the group picture' }
+      }
+      get().applyGroupAvatar(roomId, avatar)
+      get().fetchConversations().catch(() => {})
+      return { success: true, group: json.data || null, avatar }
+    } catch (e) {
+      console.warn('Upload group avatar error:', e)
+      return { success: false, error: 'Could not upload the group picture' }
+    }
+  },
+
+  setGroupMemberRole: async (roomId, memberId, role) => {
+    const token = get().chatToken
+    if (!token || !roomId || !memberId) return { success: false, error: 'Not authenticated' }
+    if (!['admin', 'member'].includes(role)) return { success: false, error: 'Invalid role' }
+    try {
+      const res = await apiFetch(`/chat/groups/${roomId}/members/${memberId}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ role })
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.message || json?.error || 'Could not update the member role' }
+      }
+      return { success: true, group: json.data || null }
+    } catch (e) {
+      console.warn('Set group member role error:', e)
+      return { success: false, error: 'Could not update the member role' }
+    }
+  },
+
+  applyGroupCount: (roomId, memberCount) => {
+    const count = Number(memberCount)
+    if (!Number.isFinite(count)) return
+    const bio = `${count} member${count === 1 ? '' : 's'}`
+    set((state) => ({
+      conversations: state.conversations.map((c) =>
+        sameId(c.id, roomId) ? { ...c, member_count: count, contact_bio: bio } : c
+      ),
+      activeConversation: state.activeConversation && sameId(state.activeConversation.id, roomId)
+        ? { ...state.activeConversation, member_count: count, contact_bio: bio }
+        : state.activeConversation
+    }))
+  },
+
+  leaveGroup: async (roomId) => {
+    const token = get().chatToken
+    if (!token || !roomId) return { success: false, error: 'Not authenticated' }
+    try {
+      const res = await apiFetch(`/chat/groups/${roomId}/members/me`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.success) {
+        return { success: false, error: json?.message || json?.error || 'Could not leave the group' }
+      }
+      if (sameId(get().activeRoomId, roomId)) {
+        get().stopRealtime()
+        set({
+          activeRoomId: null,
+          activeConversation: null,
+          activeRoom: null,
+          messages: [],
+          messagesLoading: false,
+          peerTyping: false,
+          peerOnline: false
+        })
+      }
+      set((state) => ({
+        conversations: state.conversations.filter((c) => !sameId(c.id, roomId))
+      }))
+      return { success: true }
+    } catch (e) {
+      console.warn('Leave group error:', e)
+      return { success: false, error: 'Could not leave the group' }
+    }
+  },
+
   // 2. Select a Conversation Thread
   selectConversation: async (conv) => {
     if (!conv) return
