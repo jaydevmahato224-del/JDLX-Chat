@@ -71,6 +71,42 @@ const serializeIceCandidate = (candidate) => {
   }
 }
 
+// A phone emits an ICE candidate every few hundred milliseconds. Posting each
+// one separately cost several remote-DB round-trips per candidate, so two
+// phones took tens of seconds to exchange candidates while the UI already said
+// "active" — the call connected too late to hear anything. Buffer them and
+// flush one request per burst.
+const createIceBatcher = (roomId, getToken) => {
+  let batch = []
+  let timer = null
+  const flush = async () => {
+    if (timer) { clearTimeout(timer); timer = null }
+    if (!batch.length) return
+    const candidates = batch.splice(0)
+    try {
+      await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({ candidates })
+      })
+    } catch (e) {
+      console.warn('send ice candidates error:', e)
+    }
+  }
+  return {
+    add: (payload) => {
+      if (!payload) return
+      batch.push(payload)
+      if (timer) return
+      timer = setTimeout(() => { timer = null; flush() }, 120)
+    },
+    flush
+  }
+}
+
 const parseIceCandidate = (raw) => {
   if (!raw) return null
   if (typeof raw === 'object') return raw.candidate ? raw : null
@@ -4179,20 +4215,14 @@ export const useChatStore = create((set, get) => ({
     // Buffer them and flush once the offer has been stored.
     const pendingIceCandidates = []
     let callReady = false
-    const postIceCandidate = async (candidatePayload) => {
+    const iceBatcher = createIceBatcher(roomId, () => get().chatToken || chatToken)
+    const postIceCandidate = (candidatePayload) => {
       if (!candidatePayload) return
-      try {
-        await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${chatToken}`
-          },
-          body: JSON.stringify({ candidate: candidatePayload })
-        })
-      } catch (e) {
-        console.warn('send ice candidate error:', e)
+      if (!callReady) {
+        pendingIceCandidates.push(candidatePayload)
+        return
       }
+      iceBatcher.add(candidatePayload)
     }
 
     const pc = get().createCallPeerConnection(
@@ -4247,9 +4277,8 @@ export const useChatStore = create((set, get) => ({
       // The call row now exists: release the candidates gathered while the
       // offer request was in flight.
       callReady = true
-      for (const payload of pendingIceCandidates.splice(0)) {
-        postIceCandidate(payload)
-      }
+      pendingIceCandidates.splice(0).forEach(iceBatcher.add)
+      iceBatcher.flush()
 
       set({
         activeCall: {
@@ -4297,6 +4326,7 @@ export const useChatStore = create((set, get) => ({
     startNativeCallAudio({ video: isVideo, speaker: get().callIsSpeakerOn })
 
     try {
+      const answerIceBatcher = createIceBatcher(roomId, () => get().chatToken || chatToken)
       const pc = get().createCallPeerConnection(
         (track) => {
           const rs = get().callRemoteStream
@@ -4304,21 +4334,10 @@ export const useChatStore = create((set, get) => ({
             set({ callRemoteStream: new MediaStream([track]) })
           }
         },
-        async (candidate) => {
+        (candidate) => {
           const payload = serializeIceCandidate(candidate)
           if (!payload) return
-          try {
-            await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${chatToken}`
-              },
-              body: JSON.stringify({ candidate: payload })
-            })
-          } catch (e) {
-            console.warn('send ice candidate error:', e)
-          }
+          answerIceBatcher.add(payload)
         },
         (state) => {
           if (state === 'failed' || state === 'closed') get().cleanupCallResources()

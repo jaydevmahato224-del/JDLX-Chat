@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Phone, Mic, Volume2, VolumeX, X, User, Video } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
@@ -21,6 +21,10 @@ export default function CallScreen() {
   const remoteAudioRef = useRef(null)
   const remoteVideoRef = useRef(null)
   const localVideoRef = useRef(null)
+  // Mobile browsers can reject the async play() after the "answer" gesture
+  // (autoplay policy), leaving a connected call completely silent with no way
+  // to start audio. Surface a tap target and retry on the next interaction.
+  const [audioBlocked, setAudioBlocked] = useState(false)
 
   // The call may belong to a conversation other than the one open behind it
   // (incoming calls are detected globally), so resolve its own room.
@@ -30,13 +34,36 @@ export default function CallScreen() {
 
   const isVideo = activeCall?.callType === 'video'
 
+  const playRemoteAudio = () => {
+    const el = remoteAudioRef.current
+    if (!el) return
+    el.muted = false
+    el.volume = 1
+    el.play().then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true))
+  }
+
   // Bind remote audio stream so call voice/audio is heard
   useEffect(() => {
     if (remoteAudioRef.current && callRemoteStream) {
       remoteAudioRef.current.srcObject = callRemoteStream
-      remoteAudioRef.current.play().catch(() => {})
+      playRemoteAudio()
     }
+    // playRemoteAudio is stable enough here: it only touches refs + state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callRemoteStream])
+
+  // While playback is blocked, the next tap anywhere on the call screen unlocks it.
+  useEffect(() => {
+    if (!audioBlocked) return undefined
+    const retry = () => playRemoteAudio()
+    window.addEventListener('pointerdown', retry, { once: true })
+    window.addEventListener('touchstart', retry, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', retry)
+      window.removeEventListener('touchstart', retry)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioBlocked])
 
   // Bind remote video stream for video calls
   useEffect(() => {
@@ -104,6 +131,16 @@ export default function CallScreen() {
               <User className="h-14 w-14 text-zinc-400" />
             </div>
           </div>
+        )}
+
+        {audioBlocked && (
+          <button
+            type="button"
+            onClick={playRemoteAudio}
+            className="absolute left-1/2 top-[max(4.75rem,calc(env(safe-area-inset-top,0px)+4rem))] z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-amber-400/40 bg-amber-500/20 px-4 py-2 text-[13px] font-semibold text-[#facc15] backdrop-blur-sm active:scale-95"
+          >
+            <Volume2 className="h-4 w-4" /> Tap to hear the call
+          </button>
         )}
 
         {/* Top bar: peer name + duration over a readable gradient */}
@@ -259,6 +296,15 @@ export default function CallScreen() {
             <p className="text-zinc-400 text-xs sm:text-sm font-medium tracking-wide">
               {isVideo ? 'Video' : 'Voice'} call in progress
             </p>
+            {audioBlocked && (
+              <button
+                type="button"
+                onClick={playRemoteAudio}
+                className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-400/40 bg-amber-500/20 px-4 py-2 text-[13px] font-semibold text-[#facc15] active:scale-95"
+              >
+                <Volume2 className="h-4 w-4" /> Tap to hear the call
+              </button>
+            )}
           </div>
 
           {/* Controls */}

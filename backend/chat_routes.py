@@ -5788,38 +5788,50 @@ def chat_call_answer(room_id):
 @chat_bp.route('/rooms/<int:room_id>/call/ice-candidate', methods=['POST'])
 @chat_token_required
 def chat_call_ice_candidate(room_id):
-    """Exchange an ICE candidate (appended to the call's candidate list)."""
+    """Exchange one or more ICE candidates (appended to the call's list).
+
+    Accepts ``candidate`` (legacy single value) or a batched ``candidates``
+    array. One round-trip matters here: a phone emits a candidate every few
+    hundred milliseconds, and the old per-candidate path was an access check +
+    SELECT + read-modify-write UPDATE + COMMIT on a remote database. Two phones
+    spent tens of seconds exchanging candidates while the UI already said
+    "active", so the call stayed silent. The append is now a single UPDATE that
+    matches the call and appends via json_insert.
+    """
     my_id = request.chat_user['user_id']
     data = request.get_json(silent=True) or {}
-    candidate = str(data.get('candidate') or '').strip()
-    if not candidate:
+    raw = data.get('candidates')
+    if raw is None:
+        raw = [data.get('candidate')]
+    elif isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raw = []
+    cands = [str(c).strip() for c in raw if c and str(c).strip()][:50]
+    if not cands:
         return error_response("Candidate is required", 400)
 
+    placeholders = ', '.join(["'$[#]', ?"] * len(cands))
     conn = get_db()
     try:
         cursor = conn.cursor()
-        other_id = _call_peer_ids(cursor, room_id, my_id)
-        if other_id is None:
-            return error_response("Access denied to this chat room", 403)
-
         cursor.execute(
-            "SELECT id, state, candidates FROM official_chat_calls WHERE room_id = ? AND state IN ('ringing','active') ORDER BY id DESC LIMIT 1",
-            (room_id,)
+            f"""UPDATE official_chat_calls
+                SET candidates = json_insert(COALESCE(candidates, '[]'), {placeholders})
+                WHERE id = (
+                    SELECT c.id FROM official_chat_calls c
+                    JOIN official_chat_rooms r ON r.id = c.room_id
+                    WHERE c.room_id = ? AND c.state IN ('ringing','active')
+                      AND r.room_type = 'direct'
+                      AND (r.user_id = ? OR r.user_two_id = ?)
+                    ORDER BY c.id DESC LIMIT 1
+                )""",
+            (*cands, room_id, my_id, my_id)
         )
-        call = cursor.fetchone()
-        if not call:
-            return error_response("No active call to exchange candidates with", 404)
-
-        cands = _parse_candidates(call['candidates'])
-        cands.append(candidate)
-        # Keep the list bounded so it cannot grow without bound.
-        if len(cands) > 200:
-            cands = cands[-200:]
-        cursor.execute(
-            "UPDATE official_chat_calls SET candidates = ? WHERE id = ?",
-            (json.dumps(cands), call['id'])
-        )
+        updated = cursor.rowcount
         conn.commit()
+        if updated == 0:
+            return error_response("No active call to exchange candidates with", 404)
         return success_response(None, "Candidate stored")
     finally:
         conn.close()
@@ -5862,18 +5874,19 @@ def chat_call_state(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        other_id = _call_peer_ids(cursor, room_id, my_id)
-        if other_id is None:
-            return error_response("Access denied to this chat room", 403)
-
-        cursor.execute(
-            """SELECT id, caller_id, callee_id, call_type, state, offer_sdp,
-                      answer_sdp, candidates, started_at, ended_at
-               FROM official_chat_calls
-               WHERE room_id = ?
-               ORDER BY id DESC LIMIT 1""",
-            (room_id,)
-        )
+        # One statement for the participant check and the call row: this runs
+        # every 1.5s from both phones, and an extra access query cost another
+        # full remote round-trip on every poll (which delayed the answer and
+        # candidate delivery the call depends on).
+        call_state_sql = """SELECT c.id, c.caller_id, c.callee_id, c.call_type, c.state,
+                                  c.offer_sdp, c.answer_sdp, c.candidates,
+                                  c.started_at, c.ended_at
+                           FROM official_chat_calls c
+                           JOIN official_chat_rooms r ON r.id = c.room_id
+                           WHERE c.room_id = ? AND r.room_type = 'direct'
+                             AND (r.user_id = ? OR r.user_two_id = ?)
+                           ORDER BY c.id DESC LIMIT 1"""
+        cursor.execute(call_state_sql, (room_id, my_id, my_id))
         call = cursor.fetchone()
         if not call:
             return success_response({"state": "idle"}, "No call")
@@ -5887,14 +5900,7 @@ def chat_call_state(room_id):
                 (int(time.time()), call['id'])
             )
             conn.commit()
-            cursor.execute(
-                """SELECT id, caller_id, callee_id, call_type, state, offer_sdp,
-                          answer_sdp, candidates, started_at, ended_at
-                   FROM official_chat_calls
-                   WHERE room_id = ?
-                   ORDER BY id DESC LIMIT 1""",
-                (room_id,)
-            )
+            cursor.execute(call_state_sql, (room_id, my_id, my_id))
             call = cursor.fetchone()
             if not call:
                 return success_response({"state": "idle"}, "No call")
