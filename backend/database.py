@@ -366,10 +366,12 @@ class LibsqlConnectionWrapper:
 # ------------------------------------------------------------------------------
 _POOL = None
 _POOL_LOCK = threading.Lock()
-# Upper bound matches gunicorn's 8 threads per worker (Procfile); idle keep
-# keeps enough warm streams for burst traffic without holding dozens open.
-_POOL_MAX_SIZE = int(os.environ.get("DB_POOL_MAX_SIZE", "16"))
-_POOL_IDLE_KEEP = int(os.environ.get("DB_POOL_IDLE_KEEP", "8"))
+# Kept in step with gunicorn's threads (2 x 32 by default). Each open chat
+# holds one pooled stream for its long-poll, so a cache of only 8 made every
+# request beyond that pay a fresh TLS/Hrana handshake to Turso — a multi-second
+# stall on a distant region, which showed up as "Timed out after 35s" on sends.
+_POOL_MAX_SIZE = int(os.environ.get("DB_POOL_MAX_SIZE", "32"))
+_POOL_IDLE_KEEP = int(os.environ.get("DB_POOL_IDLE_KEEP", "24"))
 # Turso's Hrana server expires streams that sit idle for a while
 # ("stream expired due to inactivity" — tursodatabase/libsql-python#41).
 # Stale streams are now replayed transparently (execute AND fetch), so a

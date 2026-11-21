@@ -3339,6 +3339,9 @@ def send_room_message(room_id):
     builds do), because the implementation returns the already-committed row
     instead of inserting it again.
     """
+    # Latency probe: a send that takes seconds pinpoints a stalled DB stage in
+    # the Railway logs instead of only showing up as a client 35s timeout.
+    g._jdlx_send_started = time.monotonic()
     try:
         return _send_room_message_impl(room_id)
     except Exception as exc:
@@ -3448,6 +3451,9 @@ def _send_room_message_impl(room_id):
             conn.commit()
             room_dict['e2e_secret'] = e2e_sec
 
+        started = getattr(g, '_jdlx_send_started', None) or time.monotonic()
+        after_prepare = time.monotonic()
+
         def existing_send_response(row):
             """Return a previously committed send for the same client key."""
             created = dict(row)
@@ -3519,6 +3525,7 @@ def _send_room_message_impl(room_id):
                     return existing_send_response(already_sent)
             return error_response("Message could not be saved", 500)
         new_msg_id = inserted['id'] if hasattr(inserted, 'keys') else inserted[0]
+        after_insert = time.monotonic()
 
         is_encrypted = message_text.startswith(('enc:v1:', 'enc:v2:'))
         if is_encrypted:
@@ -3563,6 +3570,16 @@ def _send_room_message_impl(room_id):
             )
 
         conn.commit()
+        after_commit = time.monotonic()
+        total_ms = (after_commit - started) * 1000
+        if total_ms >= 2000:
+            logger.warning(
+                "Slow chat send room=%s user=%s total=%.0fms pre=%.0fms insert=%.0fms rest=%.0fms",
+                room_id, my_id, total_ms,
+                (after_prepare - started) * 1000,
+                (after_insert - after_prepare) * 1000,
+                (after_commit - after_insert) * 1000,
+            )
 
         # OS notifications while the recipient's app is closed: Web Push for
         # browsers and FCM for the packaged Android app. Best-effort and off the
@@ -4774,10 +4791,14 @@ def poll_room_events(room_id):
 
         deadline = time.time() + timeout
         last_presence_ping = 0
+        last_online_check = 0
+        peer_online = None
         while True:
             now = int(time.time())
-            # Presence heartbeat (updates are throttled to every 15s).
-            if now - last_presence_ping >= 15:
+            # Presence heartbeat. 45s is safely inside the 90s "online" window
+            # and cuts these write+commit round-trips to a third; they used to
+            # compete with message writes on every open chat.
+            if now - last_presence_ping >= 45:
                 cursor.execute(
                     "UPDATE chat_users SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (my_id,)
@@ -4795,16 +4816,21 @@ def poll_room_events(room_id):
             rows = cursor.fetchall()
 
             peer_typing = False
-            peer_online = False
             if other_id:
-                cursor.execute(
-                    """SELECT CASE WHEN last_seen_at >= datetime('now', '-90 seconds')
-                                   THEN 1 ELSE 0 END AS online
-                       FROM chat_users WHERE id = ?""",
-                    (other_id,)
-                )
-                online_row = cursor.fetchone()
-                peer_online = bool(online_row and online_row['online'])
+                # The peer's online flag changes slowly; querying it every
+                # 0.75s cycle was one of the biggest remote-DB read loads.
+                if peer_online is None or now - last_online_check >= 15:
+                    cursor.execute(
+                        """SELECT CASE WHEN last_seen_at >= datetime('now', '-90 seconds')
+                                       THEN 1 ELSE 0 END AS online
+                           FROM chat_users WHERE id = ?""",
+                        (other_id,)
+                    )
+                    online_row = cursor.fetchone()
+                    peer_online = bool(online_row and online_row['online'])
+                    last_online_check = now
+            else:
+                peer_online = False
 
             online_changed = (known_online is not None) and (int(peer_online) != int(known_online))
 

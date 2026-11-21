@@ -3410,6 +3410,15 @@ export const useChatStore = create((set, get) => ({
         return { success: true }
       }
 
+      // One automatic retry for a timeout/network failure, reusing the same
+      // idempotency key. A request stalled on one worker/DB stream is often
+      // served instantly by another, and the backend dedupes on the client key
+      // so a message that did commit can never be duplicated.
+      if (!existingTempId && !err?.httpStatus) {
+        console.warn('[chat] retrying message send once after transport failure')
+        return get().sendRoomMessage(targetRoomId, text, mediaUrl, messageType, replyToId, tempId)
+      }
+
       set((state) => ({
         sending: false,
         messages: state.messages.map((m) =>

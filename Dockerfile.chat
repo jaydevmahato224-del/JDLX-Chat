@@ -20,4 +20,4 @@ EXPOSE 10000
 # 2x8=16 slots served only ~8 concurrent users and new sends queued until the
 # client's 35s abort. 2x32=64 slots keeps sends off the queue; override with
 # GUNICORN_THREADS on the host if needed.
-CMD ["sh", "-c", "python migrations_boot.py && exec gunicorn --bind 0.0.0.0:${PORT} --worker-class gthread --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-32} --timeout 120 --access-logfile - --error-logfile - chat_app:app"]
+CMD ["sh", "-c", "python migrations_boot.py && exec gunicorn --bind 0.0.0.0:${PORT} --worker-class gthread --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-32} --timeout 120 --access-logfile - --access-logformat '%(h)s %(r)s %(s)s %(b)s %(L)s' --error-logfile - chat_app:app"]
