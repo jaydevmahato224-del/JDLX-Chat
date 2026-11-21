@@ -3366,18 +3366,6 @@ def _send_room_message_impl(room_id):
     """Send a message inside a specific 1-to-1 or group room."""
     my_id = request.chat_user['user_id']
     is_new_account = _is_new_chat_account(request.chat_user.get('created_at'))
-    # One round-trip (plus one shared commit) for both send budgets instead of
-    # the old SELECT+write+commit per budget — rate limiting was a large slice
-    # of the send latency on remote Turso. A retry must not consume a second
-    # budget for the same logical message.
-    if not getattr(g, '_jdlx_send_retried', False):
-        budgets = [("send_message", f"user_{my_id}", 40, 60)]
-        if is_new_account:
-            budgets.append(("new_account_send", f"user_{my_id}", 300, 3600))
-        # commit=False: the counter rides along in the message transaction
-        # below, saving one Turso round-trip on every send.
-        if not check_chat_rate_limits(budgets, commit=False):
-            return error_response("You are sending messages too fast. Please slow down.", 429)
     data = request.get_json(silent=True) or {}
     message_text = (data.get('message') or '').strip()
     media_url = data.get('media_url')
@@ -3487,6 +3475,46 @@ def _send_room_message_impl(room_id):
             if not cursor.fetchone():
                 return error_response("Reply target not found in this chat", 400)
 
+        # Rate limiting is applied only now, after every read. It used to run
+        # first, which opened a write transaction before the room/profile/reply
+        # reads and held Turso's single write lock across all of them (~0.6s
+        # each). Concurrent sends and presence heartbeats queued behind that
+        # lock for tens of seconds, which the client saw as "Timed out after
+        # 35s". Keeping it next to the INSERT keeps the lock held for one short
+        # burst instead. A retry must not consume a second budget for the same
+        # logical message.
+        if not getattr(g, '_jdlx_send_retried', False):
+            budgets = [("send_message", f"user_{my_id}", 40, 60)]
+            if is_new_account:
+                budgets.append(("new_account_send", f"user_{my_id}", 300, 3600))
+            # commit=False: the counter rides along in the message transaction
+            # below, saving one Turso round-trip on every send.
+            if not check_chat_rate_limits(budgets, commit=False):
+                return error_response("You are sending messages too fast. Please slow down.", 429)
+
+        is_encrypted = message_text.startswith(('enc:v1:', 'enc:v2:'))
+        if is_encrypted:
+            # Keep the ciphertext as the inbox preview. The server still cannot
+            # read it, while the two clients can decrypt it for a real preview.
+            preview = message_text
+            notif_text = "Sent an encrypted message"
+        else:
+            preview = (message_text[:60] + '...') if len(message_text) > 60 else message_text
+            notif_text = message_text or "Sent an attachment"
+
+        # Group members are read before the write transaction so membership
+        # lookups never sit inside the write lock either.
+        group_member_ids = []
+        group_push_title = ''
+        group_push_body = ''
+        if is_group_room:
+            group_push_title = f"New message in {room_dict.get('title') or 'Group'}"
+            group_push_body = f"@{my_username}: {notif_text}"
+            group_member_ids = [
+                member_id for member_id in _group_member_ids(cursor, room_id)
+                if not same_id_check(member_id, my_id)
+            ]
+
         # Build the response row from known values instead of SELECT-ing the
         # row back: one less Turso round-trip on every send, identical shape.
         now_ts = int(time.time())
@@ -3527,16 +3555,6 @@ def _send_room_message_impl(room_id):
         new_msg_id = inserted['id'] if hasattr(inserted, 'keys') else inserted[0]
         after_insert = time.monotonic()
 
-        is_encrypted = message_text.startswith(('enc:v1:', 'enc:v2:'))
-        if is_encrypted:
-            # Keep the ciphertext as the inbox preview. The server still cannot
-            # read it, while the two clients can decrypt it for a real preview.
-            preview = message_text
-            notif_text = "Sent an encrypted message"
-        else:
-            preview = (message_text[:60] + '...') if len(message_text) > 60 else message_text
-            notif_text = message_text or "Sent an attachment"
-
         cursor.execute(
             """UPDATE official_chat_rooms 
                SET last_message = ?, last_message_at = CURRENT_TIMESTAMP 
@@ -3555,16 +3573,8 @@ def _send_room_message_impl(room_id):
 
         # Group rooms have no single recipient: every other member gets an
         # inbox notification (and, after commit, an OS push) for the message.
-        group_member_ids = []
-        group_push_title = ''
-        group_push_body = ''
+        # The member list was read before the write transaction opened.
         if is_group_room:
-            group_push_title = f"New message in {room_dict.get('title') or 'Group'}"
-            group_push_body = f"@{my_username}: {notif_text}"
-            group_member_ids = [
-                member_id for member_id in _group_member_ids(cursor, room_id)
-                if not same_id_check(member_id, my_id)
-            ]
             _insert_group_notifications(
                 cursor, room_id, group_member_ids, group_push_title, group_push_body
             )
