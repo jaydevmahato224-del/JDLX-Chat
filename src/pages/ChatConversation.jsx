@@ -3566,6 +3566,13 @@ export default function ChatConversation() {
         setFriendModalTab('requests')
         return
       }
+      // Web Push / native FCM call notification: ring the in-app modal for the
+      // call that woke us, even if the watcher has not polled yet. Answering
+      // stays a manual tap in IncomingCallModal.
+      const incomingCallId = parsed.searchParams.get('incoming_call')
+      if (incomingCallId) {
+        handleCallDeepLink(incomingCallId, 'ring').catch(() => {})
+      }
       const roomId = parsed.searchParams.get('room')
       if (!roomId) return
       await fetchConversations()
@@ -3595,7 +3602,7 @@ export default function ChatConversation() {
 
     try {
       const params = new URLSearchParams(window.location.search)
-      if (params.get('open') === 'requests' || params.get('room')) {
+      if (params.get('open') === 'requests' || params.get('room') || params.get('incoming_call')) {
         const target = window.location.href
         window.history.replaceState({}, document.title, window.location.pathname)
         openTarget(target)
@@ -3610,7 +3617,7 @@ export default function ChatConversation() {
       }
       window.removeEventListener('jdlx:chat-push-nav', onNativePush)
     }
-  }, [fetchConversations, selectConversation, scrollToBottom])
+  }, [fetchConversations, selectConversation, scrollToBottom, handleCallDeepLink])
 
   // 3. Scroll to bottom when messages update
   // Only scroll for a NEW last message. Prepending an older page keeps the

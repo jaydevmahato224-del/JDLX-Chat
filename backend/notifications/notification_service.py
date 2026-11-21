@@ -239,8 +239,11 @@ def _delete_push_subscription(subscription_id):
         conn.close()
 
 
-def send_chat_push(chat_user_id, title, body, url='/chat', tag=None):
+def send_chat_push(chat_user_id, title, body, url='/chat', tag=None, extra=None):
     """Send a Web Push to every browser registered by ``chat_user_id``.
+
+    ``extra`` adds fields to the notification payload (e.g. ``requireInteraction``
+    for an incoming call) that public/sw.js knows how to read.
 
     Returns the number of subscriptions the push provider accepted.
     """
@@ -257,13 +260,18 @@ def send_chat_push(chat_user_id, title, body, url='/chat', tag=None):
     if not subscriptions:
         return 0
 
-    payload = json.dumps({
+    payload_data = {
         'title': title,
         'body': body,
         'url': url,
         'tag': tag or DEFAULT_TAG,
         'icon': '/logo192.png',
-    })
+    }
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is not None:
+                payload_data[str(key)] = value
+    payload = json.dumps(payload_data)
 
     sent = 0
     for sub in subscriptions:
@@ -542,11 +550,35 @@ def send_chat_call_push(chat_user_id, call_id, room_id, call_type='voice', calle
     is_video = str(call_type).lower() == 'video'
     title = 'Incoming video call' if is_video else 'Incoming voice call'
     body = f"{caller_name or 'Someone'} is calling…"
+    url = f'/chat?room={room_id}&incoming_call={call_id}'
+
+    # Browsers/PWAs have no FCM service: without a Web Push the call rings
+    # nowhere once the tab is hidden or the phone is locked. sw.js shows this
+    # only when no visible Chat window exists, so the in-app modal is not
+    # duplicated.
+    try:
+        send_chat_push(
+            chat_user_id,
+            title,
+            body,
+            url=url,
+            tag=f'call_{call_id}',
+            extra={
+                'type': 'incoming_call',
+                'call_id': call_id,
+                'room_id': room_id,
+                'requireInteraction': True,
+                'vibrate': [800, 600, 800, 600, 800],
+            },
+        )
+    except Exception as exc:
+        logger.warning('Call web push failed for %s: %s', chat_user_id, exc)
+
     return send_chat_device_push(
         chat_user_id,
         title,
         body,
-        url=f'/chat?incoming_call={call_id}',
+        url=url,
         data={
             'type': 'incoming_call',
             'call_id': call_id,

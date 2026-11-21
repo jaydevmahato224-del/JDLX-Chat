@@ -75,6 +75,112 @@ export default function CallScreen() {
     return `${m}:${sec < 10 ? '0' : ''}${sec}`
   }
 
+  // Video calls are edge-to-edge on phones (like a normal mobile call app):
+  // the remote feed fills the screen, controls float on top and respect the
+  // safe areas. The old 190px square inside a card was far too small for a
+  // phone camera feed. Voice calls keep the compact card below.
+  if (isVideo) {
+    return (
+      <div
+        className="fixed inset-0 z-[60] bg-black"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Active video call"
+      >
+        {/* Hidden audio element keeps the peer's voice audible */}
+        <audio ref={remoteAudioRef} autoPlay playsInline />
+
+        {callRemoteStream ? (
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 h-full w-full bg-zinc-900 object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-[#0b0c0e]">
+            <div className="flex h-32 w-32 items-center justify-center rounded-full border-2 border-amber-500/30 bg-[#0f1114] shadow-xl shadow-amber-500/5">
+              <User className="h-14 w-14 text-zinc-400" />
+            </div>
+          </div>
+        )}
+
+        {/* Top bar: peer name + duration over a readable gradient */}
+        <div className="absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 via-black/40 to-transparent px-4 pb-12 pt-[max(0.9rem,env(safe-area-inset-top,0px))]">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-[17px] font-semibold text-white">{peerName}</p>
+              <p className="mt-0.5 flex items-center gap-2 text-xs font-medium text-white/70">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                {isCallerRinging ? 'Ringing…' : formatTime(callTimerSeconds)}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={endCall}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-95 cursor-pointer"
+              aria-label="End call"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Local camera preview (PiP) */}
+        {callLocalStream && (
+          <div className="absolute right-4 bottom-[calc(env(safe-area-inset-bottom,0px)_+_8.5rem)] aspect-[3/4] w-24 overflow-hidden rounded-2xl border border-white/25 bg-black shadow-2xl sm:w-32">
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="h-full w-full -scale-x-100 object-cover"
+            />
+          </div>
+        )}
+
+        {/* Bottom controls over a gradient, above the gesture bar */}
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/45 to-transparent px-6 pt-16 pb-[max(1.4rem,env(safe-area-inset-bottom,0px))]">
+          <div className="flex items-center justify-center gap-5">
+            <button
+              type="button"
+              onClick={toggleMute}
+              className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-full border backdrop-blur-sm transition active:scale-95 cursor-pointer ${
+                callIsMuted
+                  ? 'border-rose-500/40 bg-rose-500/25 text-rose-300'
+                  : 'border-white/20 bg-white/10 text-white'
+              }`}
+              aria-label={callIsMuted ? 'Unmute microphone' : 'Mute microphone'}
+            >
+              <Mic className="h-6 w-6" />
+            </button>
+            <button
+              type="button"
+              onClick={endCall}
+              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full border border-rose-500/50 bg-rose-600 text-white shadow-[0_0_24px_rgba(239,68,68,0.4)] transition active:scale-95 cursor-pointer"
+              aria-label="End call"
+            >
+              <Phone className="h-7 w-7 rotate-[135deg]" />
+            </button>
+            <button
+              type="button"
+              onClick={toggleSpeaker}
+              className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-full border backdrop-blur-sm transition active:scale-95 cursor-pointer ${
+                callIsSpeakerOn
+                  ? 'border-amber-400/40 bg-amber-400/20 text-[#facc15]'
+                  : 'border-white/20 bg-white/10 text-white'
+              }`}
+              aria-label={callIsSpeakerOn ? 'Turn off speaker' : 'Turn on speaker'}
+            >
+              {callIsSpeakerOn ? <Volume2 className="h-6 w-6" /> : <VolumeX className="h-6 w-6" />}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] animate-in fade-in duration-200"

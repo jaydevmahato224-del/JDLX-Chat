@@ -139,13 +139,17 @@ self.addEventListener('push', (event) => {
 
   const title = payload.title || 'JDLX Chat';
   const targetUrl = payload.url || '/chat';
+  const isCall = payload.type === 'incoming_call';
   const options = {
     body: payload.body || 'You have a new notification',
     icon: payload.icon || '/logo192.png',
     badge: '/logo192.png',
     tag: payload.tag || 'jdlx-chat',
     renotify: true,
-    data: { url: targetUrl },
+    // Incoming calls must not silently fade away like a chat message.
+    requireInteraction: isCall,
+    vibrate: Array.isArray(payload.vibrate) ? payload.vibrate : undefined,
+    data: { url: targetUrl, type: isCall ? 'incoming_call' : 'chat' },
   };
 
   event.waitUntil((async () => {

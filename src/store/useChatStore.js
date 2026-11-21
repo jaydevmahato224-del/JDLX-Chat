@@ -4537,6 +4537,12 @@ export const useChatStore = create((set, get) => ({
         return { success: true }
       }
 
+      // Call notification tapped (PWA / native): only surface the ringing
+      // modal. Answering needs a user gesture for the mic/camera permission.
+      if (action === 'ring' || action === 'open') {
+        return { success: true }
+      }
+
       const result = await get().answerCall()
       if (!result?.success) set({ callDeepLinkHandled: null })
       return result
