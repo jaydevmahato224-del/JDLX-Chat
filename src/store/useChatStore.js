@@ -50,6 +50,43 @@ const isMissingCallRoute = (res, json) =>
 
 const CALL_ROUTES_MISSING_ERROR = 'Voice calling is not available on this server yet.'
 
+// ICE candidates are exchanged through the backend as strings. Send the whole
+// candidate init (sdpMid/sdpMLineIndex matter for video calls with several
+// m-lines) instead of only `candidate.candidate`, and fall back to the old
+// plain-string format when reading rows written by an older client.
+const serializeIceCandidate = (candidate) => {
+  if (!candidate || !candidate.candidate) return ''
+  try {
+    const json = typeof candidate.toJSON === 'function'
+      ? candidate.toJSON()
+      : {
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdpMid ?? null,
+          sdpMLineIndex: candidate.sdpMLineIndex ?? null,
+          usernameFragment: candidate.usernameFragment ?? null
+        }
+    return JSON.stringify(json)
+  } catch {
+    return candidate.candidate
+  }
+}
+
+const parseIceCandidate = (raw) => {
+  if (!raw) return null
+  if (typeof raw === 'object') return raw.candidate ? raw : null
+  const text = String(raw).trim()
+  if (!text) return null
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text)
+      if (parsed && typeof parsed === 'object' && parsed.candidate) return parsed
+    } catch {
+      /* legacy plain candidate string */
+    }
+  }
+  return { candidate: text }
+}
+
 let realtimeAuthReady = false
 let realtimeAuthExpiresAt = 0
 let realtimeAuthPromise = null
@@ -603,6 +640,9 @@ function sendSupabaseUserAlert(targetUserId, event, payload) {
 // the crypto work for every preview.
 let conversationsInFlight = null
 let conversationsRefreshQueued = false
+// One trailing inbox/unread refresh per burst of sends. Every send used to
+// fire two extra API calls on the same small server thread pool.
+let postSendRefreshTimer = null
 
 const CHAT_THEMES = new Set(['system', 'light', 'dark'])
 
@@ -2659,12 +2699,12 @@ export const useChatStore = create((set, get) => ({
           const msgs = get().messages
           const realMsgs = msgs.filter((m) => m && typeof m.id === 'number' && m.id > 0)
           const afterId = realMsgs.length ? Math.max(...realMsgs.map((m) => m.id)) : 0
+          // Typing, read receipts and edit/delete updates are deliberately not
+          // polled: the extra DB reads every 0.75s per open chat were starving
+          // the server threads. They arrive over the Supabase broadcast channel.
           const res = await apiFetch(
             `/chat/rooms/${roomId}/events?after_message_id=${afterId}` +
-            `&timeout=3&typing=${get().peerTyping ? 1 : 0}` +
-            `&last_read_id=${get().peerLastReadId || 0}` +
-            `&online=${get().peerOnline ? 1 : 0}` +
-            `&events_since=${get().eventsCursor || 0}`,
+            `&timeout=3&online=${get().peerOnline ? 1 : 0}`,
             { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal, timeoutMs: 8000 }
           )
           if (controller.signal.aborted) return
@@ -2676,13 +2716,11 @@ export const useChatStore = create((set, get) => ({
           }
 
           const data = json.data || {}
-          const eventTs = Number(data.last_event_at) || 0
           // This loop runs every ~3.3s for the whole session. Writing the same
           // values back into the store still notified every subscriber (full
           // chat screen + message list re-render). Only emit a patch when a
           // value actually changed; returning the current state is a no-op in
           // zustand and skips notifying listeners entirely.
-          const nextPeerTyping = Boolean(data.peer_typing)
           // After a presence leave, the server's 90-second last_seen window
           // can still report "online"; do not resurrect a false presence.
           const nextPeerOnline = Boolean(
@@ -2691,23 +2729,10 @@ export const useChatStore = create((set, get) => ({
             get().activeConversation?.contact_online ||
             get().activeConversation?.other_user?.is_online
           )
-          const nextPeerLastReadId = Number(data.peer_last_read_id) || 0
           set((state) => {
-            const patch = {}
-            if (state.peerTyping !== nextPeerTyping) patch.peerTyping = nextPeerTyping
-            if (state.peerOnline !== nextPeerOnline) patch.peerOnline = nextPeerOnline
-            if (state.peerLastReadId !== nextPeerLastReadId) patch.peerLastReadId = nextPeerLastReadId
-            if (nextPeerLastReadId > (state.peerLastDeliveredId || 0)) patch.peerLastDeliveredId = nextPeerLastReadId
-            if (eventTs && state.eventsCursor !== eventTs) patch.eventsCursor = eventTs
-            return Object.keys(patch).length > 0 ? patch : state
+            if (state.peerOnline === nextPeerOnline) return state
+            return { peerOnline: nextPeerOnline }
           })
-
-          // Local auto-clear so "typing…" never sticks when the peer stops.
-          if (data.peer_typing) {
-            clearTimeout(get()._typingTimer)
-            const timer = setTimeout(() => set({ peerTyping: false }), 6000)
-            set({ _typingTimer: timer })
-          }
 
           const incoming = Array.isArray(data.messages) ? data.messages : []
           if (incoming.length) {
@@ -2816,11 +2841,8 @@ export const useChatStore = create((set, get) => ({
       }).catch(() => {})
     }
 
-    // Persisted backend safety fallback
-    apiFetch(`/chat/rooms/${target}/typing`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` }
-    }).catch(() => {})
+    // No backend fallback: nothing polls chat_typing any more (the long-poll
+    // no longer reads it), so writing it every 2s was pure DB load.
   },
 
   // 3d. Safety controls: block/unblock + report
@@ -3305,10 +3327,12 @@ export const useChatStore = create((set, get) => ({
         if (uid) {
           setCachedMessages(uid, targetRoomId, merged)
         }
-        setTimeout(() => {
+        clearTimeout(postSendRefreshTimer)
+        postSendRefreshTimer = setTimeout(() => {
+          postSendRefreshTimer = null
           get().fetchConversations().catch(() => {})
           get().fetchUnreadCount().catch(() => {})
-        }, 0)
+        }, 1000)
 
         // 1. Instant WebSocket broadcast to active room (<30ms delivery)
         const rawCreated = rawMsgs[0]
@@ -4139,6 +4163,29 @@ export const useChatStore = create((set, get) => ({
     set({ callLocalStream: localStream, callIsMuted: false })
     startNativeCallAudio({ video: callType === 'video', speaker: get().callIsSpeakerOn })
 
+    // ICE gathering starts as soon as setLocalDescription() runs, which is
+    // BEFORE the offer row exists on the backend. Those early candidates used
+    // to be POSTed into a 404 ("No active call") and were lost, so the callee
+    // never learned how to reach the caller and the call never connected.
+    // Buffer them and flush once the offer has been stored.
+    const pendingIceCandidates = []
+    let callReady = false
+    const postIceCandidate = async (candidatePayload) => {
+      if (!candidatePayload) return
+      try {
+        await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${chatToken}`
+          },
+          body: JSON.stringify({ candidate: candidatePayload })
+        })
+      } catch (e) {
+        console.warn('send ice candidate error:', e)
+      }
+    }
+
     const pc = get().createCallPeerConnection(
       (track) => {
         const rs = get().callRemoteStream
@@ -4146,19 +4193,14 @@ export const useChatStore = create((set, get) => ({
           set({ callRemoteStream: new MediaStream([track]) })
         }
       },
-      async (candidate) => {
-        try {
-          await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${chatToken}`
-            },
-            body: JSON.stringify({ candidate: candidate.candidate })
-          })
-        } catch (e) {
-          console.warn('send ice candidate error:', e)
+      (candidate) => {
+        const payload = serializeIceCandidate(candidate)
+        if (!payload) return
+        if (!callReady) {
+          pendingIceCandidates.push(payload)
+          return
         }
+        postIceCandidate(payload)
       },
       (state) => {
         if (state === 'failed' || state === 'closed') get().cleanupCallResources()
@@ -4193,6 +4235,13 @@ export const useChatStore = create((set, get) => ({
             : (json.error || 'Call offer failed')
         }
       }
+      // The call row now exists: release the candidates gathered while the
+      // offer request was in flight.
+      callReady = true
+      for (const payload of pendingIceCandidates.splice(0)) {
+        postIceCandidate(payload)
+      }
+
       set({
         activeCall: {
           roomId,
@@ -4247,6 +4296,8 @@ export const useChatStore = create((set, get) => ({
           }
         },
         async (candidate) => {
+          const payload = serializeIceCandidate(candidate)
+          if (!payload) return
           try {
             await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
               method: 'POST',
@@ -4254,7 +4305,7 @@ export const useChatStore = create((set, get) => ({
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${chatToken}`
               },
-              body: JSON.stringify({ candidate: candidate.candidate })
+              body: JSON.stringify({ candidate: payload })
             })
           } catch (e) {
             console.warn('send ice candidate error:', e)
@@ -4398,9 +4449,11 @@ export const useChatStore = create((set, get) => ({
           const cands = call.candidates || []
           for (const cand of cands.slice(appliedCandidates)) {
             appliedCandidates += 1
+            const init = parseIceCandidate(cand)
+            if (!init) continue
             try {
               const pc = get().callPeerConnection
-              if (pc) await pc.addIceCandidate({ candidate: cand })
+              if (pc) await pc.addIceCandidate(init)
             } catch (e) {
               console.warn('add ice candidate error:', e)
             }

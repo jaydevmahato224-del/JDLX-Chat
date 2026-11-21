@@ -73,7 +73,6 @@ import {
   Plus,
   QrCode,
   Timer,
-  Zap,
   Tag,
   StickyNote,
   BellOff,
@@ -1069,7 +1068,6 @@ function sanitizeSafeUrl(url, fallback = '#') {
 
 // ── DISAPPEARING MESSAGES DURATIONS & AUTO-DELETE CONFIGURATION ──
 const DISAPPEARING_OPTIONS = [
-  { id: 'seen', label: 'Auto-delete after seen', subtitle: 'Messages vanish a few seconds after being read (View Once)', icon: 'zap' },
   { id: '5m', label: '5 Minutes', subtitle: 'Disappears 5 minutes after sending (great for testing)', icon: 'timer', ms: 5 * 60 * 1000 },
   { id: '1h', label: '1 Hour', subtitle: 'Disappears 1 hour after sending', icon: 'timer', ms: 60 * 60 * 1000 },
   { id: '24h', label: '24 Hours', subtitle: 'Disappears 24 hours after sending', icon: 'timer', ms: 24 * 60 * 60 * 1000 },
@@ -1577,13 +1575,22 @@ export default function ChatConversation() {
     return () => { cancelled = true }
   }, [showSafetyVerificationModal, activeConversation, chatUser?.public_key, chatUser?.id])
 
-  // Disappearing Messages & Per-Friend Auto-Delete After Seen State
+  // Disappearing Messages (timers) & per-friend auto-delete state
   const [showDisappearingModal, setShowDisappearingModal] = useState(false)
   const [disappearingModalContact, setDisappearingModalContact] = useState(null)
   const [disappearingSettings, setDisappearingSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('jdlx_chat_disappearing_settings')
-      return saved ? JSON.parse(saved) : {}
+      const parsed = saved ? JSON.parse(saved) : {}
+      // The "delete after seen" mode was removed. Drop any value saved before
+      // that so it can never linger as a mode the engine no longer supports.
+      const cleaned = Object.fromEntries(
+        Object.entries(parsed || {}).filter(([, mode]) => mode !== 'seen')
+      )
+      if (saved && Object.keys(cleaned).length !== Object.keys(parsed || {}).length) {
+        localStorage.setItem('jdlx_chat_disappearing_settings', JSON.stringify(cleaned))
+      }
+      return cleaned
     } catch {
       return {}
     }
@@ -1732,7 +1739,7 @@ export default function ChatConversation() {
     const opt = DISAPPEARING_OPTIONS.find((o) => o.id === mode)
     const targetName = conv ? getContactDisplayName(conv) : 'this chat'
     toast.success(`Auto-delete for ${targetName}: ${opt ? opt.label : mode}`, {
-      icon: mode === 'seen' ? '⚡' : mode === 'off' ? '⭕' : '⏱️',
+      icon: mode === 'off' ? '⭕' : '⏱️',
     })
   }, [activeConversation, activeRoomId, getContactKeys, getContactDisplayName])
 
@@ -1834,9 +1841,7 @@ export default function ChatConversation() {
     return list
   }, [friends, friendsSortMode, activeConversation, isContactOnline, getContactDisplayName])
 
-  // Auto-Delete & "Auto-Delete After Seen" Engine
-  const seenTimestampRef = useRef({})
-
+  // Auto-Delete (timer) Engine
   useEffect(() => {
     if (!activeRoomId || !currentDisappearingMode || currentDisappearingMode === 'off') return
 
@@ -1874,43 +1879,7 @@ export default function ChatConversation() {
       const now = Date.now()
       const currentMessages = messages || []
 
-      // 1. "Auto-delete after seen" (View Once) mode
-      if (currentDisappearingMode === 'seen') {
-        currentMessages.forEach((m) => {
-          if (!m || m.deleted || m.message_type === 'deleted') return
-          const mCreatedMs = m.created_at ? new Date(m.created_at).getTime() : 0
-          if (!mCreatedMs || mCreatedMs < baselineMs) return
-          const isUser = sameId(m.user_id, chatUser?.id) || (m.sender_type === 'user' && m.username === chatUser?.username)
-
-          if (isUser) {
-            // Sender side: seen when peer read it (peerLastReadId >= m.id or m.is_read)
-            const isSeen = Boolean(peerLastReadId >= m.id || m.is_read)
-            if (isSeen) {
-              if (!seenTimestampRef.current[m.id]) {
-                seenTimestampRef.current[m.id] = now
-              } else if (now - seenTimestampRef.current[m.id] >= 4000) {
-                // 4 seconds grace period after peer reads it -> auto-delete for everyone
-                deleteMessage(m.id, 'everyone')
-                delete seenTimestampRef.current[m.id]
-              }
-            }
-          } else {
-            // Receiver side: seen when viewing chat
-            if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-              if (!seenTimestampRef.current[m.id]) {
-                seenTimestampRef.current[m.id] = now
-              } else if (now - seenTimestampRef.current[m.id] >= 5000) {
-                // 5 seconds grace period after reading -> auto-delete
-                deleteMessage(m.id, 'me')
-                delete seenTimestampRef.current[m.id]
-              }
-            }
-          }
-        })
-        return
-      }
-
-      // 2. Time-based expiration (5m, 1h, 24h, 7d, 90d)
+      // Time-based expiration (5m, 1h, 24h, 7d, 90d)
       const opt = DISAPPEARING_OPTIONS.find((o) => o.id === currentDisappearingMode)
       if (!opt || !opt.ms) return
 
@@ -1926,7 +1895,7 @@ export default function ChatConversation() {
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [activeRoomId, currentDisappearingMode, currentDisappearingBaseline, messages, peerLastReadId, chatUser?.id, chatUser?.username, deleteMessage, activeConversation, getContactKeys])
+  }, [activeRoomId, currentDisappearingMode, currentDisappearingBaseline, messages, chatUser?.id, chatUser?.username, deleteMessage, activeConversation, getContactKeys])
 
   // ── SEND & RECEIVE STATUS TICKS (Single tick = Sent, Double tick = Delivered, Highlighted = Seen) ──
   const renderMessageStatusTicks = useCallback((targetMsg, { isFloatingDark = false, isAlbum = false, albumMessages = [], onRetry = null } = {}) => {
@@ -6050,11 +6019,11 @@ export default function ChatConversation() {
                           }`}
                         >
                           <div className="flex items-center gap-2.5">
-                            <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500/30" />
-                            <span>Auto-Delete (SMS Seen)</span>
+                            <Timer className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Auto-Delete Messages</span>
                           </div>
                           <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-400">
-                            {currentDisappearingMode === 'seen' ? 'Seen ⚡' : currentDisappearingMode === 'off' ? 'Off' : currentDisappearingMode}
+                            {currentDisappearingMode === 'off' ? 'Off' : currentDisappearingMode}
                           </span>
                         </button>
 
@@ -6177,9 +6146,9 @@ export default function ChatConversation() {
                           {friendDisappearing !== 'off' && (
                             <span 
                               className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-black text-[8px] font-black pointer-events-none shadow-xs border border-white dark:border-black" 
-                              title={`Auto-delete: ${friendDisappearing === 'seen' ? 'After seen' : friendDisappearing}`}
+                              title={`Auto-delete: ${friendDisappearing}`}
                             >
-                              ⚡
+                              ⏱
                             </span>
                           )}
                         </div>
@@ -6782,14 +6751,10 @@ export default function ChatConversation() {
                               setShowDisappearingModal(true)
                             }}
                             className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9.5px] font-mono font-bold bg-amber-500/15 text-amber-500 dark:text-[#facc15] border border-amber-500/30 hover:bg-amber-500/25 transition-all cursor-pointer shrink-0"
-                            title={`Disappearing messages: ${currentDisappearingMode === 'seen' ? 'Auto-delete after seen' : currentDisappearingMode}`}
+                            title={`Disappearing messages: ${currentDisappearingMode}`}
                           >
-                            {currentDisappearingMode === 'seen' ? (
-                              <Zap className="w-2.5 h-2.5 fill-current" />
-                            ) : (
-                              <Timer className="w-2.5 h-2.5" />
-                            )}
-                            <span>{currentDisappearingMode === 'seen' ? 'Seen ⚡' : currentDisappearingMode}</span>
+                            <Timer className="w-2.5 h-2.5" />
+                            <span>{currentDisappearingMode}</span>
                           </button>
                         )}
                       </div>
@@ -7862,12 +7827,8 @@ export default function ChatConversation() {
                                           </span>
                                         )}
                                         {currentDisappearingMode !== 'off' && (
-                                          <span title={currentDisappearingMode === 'seen' ? "Auto-deletes after seen" : `Expires in ${currentDisappearingMode}`} className="inline-flex items-center ml-0.5">
-                                            {currentDisappearingMode === 'seen' ? (
-                                              <Zap className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
-                                            ) : (
-                                              <Timer className="w-2.5 h-2.5 text-amber-400" />
-                                            )}
+                                          <span title={`Expires in ${currentDisappearingMode}`} className="inline-flex items-center ml-0.5">
+                                            <Timer className="w-2.5 h-2.5 text-amber-400" />
                                           </span>
                                         )}
                                         {m.edited_at && <span className="opacity-60 text-[9px]">(edited)</span>}
@@ -12527,7 +12488,7 @@ export default function ChatConversation() {
                   <span className="text-[9.5px] font-mono opacity-50">Saved for this friend</span>
                 </div>
 
-                {/* ── DISAPPEARING MESSAGES CARD (Auto-delete after seen / View Once / Timers) ── */}
+                {/* ── DISAPPEARING MESSAGES CARD (Timers) ── */}
                 <div 
                   className={`p-3.5 rounded-2xl border transition-all shadow-xs space-y-2.5 ${
                     currentDisappearingMode !== 'off'
@@ -12550,40 +12511,30 @@ export default function ChatConversation() {
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 border ${
-                        currentDisappearingMode === 'seen'
-                          ? 'bg-amber-500/25 text-amber-400 border-amber-500/50 shadow-xs'
-                          : currentDisappearingMode !== 'off'
-                            ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/40'
-                            : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
+                        currentDisappearingMode !== 'off'
+                          ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/40'
+                          : isLight ? 'bg-slate-200/80 text-slate-600 border-slate-300' : 'bg-white/10 text-zinc-400 border-white/10'
                       }`}>
-                        {currentDisappearingMode === 'seen' ? (
-                          <Zap className="w-4.5 h-4.5 fill-amber-400" />
-                        ) : (
-                          <Timer className="w-4.5 h-4.5" />
-                        )}
+                        <Timer className="w-4.5 h-4.5" />
                       </div>
                       <div className="min-w-0">
                         <span className="text-xs font-bold block truncate">
-                          Auto-Delete Messages (Seen Mode)
+                          Auto-Delete Messages
                         </span>
                         <span className="text-[11px] opacity-70 block truncate">
-                          {currentDisappearingMode === 'seen'
-                            ? '⚡ Auto-delete after seen (View Once)'
-                            : currentDisappearingMode === 'off'
-                              ? 'Off (Messages kept indefinitely)'
-                              : `Expires in ${currentDisappearingMode}`}
+                          {currentDisappearingMode === 'off'
+                            ? 'Off (Messages kept indefinitely)'
+                            : `Expires in ${currentDisappearingMode}`}
                         </span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
-                        currentDisappearingMode === 'seen'
-                          ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
-                          : currentDisappearingMode !== 'off'
-                            ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
-                            : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                        currentDisappearingMode !== 'off'
+                          ? 'bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
+                          : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
                       }`}>
-                        {currentDisappearingMode === 'seen' ? 'Seen ⚡' : currentDisappearingMode === 'off' ? 'Off' : currentDisappearingMode}
+                        {currentDisappearingMode === 'off' ? 'Off' : currentDisappearingMode}
                       </span>
                       <ChevronRight className="w-4 h-4 opacity-50 group-hover:translate-x-0.5 transition-transform" />
                     </div>
@@ -12593,7 +12544,7 @@ export default function ChatConversation() {
                   <div className="grid grid-cols-4 gap-1.5 pt-1 border-t border-amber-500/10">
                     {[
                       { id: 'off', label: 'Off', icon: '⭕' },
-                      { id: 'seen', label: 'Seen ⚡', icon: '⚡' },
+                      { id: '5m', label: '5 Min', icon: '⏱️' },
                       { id: '1h', label: '1 Hour', icon: '⏱️' },
                       { id: '24h', label: '24 Hours', icon: '⏳' },
                     ].map((chip) => {
@@ -13517,9 +13468,7 @@ export default function ChatConversation() {
                               ? 'bg-amber-500 text-black border-amber-400'
                               : 'bg-black/10 dark:bg-white/10 text-zinc-400 border-transparent'
                           }`}>
-                            {opt.id === 'seen' ? (
-                              <Zap className="w-4 h-4 fill-current" />
-                            ) : opt.id === 'off' ? (
+                            {opt.id === 'off' ? (
                               <X className="w-4 h-4" />
                             ) : (
                               <Timer className="w-4 h-4" />
@@ -13528,11 +13477,6 @@ export default function ChatConversation() {
                           <div className="min-w-0">
                             <p className="text-xs font-bold leading-tight flex items-center gap-1.5">
                               <span>{opt.label}</span>
-                              {opt.id === 'seen' && (
-                                <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                                  View Once
-                                </span>
-                              )}
                             </p>
                             <p className="text-[11px] opacity-70 leading-tight pt-0.5">
                               {opt.subtitle}
@@ -13636,17 +13580,13 @@ export default function ChatConversation() {
                     {friendQuickActionsTarget.is_online ? 'Active now' : 'Offline'}
                   </span>
                   <span className={`text-[10px] font-mono font-bold px-2 py-0.2 rounded-full border ${
-                    getDisappearingMode(friendQuickActionsTarget) === 'seen'
-                      ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                      : getDisappearingMode(friendQuickActionsTarget) !== 'off'
-                        ? 'bg-yellow-500/15 text-[#facc15] border-yellow-500/25'
-                        : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                    getDisappearingMode(friendQuickActionsTarget) !== 'off'
+                      ? 'bg-yellow-500/15 text-[#facc15] border-yellow-500/25'
+                      : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
                   }`}>
-                    {getDisappearingMode(friendQuickActionsTarget) === 'seen' 
-                      ? '⚡ Auto-delete seen' 
-                      : getDisappearingMode(friendQuickActionsTarget) === 'off' 
-                        ? 'Auto-delete: Off' 
-                        : `Expires ${getDisappearingMode(friendQuickActionsTarget)}`}
+                    {getDisappearingMode(friendQuickActionsTarget) === 'off'
+                      ? 'Auto-delete: Off'
+                      : `Expires ${getDisappearingMode(friendQuickActionsTarget)}`}
                   </span>
                 </div>
               </div>
@@ -13680,10 +13620,10 @@ export default function ChatConversation() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center">
-                      <Zap className="w-4 h-4 fill-amber-400/40" />
+                      <Timer className="w-4 h-4" />
                     </div>
                     <div>
-                      <span className="text-xs font-bold block">Auto-Delete After Seen</span>
+                      <span className="text-xs font-bold block">Auto-Delete Messages</span>
                       <span className="text-[10px] opacity-60 block">Vanishing messages for this friend</span>
                     </div>
                   </div>
@@ -13704,7 +13644,7 @@ export default function ChatConversation() {
                 <div className="grid grid-cols-4 gap-1.5 pt-1">
                   {[
                     { id: 'off', label: 'Off', icon: '⭕' },
-                    { id: 'seen', label: 'Seen ⚡', icon: '⚡' },
+                    { id: '5m', label: '5 Min', icon: '⏱️' },
                     { id: '1h', label: '1 Hour', icon: '⏱️' },
                     { id: '24h', label: '24 Hours', icon: '⏳' },
                   ].map((chip) => {

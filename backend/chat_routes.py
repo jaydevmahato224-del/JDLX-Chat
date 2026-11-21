@@ -339,7 +339,7 @@ _CHAT_RATE_UPSERT = """
 """
 
 
-def check_chat_rate_limits(entries):
+def check_chat_rate_limits(entries, commit=True):
     """Check several (scope, key, max_requests, window_seconds) budgets at once.
 
     One UPSERT+RETURNING per budget replaces the old SELECT + write pair, and
@@ -350,6 +350,9 @@ def check_chat_rate_limits(entries):
 
     Shared across workers through the DB. Fails OPEN if the DB is unavailable:
     a limiter outage must never take chat down (the error is logged).
+
+    ``commit=False`` leaves the counter write in the caller's transaction so a
+    route that writes more (message send) pays for one commit instead of two.
     """
     # Honor the app-wide test escape hatch (same contract as app.py's own custom
     # limiter): headless test runs must never 429 on the chat endpoints.
@@ -372,8 +375,9 @@ def check_chat_rate_limits(entries):
                 row = rows[0] if rows else None
                 if not row or row["count"] > max_requests:
                     allowed = False
-            conn.commit()
-            _sweep_chat_rate_limits(conn, now)
+            if commit:
+                conn.commit()
+                _sweep_chat_rate_limits(conn, now)
             return allowed
         finally:
             conn.close()
@@ -3367,7 +3371,9 @@ def _send_room_message_impl(room_id):
         budgets = [("send_message", f"user_{my_id}", 40, 60)]
         if is_new_account:
             budgets.append(("new_account_send", f"user_{my_id}", 300, 3600))
-        if not check_chat_rate_limits(budgets):
+        # commit=False: the counter rides along in the message transaction
+        # below, saving one Turso round-trip on every send.
+        if not check_chat_rate_limits(budgets, commit=False):
             return error_response("You are sending messages too fast. Please slow down.", 429)
     data = request.get_json(silent=True) or {}
     message_text = (data.get('message') or '').strip()
@@ -3455,23 +3461,12 @@ def _send_room_message_impl(room_id):
             )
             return success_response([created], "Message already sent")
 
-        # Idempotency: a client retry (500/timeout/network drop) must return the
-        # message already written instead of inserting a second bubble.
-        if client_message_id:
-            cursor.execute(
-                """SELECT id, room_id, user_id, sender_type, sender_name, message,
-                          media_url, message_type, is_read, created_at, username,
-                          reply_to_id, deleted, edited_at, updated_at, client_message_id
-                   FROM official_chat_messages
-                   WHERE room_id = ? AND user_id = ? AND client_message_id = ?
-                   LIMIT 1""",
-                (room_id, my_id, client_message_id)
-            )
-            already_sent = cursor.fetchone()
-            if already_sent:
-                return existing_send_response(already_sent)
+        # Insert user message. Idempotency is enforced by the unique index on
+        # (room_id, user_id, client_message_id) + ON CONFLICT DO NOTHING, so a
+        # client retry never creates a second bubble. The pre-INSERT SELECT is
+        # gone: it cost a Turso round-trip on EVERY send just to cover the rare
+        # retry, and the conflict branch below handles that case instead.
 
-        # Insert user message
         # Reply/quote target must belong to this same room.
         reply_to_id = data.get('reply_to_id')
         if reply_to_id is not None:
@@ -3518,6 +3513,9 @@ def _send_room_message_impl(room_id):
                 )
                 already_sent = cursor.fetchone()
                 if already_sent:
+                    # Commit the limiter counter taken above (the message write
+                    # itself was a no-op thanks to ON CONFLICT DO NOTHING).
+                    conn.commit()
                     return existing_send_response(already_sent)
             return error_response("Message could not be saved", 500)
         new_msg_id = inserted['id'] if hasattr(inserted, 'keys') else inserted[0]
@@ -4723,8 +4721,16 @@ def set_room_typing(room_id):
 @chat_bp.route('/rooms/<int:room_id>/events', methods=['GET'])
 @chat_token_required
 def poll_room_events(room_id):
-    """Long-poll realtime events for a room: new messages, typing, read state,
-    presence.
+    """Long-poll realtime events for a room: new messages + presence.
+
+    Only the new-message query has to run every cycle. Typing, read receipts
+    and edit/delete/reaction changes used to add 3 more queries per 0.75s for
+    every open chat, which starved the gunicorn threads and delayed sends; they
+    are delivered by the Supabase broadcast channel instead.
+
+    Read state is still WRITTEN here (messages fetched by this poll are marked
+    read, which drives unread badges); only the peer's receipt is no longer
+    read back on every cycle.
 
     Long-poll instead of WebSocket/SSE keeps the sync gunicorn deployment
     working (no new dependency/worker class) while still delivering messages in
@@ -4735,11 +4741,7 @@ def poll_room_events(room_id):
     after_id = request.args.get('after_message_id', type=int) or 0
     timeout = request.args.get('timeout', type=int) or 3
     timeout = max(1, min(timeout, 4))
-    known_typing = request.args.get('typing', type=int) or 0
-    known_read = request.args.get('last_read_id', type=int) or 0
     known_online = request.args.get('online', type=int)
-    # Edits / deletes / reactions are delivered by updated_at, not id.
-    events_since = request.args.get('events_since', type=int) or 0
 
     conn = get_db()
     try:
@@ -4792,39 +4794,9 @@ def poll_room_events(room_id):
             )
             rows = cursor.fetchall()
 
-            # Edited / deleted / reacted messages since the caller's last event
-            # cursor (id-based queries cannot see those).
-            changed_rows = []
-            if events_since:
-                cursor.execute(
-                    f"""SELECT {CHAT_MESSAGE_COLUMNS} FROM official_chat_messages
-                        WHERE room_id = ? AND updated_at > ? AND id > ?
-                          AND id NOT IN (SELECT message_id FROM chat_message_hides WHERE user_id = ?)
-                        ORDER BY updated_at ASC LIMIT 50""",
-                    (room_id, events_since, cleared_upto, my_id)
-                )
-                changed_rows = cursor.fetchall()
-
             peer_typing = False
-            peer_last_read = 0
             peer_online = False
             if other_id:
-                cursor.execute(
-                    "SELECT updated_at FROM chat_typing WHERE room_id = ? AND user_id = ?",
-                    (room_id, other_id)
-                )
-                typing_row = cursor.fetchone()
-                peer_typing = bool(
-                    typing_row and now - int(typing_row['updated_at'] or 0) <= 6
-                )
-
-                cursor.execute(
-                    "SELECT last_read_id FROM official_chat_read_state WHERE room_id = ? AND user_id = ?",
-                    (room_id, other_id)
-                )
-                read_row = cursor.fetchone()
-                peer_last_read = int(read_row['last_read_id'] or 0) if read_row else 0
-
                 cursor.execute(
                     """SELECT CASE WHEN last_seen_at >= datetime('now', '-90 seconds')
                                    THEN 1 ELSE 0 END AS online
@@ -4834,13 +4806,11 @@ def poll_room_events(room_id):
                 online_row = cursor.fetchone()
                 peer_online = bool(online_row and online_row['online'])
 
-            typing_changed = int(peer_typing) != int(known_typing)
-            read_changed = peer_last_read != known_read
             online_changed = (known_online is not None) and (int(peer_online) != int(known_online))
 
-            if rows or changed_rows or typing_changed or read_changed or online_changed:
+            if rows or online_changed:
                 merged = {}
-                for row in list(rows) + list(changed_rows):
+                for row in rows:
                     merged[row['id']] = dict(row)
                 messages = sorted(merged.values(), key=lambda m: m['id'])
                 _attach_message_reactions(cursor, messages, my_id)
@@ -4859,10 +4829,6 @@ def poll_room_events(room_id):
                         m['sender_public_key'] = peer_pubkey
                         m['recipient_public_key'] = my_pubkey
                     _sanitize_chat_message(m)
-                last_event_at = max(
-                    [int(m.get('updated_at') or 0) for m in messages] + [events_since]
-                )
-
                 if rows:
                     # Reading via long-poll counts as read too (badge + receipts).
                     # Same authorship rule as the clear endpoint: staff rows carry
@@ -4892,20 +4858,16 @@ def poll_room_events(room_id):
                 return success_response({
                     'messages': messages,
                     'peer_typing': peer_typing,
-                    'peer_last_read_id': peer_last_read,
                     'peer_online': peer_online,
-                    'server_time': now,
-                    'last_event_at': last_event_at
+                    'server_time': now
                 }, "Events retrieved")
 
             if time.time() >= deadline:
                 return success_response({
                     'messages': [],
                     'peer_typing': peer_typing,
-                    'peer_last_read_id': peer_last_read,
                     'peer_online': peer_online,
-                    'server_time': now,
-                    'last_event_at': events_since
+                    'server_time': now
                 }, "No new events")
 
             time.sleep(0.75)

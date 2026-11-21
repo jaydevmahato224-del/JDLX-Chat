@@ -16,4 +16,8 @@ EXPOSE 10000
 
 # migrations_boot is idempotent and uses the same Turso/SQLite schema as the
 # main backend.  Do not run two different migration mechanisms here.
-CMD ["sh", "-c", "python migrations_boot.py && exec gunicorn --bind 0.0.0.0:${PORT} --worker-class gthread --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-8} --timeout 120 --access-logfile - --error-logfile - chat_app:app"]
+# threads 32 (was 8): every open chat holds a thread in a 3-4s long-poll, so
+# 2x8=16 slots served only ~8 concurrent users and new sends queued until the
+# client's 35s abort. 2x32=64 slots keeps sends off the queue; override with
+# GUNICORN_THREADS on the host if needed.
+CMD ["sh", "-c", "python migrations_boot.py && exec gunicorn --bind 0.0.0.0:${PORT} --worker-class gthread --workers ${WEB_CONCURRENCY:-2} --threads ${GUNICORN_THREADS:-32} --timeout 120 --access-logfile - --error-logfile - chat_app:app"]

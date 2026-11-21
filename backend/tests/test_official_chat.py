@@ -857,7 +857,7 @@ def test_room_messages_pagination_and_incremental_polling(client, db):
 
 
 def test_realtime_events_typing_presence_and_read_receipts(client, db):
-    """Long-poll returns new messages, typing state and ✓✓ read receipts."""
+    """Long-poll returns new messages and ✓✓ read receipts."""
     def register(name, username, phone):
         res = client.post('/api/chat/auth/register', json={
             'full_name': name, 'username': username, 'phone': phone, 'password': 'realtimepass'
@@ -887,14 +887,17 @@ def test_realtime_events_typing_presence_and_read_receipts(client, db):
         f'/api/chat/rooms/{room_id}/events?timeout=1', headers=auth_c
     ).status_code == 403
 
-    # Typing indicator reaches the peer on the next long-poll
+    # Typing is no longer read by the long-poll (it travels over the Supabase
+    # broadcast channel), so the endpoint accepts the ping but never reports it.
     assert client.post(f'/api/chat/rooms/{room_id}/typing', headers=auth_b).status_code == 200
     typing_ev = client.get(
         f'/api/chat/rooms/{room_id}/events?after_message_id=0&timeout=1', headers=auth_a
     ).get_json()['data']
-    assert typing_ev['peer_typing'] is True
+    assert typing_ev['peer_typing'] is False
 
-    # A message arrives through the event stream; reading it updates the receipt
+    # A message arrives through the event stream; the reader still gets it (and
+    # the server still marks it read for unread badges), but the peer receipt is
+    # no longer reported per poll — it travels over the Supabase broadcast.
     sent = client.post(
         f'/api/chat/rooms/{room_id}/messages', headers=auth_a, json={'message': 'realtime hi'}
     ).get_json()['data'][0]
@@ -904,11 +907,10 @@ def test_realtime_events_typing_presence_and_read_receipts(client, db):
     assert sent['id'] in [m['id'] for m in bob_ev['messages']]
 
     alice_ev = client.get(
-        f'/api/chat/rooms/{room_id}/events?after_message_id={sent["id"]}'
-        f'&typing=1&last_read_id=0&timeout=1',
+        f'/api/chat/rooms/{room_id}/events?after_message_id={sent["id"]}&timeout=1',
         headers=auth_a
     ).get_json()['data']
-    assert alice_ev['peer_last_read_id'] == sent['id']
+    assert 'peer_last_read_id' not in alice_ev
     assert alice_ev['peer_online'] is True
 
 
