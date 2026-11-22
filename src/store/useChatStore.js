@@ -123,6 +123,86 @@ const parseIceCandidate = (raw) => {
   return { candidate: text }
 }
 
+// iOS Home Screen web apps do not persist the getUserMedia permission. Once a
+// call ends the microphone track is stopped, and the next call's
+// getUserMedia() shows the "Allow microphone?" dialog all over again — even
+// when the app was never closed. Keeping the granted mic track alive between
+// calls (disabled, so nothing is captured or transmitted) lets the next call
+// reuse it and ask for permission only once per app launch. It is released
+// after a short idle window (so the phone is not left capturing for long), when
+// the app goes to the background, on logout, or as soon as the browser ends it.
+const CALL_MIC_IDLE_KEEP_MS = 2 * 60 * 1000
+let idleCallMicStream = null
+let idleCallMicTimer = null
+
+const releaseIdleCallMic = () => {
+  if (idleCallMicTimer) { clearTimeout(idleCallMicTimer); idleCallMicTimer = null }
+  if (idleCallMicStream) {
+    idleCallMicStream.getTracks().forEach((t) => { try { t.stop() } catch {} })
+    idleCallMicStream = null
+  }
+}
+
+// Hand the parked microphone track to a new call.
+const takeIdleCallMicTrack = () => {
+  if (idleCallMicTimer) { clearTimeout(idleCallMicTimer); idleCallMicTimer = null }
+  const stream = idleCallMicStream
+  idleCallMicStream = null
+  const track = stream?.getAudioTracks().find((t) => t.readyState === 'live')
+  if (!track) {
+    if (stream) stream.getTracks().forEach((t) => { try { t.stop() } catch {} })
+    return null
+  }
+  stream.getTracks().forEach((t) => { if (t !== track) { try { t.stop() } catch {} } })
+  track.enabled = true
+  return track
+}
+
+// Park the microphone after a call instead of stopping it, so the next call in
+// this app launch does not trigger the iOS permission prompt again.
+const parkCallMic = (stream) => {
+  const track = stream?.getAudioTracks().find((t) => t.readyState === 'live')
+  if (!track) return false
+  if (idleCallMicStream?.getAudioTracks().includes(track)) return true
+  stream.getTracks().forEach((t) => { if (t !== track) { try { t.stop() } catch {} } })
+  releaseIdleCallMic()
+  track.enabled = false
+  idleCallMicStream = new MediaStream([track])
+  idleCallMicTimer = setTimeout(() => { releaseIdleCallMic() }, CALL_MIC_IDLE_KEEP_MS)
+  return true
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') releaseIdleCallMic()
+  })
+}
+
+// Single place both call paths get their local media from, so a warm mic track
+// and the plain getUserMedia() constraints stay in sync.
+const acquireCallMedia = async (wantVideo) => {
+  const warmMicTrack = takeIdleCallMicTrack()
+  if (warmMicTrack) {
+    if (!wantVideo) return new MediaStream([warmMicTrack])
+    try {
+      const videoStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: 'user' }
+      })
+      return new MediaStream([warmMicTrack, ...videoStream.getVideoTracks()])
+    } catch (e) {
+      try { warmMicTrack.stop() } catch {}
+      throw e
+    }
+  }
+  return navigator.mediaDevices.getUserMedia({
+    // Echo cancellation / noise suppression matter enormously on a phone
+    // speaker and Android WebView honours these constraints.
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    video: wantVideo ? { facingMode: 'user' } : false
+  })
+}
+
 let realtimeAuthReady = false
 let realtimeAuthExpiresAt = 0
 let realtimeAuthPromise = null
@@ -1093,6 +1173,9 @@ export const useChatStore = create((set, get) => ({
     // session and the CallScreen can outlive an account switch).
     get().stopCallWatcher()
     get().cleanupCallResources()
+    // Drop the mic track kept warm for the next call: a signed-out device must
+    // not leave the microphone open.
+    releaseIdleCallMic()
     resetSupabaseRealtimeAuth()
     resetRealtimePrivateFallback()
     // Drop this APK device's FCM token before the session is cleared, so a
@@ -4088,7 +4171,11 @@ export const useChatStore = create((set, get) => ({
       set({ callPeerConnection: null })
     }
     if (state.callLocalStream) {
-      state.callLocalStream.getTracks().forEach((t) => t.stop())
+      // Park the mic track for the next call (iOS Home Screen web apps prompt
+      // again for every fresh getUserMedia); camera tracks are always dropped.
+      if (!parkCallMic(state.callLocalStream)) {
+        state.callLocalStream.getTracks().forEach((t) => { try { t.stop() } catch {} })
+      }
       set({ callLocalStream: null })
     }
     if (state.callRemoteStream) {
@@ -4191,20 +4278,21 @@ export const useChatStore = create((set, get) => ({
     if (!roomId) return { success: false, error: 'No room' }
 
     const roomConversation = get().conversations.find((c) => sameId(c.id, roomId))
-    const iceServers = await get().fetchCallIceServers()
+
+    // getUserMedia must run inside the tap's user activation on iOS, so start
+    // the ICE fetch and then ask for the mic without awaiting the network call
+    // first (the await used to consume the gesture before the prompt).
+    const iceServersPromise = get().fetchCallIceServers()
 
     let localStream
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        // Echo cancellation / noise suppression matter enormously on a phone
-        // speaker and Android WebView honours these constraints.
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: callType === 'video' ? { facingMode: 'user' } : false
-      })
+      localStream = await acquireCallMedia(callType === 'video')
     } catch (e) {
+      iceServersPromise.catch(() => {})
       console.warn('Microphone access denied:', e)
       return { success: false, error: 'Microphone access denied' }
     }
+    const iceServers = await iceServersPromise
     set({ callLocalStream: localStream, callIsMuted: false })
     startNativeCallAudio({ video: callType === 'video', speaker: get().callIsSpeakerOn })
 
@@ -4311,17 +4399,18 @@ export const useChatStore = create((set, get) => ({
     const roomId = activeCall?.roomId || activeRoomId
     if (!roomId) return { success: false, error: 'No room' }
     const isVideo = activeCall?.callType === 'video'
-    const iceServers = await get().fetchCallIceServers()
+    // Ask for the mic straight from the answer tap (iOS user activation), then
+    // reuse the warm track from a previous call when there is one.
+    const iceServersPromise = get().fetchCallIceServers()
 
     let localStream
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video: isVideo ? { facingMode: 'user' } : false
-      })
+      localStream = await acquireCallMedia(isVideo)
     } catch (e) {
+      iceServersPromise.catch(() => {})
       return { success: false, error: isVideo ? 'Camera or microphone access denied' : 'Microphone access denied' }
     }
+    const iceServers = await iceServersPromise
     set({ callLocalStream: localStream, callIsMuted: false })
     startNativeCallAudio({ video: isVideo, speaker: get().callIsSpeakerOn })
 
