@@ -39,3 +39,17 @@ npm run android:apk
 ## 🌐 API & Backend Connection
 * Default backend: `https://jdlx-chat-production.up.railway.app/api` (configurable via `VITE_CHAT_API_BASE_URL` in `.env`).
 * Standalone backend files & Dockerfile available under `backend/`.
+
+## 📞 Voice & Video Calls (TURN relay)
+Calls use WebRTC and connect device-to-device whenever the network allows it. Two
+phones on mobile data sit behind carrier-grade NAT, where that direct path does
+not exist — without a TURN relay the call shows "active", the timer runs, and
+both sides stay silent. Direct calls still bypass the relay.
+
+* Relay server: `deploy/turn/` — self-hosted coturn plus a step-by-step runbook.
+* Backend variables: `TURN_URLS` + `TURN_SECRET` (short-lived credentials minted
+  per call), `TURN_USERNAME`/`TURN_CREDENTIAL` for a static provider, or
+  `ICE_SERVERS_JSON` for a complete list. `TURN_TTL` sets the credential
+  lifetime (default 3600s).
+* The client fetches `/api/chat/ice-servers` on every call, so changing the relay
+  needs no frontend rebuild or APK update.

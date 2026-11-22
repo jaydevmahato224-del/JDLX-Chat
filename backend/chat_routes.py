@@ -1,5 +1,7 @@
 import os
 import base64
+import hashlib
+import hmac
 import json
 import time
 import datetime
@@ -5569,6 +5571,22 @@ def _parse_candidates(raw):
         return []
 
 
+def _turn_rest_credentials(secret, user_key, ttl_seconds):
+    """Ephemeral TURN credentials for coturn's ``use-auth-secret`` mode.
+
+    The relay validates the same HMAC-SHA1 itself, so a long-lived password is
+    never shipped to the browser: every call gets a username of
+    ``<expiry>:<user id>`` and a credential that dies with it. Without this a
+    public relay either needs a static password in the client (leak = free
+    relay for anyone) or per-user accounts.
+    """
+    username = f"{int(time.time()) + int(ttl_seconds)}:{user_key}"
+    digest = hmac.new(
+        secret.encode('utf-8'), username.encode('utf-8'), hashlib.sha1
+    ).digest()
+    return username, base64.b64encode(digest).decode('ascii')
+
+
 @chat_bp.route('/ice-servers', methods=['GET'])
 @chat_token_required
 def chat_ice_servers():
@@ -5579,6 +5597,10 @@ def chat_ice_servers():
     TURN provider on the backend (TURN_URLS/TURN_USERNAME/TURN_CREDENTIAL, or a
     complete list via ICE_SERVERS_JSON) and both the web app and the APK pick
     it up without a rebuild.
+
+    For a self-hosted coturn, prefer TURN_URLS + TURN_SECRET (coturn
+    ``use-auth-secret``): each call gets a short-lived HMAC credential instead
+    of a shared password embedded in the client.
     """
     servers = []
 
@@ -5599,14 +5621,39 @@ def chat_ice_servers():
         turn_urls = [u.strip() for u in (os.getenv('TURN_URLS') or os.getenv('TURN_URL') or '').split(',') if u.strip()]
         turn_username = (os.getenv('TURN_USERNAME') or '').strip()
         turn_credential = (os.getenv('TURN_CREDENTIAL') or os.getenv('TURN_PASSWORD') or '').strip()
-        if turn_urls and turn_username and turn_credential:
-            servers.append({
+        turn_secret = (os.getenv('TURN_SECRET') or os.getenv('TURN_STATIC_AUTH_SECRET') or '').strip()
+
+        turn_entry = None
+        if turn_urls and turn_secret:
+            # Rotating credentials (coturn use-auth-secret) win over a static
+            # password: the browser only ever holds a short-lived credential.
+            ttl_raw = (os.getenv('TURN_TTL') or '').strip()
+            try:
+                ttl = int(ttl_raw) if ttl_raw else 3600
+            except ValueError:
+                ttl = 3600
+            ttl = max(300, min(ttl, 86400))
+            username, credential = _turn_rest_credentials(
+                turn_secret, request.chat_user['user_id'], ttl
+            )
+            turn_entry = {
+                'urls': turn_urls if len(turn_urls) > 1 else turn_urls[0],
+                'username': username,
+                'credential': credential,
+            }
+        elif turn_urls and turn_username and turn_credential:
+            turn_entry = {
                 'urls': turn_urls if len(turn_urls) > 1 else turn_urls[0],
                 'username': turn_username,
                 'credential': turn_credential,
-            })
+            }
+        if turn_entry:
+            servers.append(turn_entry)
 
-    return success_response({'ice_servers': servers}, 'ICE servers')
+    # Credentials expire, so this response must never be served from a cache.
+    body, status = success_response({'ice_servers': servers}, 'ICE servers')
+    body.headers['Cache-Control'] = 'no-store'
+    return body, status
 
 
 @chat_bp.route('/calls/incoming', methods=['GET'])

@@ -1,0 +1,36 @@
+# Self-hosted TURN relay for JDLX Chat voice/video calls.
+#
+# Why this is needed: WebRTC first tries a direct device-to-device path, which
+# only works when both phones can reach each other. Mobile carriers (CGNAT) and
+# strict Wi-Fi block that, so the call shows "active" and stays silent. coturn
+# relays the media for exactly those calls; direct calls still bypass it.
+#
+#   cd deploy/turn
+#   cp example.env .env      # set PUBLIC_IP and TURN_SECRET
+#   docker compose up -d
+#
+# Then set TURN_URLS + TURN_SECRET (same secret) on the chat backend.
+services:
+  coturn:
+    image: coturn/coturn:4.19.1
+    container_name: jdlx-coturn
+    restart: unless-stopped
+    # Host networking on purpose: the relay needs a wide UDP port range, and
+    # publishing 40+ ports through Docker is the usual reason "TURN is running
+    # but calls still fail".
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - coturn-data:/var/lib/coturn
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --realm=${TURN_REALM:-jdlx.chat}
+      # Secret and public IP come from deploy/turn/.env (git-ignored), so this
+      # file stays safe to commit.
+      - --static-auth-secret=${TURN_SECRET:?set TURN_SECRET in deploy/turn/.env}
+      - --external-ip=${PUBLIC_IP:?set PUBLIC_IP in deploy/turn/.env}
+      - --log-file=stdout
+
+volumes:
+  coturn-data:
