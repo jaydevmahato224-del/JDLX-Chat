@@ -1127,9 +1127,6 @@ export default function ChatConversation() {
     endCall,
     startCallWatcher,
     stopCallWatcher,
-    callIsMuted,
-    callIsSpeakerOn,
-    callTimerSeconds,
     friends,
     incomingRequests,
     outgoingRequests,
@@ -1188,7 +1185,44 @@ export default function ChatConversation() {
   // Shallow selector: the 3s realtime long-poll writes to the store even when
   // nothing changed, and subscribing without an equality check re-rendered
   // this whole screen (and every bubble) on each cycle.
-  } = useChatStore(useShallow((state) => state))
+  //
+  // The call-only fields are deliberately dropped: `callTimerSeconds` ticks
+  // once per second while a call is up, and selecting the whole store made
+  // this 14k-line screen re-render (with every message bubble) every second —
+  // which is what made taps feel late and queue up. CallScreen and
+  // IncomingCallModal read those fields themselves.
+  } = useChatStore(useShallow((state) => {
+    const { callTimerSeconds, callIsMuted, callIsSpeakerOn, ...rest } = state
+    return rest
+  }))
+
+  // One tap = one call attempt. Setting up a call needs the mic permission and
+  // an offer round-trip, so on a slow link the button used to stay unresponsive
+  // for seconds; extra taps fired more offers, which the backend rejected with
+  // "A call is already in progress" and left the UI stuck. The ref guards the
+  // wall-clock tap (state updates land too late), the state only drives the
+  // disabled/spinner UI.
+  const callStartingRef = useRef(false)
+  const [callStarting, setCallStarting] = useState(false)
+  const startCall = useCallback(async (callType) => {
+    if (!activeRoomId) {
+      toast.error(`Cannot start ${callType} call: conversation room not available`)
+      return
+    }
+    if (callStartingRef.current) return
+    callStartingRef.current = true
+    setCallStarting(true)
+    triggerHaptic('light')
+    try {
+      const res = await initiateCall(activeRoomId, callType)
+      if (res && res.success === false) {
+        toast.error(res.error || (callType === 'video' ? 'Video call failed' : 'Voice call failed'))
+      }
+    } finally {
+      callStartingRef.current = false
+      setCallStarting(false)
+    }
+  }, [activeRoomId, initiateCall])
 
   const isLight = resolvedChatTheme === 'light'
   const chatBrandName = officialChatName || 'JDLX Chat'
@@ -6797,20 +6831,10 @@ export default function ChatConversation() {
                   {/* Voice Call — direct chats only (the call signaling is 1-to-1) */}
                   {!activeConversation?.is_group && <button
                     type="button"
-                    onClick={async () => {
-                      if (!activeRoomId) {
-                        toast.error('Cannot start voice call: conversation room not available')
-                        return
-                      }
-                      triggerHaptic('light')
-                      const res = await initiateCall(activeRoomId, 'voice')
-                      if (res && res.success === false) {
-                        toast.error(res.error || 'Voice call failed. Please try again.')
-                      }
-                    }}
+                    onClick={() => startCall('voice')}
                     title="Start voice call"
                     aria-label="Start voice call"
-                    disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+                    disabled={callStarting || Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
                     className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
                   >
                     <Phone className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
@@ -6819,20 +6843,10 @@ export default function ChatConversation() {
                   {/* Video Call — direct chats only */}
                   {!activeConversation?.is_group && <button
                     type="button"
-                    onClick={async () => {
-                      if (!activeRoomId) {
-                        toast.error('Cannot start video call: conversation room not available')
-                        return
-                      }
-                      triggerHaptic('light')
-                      const res = await initiateCall(activeRoomId, 'video')
-                      if (res && res.success === false) {
-                        toast.error(res.error || 'Video call failed. Please try again.')
-                      }
-                    }}
+                    onClick={() => startCall('video')}
                     title="Start video call"
                     aria-label="Start video call"
-                    disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+                    disabled={callStarting || Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
                     className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
                   >
                     <Video className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
@@ -12134,19 +12148,11 @@ export default function ChatConversation() {
                 {/* 1. Voice Call */}
                 <button
                   type="button"
-                  onClick={async () => {
-                    if (!activeRoomId) {
-                      toast.error('Cannot start voice call: conversation room not available')
-                      return
-                    }
-                    triggerHaptic('light')
+                  onClick={() => {
                     setShowContactInfoModal(false)
-                    const res = await initiateCall(activeRoomId, 'voice')
-                    if (res && res.success === false) {
-                      toast.error(res.error || 'Voice call failed')
-                    }
+                    startCall('voice')
                   }}
-                  disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+                  disabled={callStarting || Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
                   className={`p-2.5 sm:p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
                     isLight 
                       ? 'bg-slate-50/90 hover:bg-slate-100/90 border-slate-200/90 text-slate-800 hover:shadow-md' 
@@ -12166,19 +12172,11 @@ export default function ChatConversation() {
                 {/* 2. Video Call */}
                 <button
                   type="button"
-                  onClick={async () => {
-                    if (!activeRoomId) {
-                      toast.error('Cannot start video call: conversation room not available')
-                      return
-                    }
-                    triggerHaptic('light')
+                  onClick={() => {
                     setShowContactInfoModal(false)
-                    const res = await initiateCall(activeRoomId, 'video')
-                    if (res && res.success === false) {
-                      toast.error(res.error || 'Video call failed')
-                    }
+                    startCall('video')
                   }}
-                  disabled={Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
+                  disabled={callStarting || Boolean(activeCall?.state === 'ringing' || activeCall?.state === 'active')}
                   className={`p-2.5 sm:p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer group shadow-xs ${
                     isLight 
                       ? 'bg-slate-50/90 hover:bg-slate-100/90 border-slate-200/90 text-slate-800 hover:shadow-md' 

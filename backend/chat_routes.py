@@ -5737,6 +5737,18 @@ def chat_call_offer(room_id):
                  AND started_at IS NOT NULL AND ? - started_at > 90""",
             (now_ts, room_id, now_ts)
         )
+        # A call nobody is polling any more is dead even if the row still says
+        # 'active': the caller closed the tab, the phone died, or the answer
+        # round-trip was lost. Both peers refresh last_seen every few seconds
+        # while the call screen is open, so a >60s gap means the call is over
+        # and must not block this new offer for the old 4-hour window.
+        cursor.execute(
+            """UPDATE official_chat_calls
+               SET state = 'ended', ended_at = ?
+               WHERE room_id = ? AND state = 'active'
+                 AND COALESCE(last_seen, started_at, 0) < ?""",
+            (now_ts, room_id, now_ts - 60)
+        )
         cursor.execute(
             """UPDATE official_chat_calls
                SET state = 'ended', ended_at = ?
@@ -5758,9 +5770,9 @@ def chat_call_offer(room_id):
         now = int(time.time())
         cursor.execute(
             """INSERT INTO official_chat_calls
-               (room_id, caller_id, callee_id, call_type, state, offer_sdp, candidates, started_at)
-               VALUES (?, ?, ?, ?, 'ringing', ?, '[]', ?)""",
-            (room_id, my_id, other_id, call_type, offer_sdp, now)
+               (room_id, caller_id, callee_id, call_type, state, offer_sdp, candidates, started_at, last_seen)
+               VALUES (?, ?, ?, ?, 'ringing', ?, '[]', ?, ?)""",
+            (room_id, my_id, other_id, call_type, offer_sdp, now, now)
         )
         call_id = cursor.lastrowid
         cursor.execute(
@@ -5823,8 +5835,8 @@ def chat_call_answer(room_id):
             return error_response("You cannot answer your own call", 403)
 
         cursor.execute(
-            "UPDATE official_chat_calls SET state = 'active', answer_sdp = ?, callee_id = ? WHERE id = ?",
-            (answer_sdp, my_id, call['id'])
+            "UPDATE official_chat_calls SET state = 'active', answer_sdp = ?, callee_id = ?, last_seen = ? WHERE id = ?",
+            (answer_sdp, my_id, int(time.time()), call['id'])
         )
         conn.commit()
         return success_response({"state": "active"}, "Call answered")
@@ -5864,7 +5876,8 @@ def chat_call_ice_candidate(room_id):
         cursor = conn.cursor()
         cursor.execute(
             f"""UPDATE official_chat_calls
-                SET candidates = json_insert(COALESCE(candidates, '[]'), {placeholders})
+                SET candidates = json_insert(COALESCE(candidates, '[]'), {placeholders}),
+                    last_seen = ?
                 WHERE id = (
                     SELECT c.id FROM official_chat_calls c
                     JOIN official_chat_rooms r ON r.id = c.room_id
@@ -5873,7 +5886,7 @@ def chat_call_ice_candidate(room_id):
                       AND (r.user_id = ? OR r.user_two_id = ?)
                     ORDER BY c.id DESC LIMIT 1
                 )""",
-            (*cands, room_id, my_id, my_id)
+            (*cands, int(time.time()), room_id, my_id, my_id)
         )
         updated = cursor.rowcount
         conn.commit()
@@ -5927,7 +5940,7 @@ def chat_call_state(room_id):
         # candidate delivery the call depends on).
         call_state_sql = """SELECT c.id, c.caller_id, c.callee_id, c.call_type, c.state,
                                   c.offer_sdp, c.answer_sdp, c.candidates,
-                                  c.started_at, c.ended_at
+                                  c.started_at, c.ended_at, c.last_seen
                            FROM official_chat_calls c
                            JOIN official_chat_rooms r ON r.id = c.room_id
                            WHERE c.room_id = ? AND r.room_type = 'direct'
@@ -5941,6 +5954,22 @@ def chat_call_state(room_id):
         # Auto-expire abandoned ringing calls (e.g. the caller closed the tab
         # and nobody answered): a stale 'ringing' row would otherwise block
         # every new offer for this room with 409 forever.
+        # Heartbeat: a live call polls this endpoint every 1.5s, so refreshing
+        # last_seen every 30s is enough to tell a running call from an
+        # abandoned one without paying a DB write on every poll.
+        if call['state'] in ('ringing', 'active'):
+            now_ts = int(time.time())
+            last_seen = call['last_seen'] if 'last_seen' in call.keys() else None
+            if last_seen is None or now_ts - int(last_seen) >= 30:
+                try:
+                    cursor.execute(
+                        "UPDATE official_chat_calls SET last_seen = ? WHERE id = ?",
+                        (now_ts, call['id'])
+                    )
+                    conn.commit()
+                except Exception as hb_err:
+                    logger.warning("Call heartbeat update failed: %s", hb_err)
+
         if call['state'] == 'ringing' and call['started_at'] and (int(time.time()) - int(call['started_at'])) > 90:
             cursor.execute(
                 "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",

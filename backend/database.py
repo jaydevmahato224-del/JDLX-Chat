@@ -2130,6 +2130,10 @@ def init_db():
         ('offer_sdp', 'TEXT'),
         ('answer_sdp', 'TEXT'),
         ('ended_at', 'TIMESTAMP'),
+        # Heartbeat written by the /call/state poll. Without it an abandoned
+        # 'active' row (caller closed the tab, phone died) blocked every new
+        # call in that room until the 4-hour expiry.
+        ('last_seen', 'INTEGER'),
     ])
 
     # Group membership is the ONLY access-control source for group rooms.

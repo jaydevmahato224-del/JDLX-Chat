@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Phone, Mic, Volume2, VolumeX, X, Loader2, RefreshCw } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
@@ -16,6 +16,28 @@ export default function IncomingCallModal() {
     answerCall,
     endCall
   } = useChatStore(useShallow((state) => state))
+
+  // Answering takes a mic permission prompt plus an SDP round-trip. On a slow
+  // link that is several seconds of nothing, so people tap again — each tap
+  // fired another answer request (the later ones get 404 "No ringing call")
+  // and the call appeared not to connect. The ref blocks the extra taps
+  // immediately; the state only drives the disabled/spinner UI.
+  const answeringRef = useRef(false)
+  const [answering, setAnswering] = useState(false)
+  const handleAnswer = async () => {
+    if (answeringRef.current) return
+    answeringRef.current = true
+    setAnswering(true)
+    try {
+      const res = await answerCall()
+      if (res && !res.success) toast.error(res.error || 'Call failed')
+    } catch (e) {
+      toast.error(e?.message || 'Call failed')
+    } finally {
+      answeringRef.current = false
+      setAnswering(false)
+    }
+  }
 
   // Auto-decline after ~45s if no answer. The guard lives INSIDE the effect so
   // the hook order stays stable across renders (early returns must come after
@@ -67,7 +89,8 @@ export default function IncomingCallModal() {
           <button
             type="button"
             onClick={endCall}
-            className="h-9 w-9 shrink-0 rounded-full border border-white/10 flex items-center justify-center text-white hover:bg-white/10 active:scale-95 transition cursor-pointer"
+            disabled={answering}
+            className="h-9 w-9 shrink-0 rounded-full border border-white/10 flex items-center justify-center text-white hover:bg-white/10 active:scale-95 transition cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
             aria-label="Decline call"
           >
             <X className="h-4 w-4" />
@@ -104,18 +127,12 @@ export default function IncomingCallModal() {
             </button>
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  const res = await answerCall()
-                  if (res && !res.success) toast.error(res.error || 'Call failed')
-                } catch (e) {
-                  toast.error(e?.message || 'Call failed')
-                }
-              }}
-              className="h-13 w-13 sm:h-14 sm:w-14 shrink-0 rounded-2xl border border-emerald-500/50 bg-emerald-600 flex items-center justify-center text-white shadow-[0_0_24px_rgba(16,185,129,0.35)] transition-all hover:bg-emerald-500 hover:scale-105 active:scale-95 cursor-pointer"
-              aria-label="Accept call"
+              onClick={handleAnswer}
+              disabled={answering}
+              className="h-13 w-13 sm:h-14 sm:w-14 shrink-0 rounded-2xl border border-emerald-500/50 bg-emerald-600 flex items-center justify-center text-white shadow-[0_0_24px_rgba(16,185,129,0.35)] transition-all hover:bg-emerald-500 hover:scale-105 active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
+              aria-label={answering ? 'Connecting call' : 'Accept call'}
             >
-              <Phone className="h-6 w-6" />
+              {answering ? <Loader2 className="h-6 w-6 animate-spin" /> : <Phone className="h-6 w-6" />}
             </button>
             <button
               type="button"
