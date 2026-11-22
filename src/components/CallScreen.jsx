@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Phone, Mic, Volume2, VolumeX, X, User, Video } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
+import { playRemoteCallAudio } from '../utils/callAudio'
 
 export default function CallScreen() {
   const {
@@ -18,7 +19,6 @@ export default function CallScreen() {
     endCall
   } = useChatStore(useShallow((state) => state))
 
-  const remoteAudioRef = useRef(null)
   const remoteVideoRef = useRef(null)
   const localVideoRef = useRef(null)
   // Mobile browsers can reject the async play() after the "answer" gesture
@@ -34,22 +34,23 @@ export default function CallScreen() {
 
   const isVideo = activeCall?.callType === 'video'
 
-  const playRemoteAudio = () => {
-    const el = remoteAudioRef.current
-    if (!el) return
-    el.muted = false
-    el.volume = 1
-    el.play().then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true))
+  // The sink element is created and unlocked from the call/answer tap, so the
+  // peer's audio can start even when it arrives after that gesture (iOS blocks
+  // a first play() from a non-gesture context, which made calls silent).
+  const playRemoteAudio = async () => {
+    if (!callRemoteStream) return
+    const started = await playRemoteCallAudio(callRemoteStream)
+    setAudioBlocked(!started)
   }
 
   // Bind remote audio stream so call voice/audio is heard
   useEffect(() => {
-    if (remoteAudioRef.current && callRemoteStream) {
-      remoteAudioRef.current.srcObject = callRemoteStream
-      playRemoteAudio()
-    }
-    // playRemoteAudio is stable enough here: it only touches refs + state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!callRemoteStream) return undefined
+    let cancelled = false
+    playRemoteCallAudio(callRemoteStream).then((started) => {
+      if (!cancelled) setAudioBlocked(!started)
+    })
+    return () => { cancelled = true }
   }, [callRemoteStream])
 
   // While playback is blocked, the next tap anywhere on the call screen unlocks it.
@@ -114,9 +115,6 @@ export default function CallScreen() {
         aria-modal="true"
         aria-label="Active video call"
       >
-        {/* Hidden audio element keeps the peer's voice audible */}
-        <audio ref={remoteAudioRef} autoPlay playsInline />
-
         {callRemoteStream ? (
           <video
             ref={remoteVideoRef}
@@ -225,9 +223,6 @@ export default function CallScreen() {
       aria-modal="true"
       aria-label="Active call"
     >
-      {/* Hidden audio element to output remote peer audio */}
-      <audio ref={remoteAudioRef} autoPlay playsInline />
-
       <div
         className="w-full max-w-md max-h-[94dvh] rounded-3xl sm:rounded-[32px] border border-white/10 bg-[#090a0c] shadow-2xl overflow-hidden flex flex-col"
       >

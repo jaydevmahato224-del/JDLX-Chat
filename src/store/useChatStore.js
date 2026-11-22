@@ -6,7 +6,13 @@ import { supabase, setSupabaseRealtimeAuth } from '../utils/supabaseClient'
 import { SUPABASE_PRIVATE_CHANNELS, isCapacitorNative } from '../config'
 import { subscribeToChatPush, unsubscribeFromChatPush } from '../utils/push'
 import { disableChatNativePush, enableChatNativePush } from '../utils/nativePush'
-import { startNativeCallAudio, setNativeSpeaker, stopNativeCallAudio } from '../utils/callAudio'
+import {
+  startNativeCallAudio,
+  setNativeSpeaker,
+  stopNativeCallAudio,
+  unlockRemoteAudio,
+  stopRemoteCallAudio
+} from '../utils/callAudio'
 import {
   encryptChatMessage,
   decryptChatMessage,
@@ -166,7 +172,10 @@ const parkCallMic = (stream) => {
   if (idleCallMicStream?.getAudioTracks().includes(track)) return true
   stream.getTracks().forEach((t) => { if (t !== track) { try { t.stop() } catch {} } })
   releaseIdleCallMic()
-  track.enabled = false
+  // Keep the track enabled while parked: nothing is transmitted (it is not in
+  // any peer connection) and WebKit resumes a live track more reliably than a
+  // track that was disabled for minutes and switched back on.
+  track.enabled = true
   idleCallMicStream = new MediaStream([track])
   idleCallMicTimer = setTimeout(() => { releaseIdleCallMic() }, CALL_MIC_IDLE_KEEP_MS)
   return true
@@ -4161,6 +4170,7 @@ export const useChatStore = create((set, get) => ({
   cleanupCallResources: () => {
     const state = get()
     stopNativeCallAudio()
+    stopRemoteCallAudio()
     get().stopCallTimer()
     if (state.callAbortController) {
       try { state.callAbortController.abort() } catch {}
@@ -4278,6 +4288,10 @@ export const useChatStore = create((set, get) => ({
     if (!roomId) return { success: false, error: 'No room' }
 
     const roomConversation = get().conversations.find((c) => sameId(c.id, roomId))
+
+    // Unlock the remote-audio sink inside this tap; the peer's track arrives
+    // later, when a first play() would be rejected by the iOS autoplay policy.
+    unlockRemoteAudio()
 
     // getUserMedia must run inside the tap's user activation on iOS, so start
     // the ICE fetch and then ask for the mic without awaiting the network call
@@ -4399,6 +4413,8 @@ export const useChatStore = create((set, get) => ({
     const roomId = activeCall?.roomId || activeRoomId
     if (!roomId) return { success: false, error: 'No room' }
     const isVideo = activeCall?.callType === 'video'
+    // Unlock playback from the answer tap so the remote audio is audible.
+    unlockRemoteAudio()
     // Ask for the mic straight from the answer tap (iOS user activation), then
     // reuse the warm track from a previous call when there is one.
     const iceServersPromise = get().fetchCallIceServers()
