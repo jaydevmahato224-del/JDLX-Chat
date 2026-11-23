@@ -7,6 +7,11 @@ import { SUPABASE_PRIVATE_CHANNELS, isCapacitorNative } from '../config'
 import { subscribeToChatPush, unsubscribeFromChatPush } from '../utils/push'
 import { disableChatNativePush, enableChatNativePush } from '../utils/nativePush'
 import {
+  CALL_AUDIO_CONSTRAINTS,
+  applyCallAudioBitrate,
+  applyLowDataAudioSdp
+} from '../utils/callAudioProfile'
+import {
   startNativeCallAudio,
   setNativeSpeaker,
   stopNativeCallAudio,
@@ -207,7 +212,9 @@ const acquireCallMedia = async (wantVideo) => {
   return navigator.mediaDevices.getUserMedia({
     // Echo cancellation / noise suppression matter enormously on a phone
     // speaker and Android WebView honours these constraints.
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    // Mono capture halves the Opus payload, which is the cheapest data saving
+    // available on a weak mobile link (voice needs no stereo).
+    audio: { ...CALL_AUDIO_CONSTRAINTS },
     video: wantVideo ? { facingMode: 'user' } : false
   })
 }
@@ -4352,7 +4359,10 @@ export const useChatStore = create((set, get) => ({
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
 
     const offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
+    // Low-data voice profile: mono Opus with a hard bitrate ceiling.
+    const offerSdp = applyLowDataAudioSdp(offer.sdp)
+    await pc.setLocalDescription({ type: offer.type, sdp: offerSdp })
+    await applyCallAudioBitrate(pc)
 
     const abort = new AbortController()
     set({ callAbortController: abort })
@@ -4363,7 +4373,7 @@ export const useChatStore = create((set, get) => ({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${chatToken}`
         },
-        body: JSON.stringify({ call_type: callType, offer_sdp: offer.sdp }),
+        body: JSON.stringify({ call_type: callType, offer_sdp: offerSdp }),
         signal: abort.signal
       })
       const json = await res.json()
@@ -4474,14 +4484,16 @@ export const useChatStore = create((set, get) => ({
 
       await pc.setRemoteDescription({ type: 'offer', sdp: get().sanitizeRemoteSdp(offerSdp) })
       const answer = await pc.createAnswer()
-      await pc.setLocalDescription(answer)
+      const answerSdp = applyLowDataAudioSdp(answer.sdp)
+      await pc.setLocalDescription({ type: answer.type, sdp: answerSdp })
+      await applyCallAudioBitrate(pc)
       const res = await apiFetch(`/chat/rooms/${roomId}/call/answer`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${chatToken}`
         },
-        body: JSON.stringify({ answer_sdp: answer.sdp })
+        body: JSON.stringify({ answer_sdp: answerSdp })
       })
       const json = await res.json()
       if (!res.ok || !json.success) {
