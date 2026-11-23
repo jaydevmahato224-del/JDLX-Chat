@@ -3266,7 +3266,15 @@ def get_room_messages(room_id):
                     (room_id, my_id, max_read_id, int(time.time()))
                 )
 
-        conn.commit()
+        # Read receipts are best-effort: a stream that was rolled back while it
+        # sat idle must not turn a successful history fetch into a 500 (the
+        # production log shows exactly that failure on this endpoint).
+        try:
+            conn.commit()
+        except Exception as commit_err:
+            if not is_transient_db_error(commit_err):
+                raise
+            logger.warning("Read-state commit failed, served history anyway: %s", commit_err)
 
         return success_response(messages, "Messages retrieved")
     finally:
@@ -3799,7 +3807,15 @@ def chat_social_events():
             if time.time() >= deadline:
                 state['server_time'] = int(time.time())
                 return success_response(state, "No social changes")
+            # Same as the room long-poll: never sleep while holding a pooled
+            # connection, or a handful of idle clients starve every slot.
+            release = getattr(conn, 'release', None)
+            if callable(release):
+                release()
             time.sleep(0.75)
+            if callable(release):
+                conn = get_db()
+                cursor = conn.cursor()
     finally:
         conn.close()
 
@@ -4891,7 +4907,15 @@ def poll_room_events(room_id):
                                VALUES (?, ?, ?, ?)""",
                             (room_id, my_id, latest_id, now)
                         )
-                    conn.commit()
+                    try:
+                        conn.commit()
+                    except Exception as commit_err:
+                        # Same as the history endpoint: the messages were read,
+                        # so deliver them; only the tick/bookkeeping write is
+                        # lost if the stream died while sleeping.
+                        if not is_transient_db_error(commit_err):
+                            raise
+                        logger.warning("Long-poll read-state commit failed: %s", commit_err)
 
                 return success_response({
                     'messages': messages,
@@ -4908,7 +4932,19 @@ def poll_room_events(room_id):
                     'server_time': now
                 }, "No new events")
 
+            # Hand the pooled stream back before sleeping. Holding it across
+            # the 0.75s gap meant every open chat occupied one pool slot for as
+            # long as the chat stayed open; other requests then had to build
+            # fresh Turso connections (multi-second each — the "send is stuck"
+            # stalls, one measured 44s in the production logs) and Turso rolled
+            # back the transaction that sat idle here.
+            release = getattr(conn, 'release', None)
+            if callable(release):
+                release()
             time.sleep(0.75)
+            if callable(release):
+                conn = get_db()
+                cursor = conn.cursor()
     finally:
         conn.close()
 

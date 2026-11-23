@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import queue
 import socket
 import sqlite3
@@ -11,6 +12,8 @@ from dotenv import load_dotenv
 # Prefer IPv4 over broken/unreachable IPv6/NAT64 routes.
 # On networks where IPv6 is configured but blackholed, glibc's default IPv6-first
 # resolution causes a 10-30 second timeout on every outbound connection (Turso, Google OAuth, SMTP).
+logger = logging.getLogger(__name__)
+
 _orig_getaddrinfo = socket.getaddrinfo
 def _ipv4_preferred_getaddrinfo(host, port, family=0, *args, **kwargs):
     if family == 0:
@@ -373,20 +376,90 @@ _POOL_LOCK = threading.Lock()
 _POOL_MAX_SIZE = int(os.environ.get("DB_POOL_MAX_SIZE", "32"))
 _POOL_IDLE_KEEP = int(os.environ.get("DB_POOL_IDLE_KEEP", "24"))
 # Turso's Hrana server expires streams that sit idle for a while
-# ("stream expired due to inactivity" — tursodatabase/libsql-python#41).
-# Stale streams are now replayed transparently (execute AND fetch), so a
-# connection can safely stay pooled far longer: keep the TLS/Hrana handshake
-# warm across normal chat gaps and pay the reconnect cost only after minutes
-# of silence. Shorter windows made almost every send open a brand-new
-# connection — a multi-second latency hit on a distant Turso region.
-_POOL_MAX_IDLE_SECONDS = float(os.environ.get("DB_POOL_MAX_IDLE_SECONDS", "300"))
+# ("stream expired due to inactivity" — tursodatabase/libsql-python#41) and
+# rolls back their idle transaction: "interactive transaction was rolled back
+# because the stream was idle for too long", which surfaced as random 500s on
+# read endpoints. So a stream that sat unused this long is not reused — it is
+# replaced. Short windows used to be painful because every request then opened
+# its own connection; the pool warmer keeps fresh connections ready, so
+# replacing an idle stream is cheap now.
+_POOL_MAX_IDLE_SECONDS = float(os.environ.get("DB_POOL_MAX_IDLE_SECONDS", "60"))
+# Warm connections kept ready by the background warmer. A request that finds
+# the pool empty has to build a whole connection (DNS + TLS + Hrana) with no
+# timeout of its own, which is how a send could spend 43 of 44 seconds before
+# touching the row.
+_POOL_WARM_MIN = int(os.environ.get("DB_POOL_WARM_MIN", "2"))
+_POOL_WARM_INTERVAL = float(os.environ.get("DB_POOL_WARM_INTERVAL", "10"))
+_WARMER_STARTED = False
+_WARMER_LOCK = threading.Lock()
 
 def _get_pool():
     global _POOL
+    created = False
     with _POOL_LOCK:
         if _POOL is None:
             _POOL = queue.LifoQueue(maxsize=_POOL_MAX_SIZE)
-        return _POOL
+            created = True
+    if created:
+        _start_pool_warmer()
+    return _POOL
+
+def _warm_pool_once():
+    """Drop expired pooled streams and keep a couple of fresh ones ready."""
+    pool = _get_pool()
+    fresh = 0
+    while True:
+        try:
+            conn = pool.get_nowait()
+        except queue.Empty:
+            break
+        expired = getattr(conn, "_discarded", False) or (
+            time.monotonic() - getattr(conn, "_released_at", 0.0) > _POOL_MAX_IDLE_SECONDS
+        )
+        if expired:
+            _destroy_raw_connection_async(conn)
+            continue
+        try:
+            pool.put_nowait(conn)
+            fresh += 1
+        except queue.Full:
+            _destroy_raw_connection_async(conn)
+    for _ in range(max(0, _POOL_WARM_MIN - fresh)):
+        try:
+            conn = _create_turso_connection()
+        except Exception as exc:
+            logger.warning("Pool warmer could not create a connection: %s", exc)
+            return
+        conn._released_at = time.monotonic()
+        try:
+            pool.put_nowait(conn)
+        except queue.Full:
+            _destroy_raw_connection_async(conn)
+            return
+
+def _start_pool_warmer():
+    """Starts the daemon that keeps _POOL_WARM_MIN connections handshaked."""
+    global _WARMER_STARTED
+    if _POOL_WARM_MIN <= 0:
+        return
+    with _WARMER_LOCK:
+        if _WARMER_STARTED:
+            return
+        _WARMER_STARTED = True
+
+    def _loop():
+        while True:
+            try:
+                _warm_pool_once()
+            except Exception as exc:
+                logger.warning("Pool warmer failed: %s", exc)
+            time.sleep(max(2.0, _POOL_WARM_INTERVAL))
+
+    try:
+        threading.Thread(target=_loop, daemon=True, name="turso-pool-warmer").start()
+    except Exception:
+        with _WARMER_LOCK:
+            _WARMER_STARTED = False
 
 def _destroy_raw_connection(conn):
     # Accepts either a connection wrapper or a raw libsql handle. Resolving the
@@ -584,6 +657,34 @@ class _RequestScopedConnection:
             conn.close()
         finally:
             object.__setattr__(self, '_closed', True)
+
+    def release(self):
+        """Return the connection to the pool now instead of at teardown.
+
+        Long-poll handlers sleep for seconds between their queries. The
+        deferred close kept one pooled Turso stream per sleeping poll, so a
+        handful of open chats held every slot; each other request then had to
+        build a brand-new connection, which is the multi-second stall the
+        production logs show (a 44s send all spent before its INSERT).
+
+        Releasing here also avoids leaving an implicit transaction idle on a
+        pooled stream, which Turso rolls back ("interactive transaction was
+        rolled back because the stream was idle for too long") and surfaces as
+        a random 500 on the next user of that stream.
+        """
+        conn = object.__getattribute__(self, '_conn')
+        try:
+            conn.close()
+        except Exception:
+            pass
+        finally:
+            object.__setattr__(self, '_closed', True)
+        try:
+            import flask
+            if flask.has_app_context():
+                flask.g.pop('_jdlx_request_db', None)
+        except Exception:
+            pass
 
 
 def get_db():
