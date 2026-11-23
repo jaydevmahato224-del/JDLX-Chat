@@ -37,6 +37,33 @@ def _headers(user_id):
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_quiesce_ends_the_transaction_and_drops_a_dead_stream():
+    from database import _quiesce_connection
+
+    class Healthy:
+        def __init__(self):
+            self.commits = 0
+
+        def commit(self):
+            self.commits += 1
+
+    healthy = Healthy()
+    assert _quiesce_connection(healthy) is True
+    assert healthy.commits == 1
+
+    class RolledBack:
+        def commit(self):
+            raise ValueError(
+                "Hrana: SQLite error: interactive transaction was rolled back "
+                "because the stream was idle for too long"
+            )
+
+        def close(self):
+            pass
+
+    assert _quiesce_connection(RolledBack()) is False
+
+
 def test_room_events_poll_survives_releasing_the_connection(client, db):
     alice = _chat_user(db, "Alice")
     bob = _chat_user(db, "Bob")

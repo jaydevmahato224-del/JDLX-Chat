@@ -404,8 +404,29 @@ def _get_pool():
         _start_pool_warmer()
     return _POOL
 
+def _quiesce_connection(conn):
+    """Ends the implicit transaction a pooled stream is still carrying.
+
+    A read leaves its transaction open until the statement is finalised, and
+    Turso rolls back a transaction whose stream sits idle, after which the next
+    statement on that stream fails with SQLITE_BUSY ("interactive transaction
+    was rolled back because the stream was idle for too long"). The route then
+    retries over a fresh handshake — the 20-35s poll/action stalls in the
+    production logs. Committing here closes the transaction and keeps the
+    stream busy, so it is never considered idle. Pooled connections are always
+    write-clean (dirty ones are destroyed on release), so nothing is committed
+    that a request meant to drop.
+    """
+    try:
+        conn.commit()
+        return True
+    except Exception:
+        # A stream whose transaction is already gone cannot be trusted.
+        _destroy_raw_connection_async(conn)
+        return False
+
 def _warm_pool_once():
-    """Drop expired pooled streams and keep a couple of fresh ones ready."""
+    """Drop expired pooled streams and keep a couple of clean ones ready."""
     pool = _get_pool()
     fresh = 0
     while True:
@@ -418,6 +439,9 @@ def _warm_pool_once():
         )
         if expired:
             _destroy_raw_connection_async(conn)
+            continue
+        if not _quiesce_connection(conn):
+            # The failed commit already scheduled the destroy.
             continue
         try:
             pool.put_nowait(conn)
