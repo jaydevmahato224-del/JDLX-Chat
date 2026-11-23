@@ -1044,6 +1044,9 @@ export const useChatStore = create((set, get) => ({
   callIsMuted: false,
   callIsSpeakerOn: true,
   callTimerSeconds: 0,
+  // Live RTCPeerConnection state ('connecting' until ICE + DTLS finish), so the
+  // call screen can say "Connecting…" instead of pretending the call is up.
+  callConnectionState: null,
   callTimerRef: null,
   callAbortController: null,   // in-call poller (pollCallState)
   callWatchAbortController: null, // passive incoming-call watcher (startCallWatcher)
@@ -4291,6 +4294,7 @@ export const useChatStore = create((set, get) => ({
       activeCall: null,
       callIsMuted: false,
       callIsSpeakerOn: true,
+      callConnectionState: null,
       callDeepLinkHandled: null
     })
   },
@@ -4459,6 +4463,7 @@ export const useChatStore = create((set, get) => ({
         postIceCandidate(payload)
       },
       (state) => {
+        set({ callConnectionState: state })
         if (state === 'failed' || state === 'closed') get().cleanupCallResources()
       },
       iceServers
@@ -4564,6 +4569,7 @@ export const useChatStore = create((set, get) => ({
           answerIceBatcher.add(payload)
         },
         (state) => {
+          set({ callConnectionState: state })
           if (state === 'failed' || state === 'closed') get().cleanupCallResources()
         },
         iceServers

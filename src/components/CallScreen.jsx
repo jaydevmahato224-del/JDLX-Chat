@@ -14,6 +14,7 @@ export default function CallScreen() {
     callIsMuted,
     callIsSpeakerOn,
     callTimerSeconds,
+    callConnectionState,
     toggleMute,
     toggleSpeaker,
     endCall
@@ -85,6 +86,11 @@ export default function CallScreen() {
   if (!activeCall) return null
 
   const isCallerRinging = activeCall.state === 'ringing' && activeCall.callerId === chatUser?.id
+  // Answered (or answered by us) but the media path is not up yet: ICE checks
+  // and DTLS are still running. Without this the screen showed a running timer
+  // and "call in progress" while the two peers were still negotiating, which
+  // read as a silent, broken call.
+  const isConnecting = activeCall.state === 'active' && callConnectionState !== 'connected'
   if (activeCall.state !== 'active' && !isCallerRinging) return null
 
   const peerName =
@@ -147,8 +153,8 @@ export default function CallScreen() {
             <div className="min-w-0">
               <p className="truncate text-[17px] font-semibold text-white">{peerName}</p>
               <p className="mt-0.5 flex items-center gap-2 text-xs font-medium text-white/70">
-                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                {isCallerRinging ? 'Ringing…' : formatTime(callTimerSeconds)}
+                <span className={`h-2 w-2 rounded-full animate-pulse ${isConnecting ? 'bg-amber-400' : 'bg-emerald-500'}`} />
+                {isCallerRinging ? 'Ringing…' : isConnecting ? 'Connecting…' : formatTime(callTimerSeconds)}
               </p>
             </div>
             <button
@@ -237,7 +243,7 @@ export default function CallScreen() {
                 {isCallerRinging ? 'Calling…' : isVideo ? 'Video Call' : 'Voice Call'} · {peerName}
               </p>
               <p className="text-[17px] sm:text-[20px] font-semibold text-white">
-                {isCallerRinging ? 'Ringing…' : formatTime(callTimerSeconds)}
+                {isCallerRinging ? 'Ringing…' : isConnecting ? 'Connecting…' : formatTime(callTimerSeconds)}
               </p>
             </div>
           </div>
@@ -282,14 +288,14 @@ export default function CallScreen() {
               </div>
             ) : (
               <div className="absolute -right-1 -bottom-1 flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-[#090a0c]">
-                <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                <div className={`h-2.5 w-2.5 rounded-full animate-pulse ${isConnecting ? 'bg-amber-400' : 'bg-emerald-500'}`} />
               </div>
             )}
           </div>
 
           <div className="text-center mb-5 sm:mb-6">
             <p className="text-zinc-400 text-xs sm:text-sm font-medium tracking-wide">
-              {isVideo ? 'Video' : 'Voice'} call in progress
+              {isConnecting ? 'Connecting…' : `${isVideo ? 'Video' : 'Voice'} call in progress`}
             </p>
             {audioBlocked && (
               <button
