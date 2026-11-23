@@ -5382,6 +5382,36 @@ def post_chat_admin_broadcast():
 # OFFICIAL CHAT BRANDING & APP ICON ADMIN CONTROLS
 # -----------------------------------------------------------------------------
 
+@chat_bp.route('/branding', methods=['GET'])
+def get_chat_branding():
+    """Public chat branding (name/logo) for the login and app shell.
+
+    The login page renders before any session exists, so it cannot call the
+    admin-only /admin/settings. It used to call a `/settings` route that only
+    ever existed on the storefront backend, which answered 404 here — a failed
+    preflight on every visit and the "Failed to load chat branding" console
+    error. Only the two display fields are exposed; everything else stays
+    behind the admin guard.
+    """
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT key, value FROM system_settings WHERE key IN "
+            "('official_chat_logo', 'official_chat_name')"
+        )
+        branding = {'official_chat_logo': '', 'official_chat_name': 'JDLX Chat'}
+        for row in cursor.fetchall():
+            branding[row['key']] = row['value']
+        body, status = success_response(branding, 'Chat branding')
+        # Branding changes rarely; a short shared cache keeps this off the DB
+        # on every cold page load without hiding an admin rename for long.
+        body.headers['Cache-Control'] = 'public, max-age=300'
+        return body, status
+    finally:
+        conn.close()
+
+
 @chat_bp.route('/admin/settings', methods=['GET'])
 @admin_token_required
 def get_chat_admin_settings():

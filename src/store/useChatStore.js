@@ -1027,11 +1027,13 @@ export const useChatStore = create((set, get) => ({
 
   fetchChatBranding: async () => {
     try {
-      const res = await apiFetch(`/settings?_t=${Date.now()}`)
+      // Public branding route; the login page has no session yet, so the
+      // admin-only /chat/admin/settings is not an option here.
+      const res = await apiFetch('/chat/branding')
       const json = await res.json()
       if (res.ok && json.data) {
         set({
-          officialChatLogo: '/logo192.png',
+          officialChatLogo: json.data.official_chat_logo || '/logo192.png',
           officialChatName: json.data.official_chat_name || 'JDLX Chat'
         })
         return json.data

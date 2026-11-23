@@ -97,12 +97,15 @@ let nativeCaptureListenerAdded = false
  * screenshot gesture. FLAG_SECURE has already made the captured frame black.
  */
 function attachNativeCaptureListener() {
-  if (!ScreenProtectionNative || nativeCaptureListenerAdded) return
+  if (!Capacitor.isNativePlatform() || !ScreenProtectionNative || nativeCaptureListenerAdded) return
   try {
     nativeCaptureListenerAdded = true
-    ScreenProtectionNative.addListener('screenCapture', () => {
+    const pending = ScreenProtectionNative.addListener('screenCapture', () => {
       triggerCaptureProtection('android_system_capture')
     })
+    // The plugin only exists in the APK; on web this rejects and used to
+    // surface as an uncaught promise in the console on every page load.
+    if (pending && typeof pending.catch === 'function') pending.catch(() => {})
   } catch {}
 }
 
