@@ -439,6 +439,10 @@ const hasFreshConfirmation = (messages, optimistic, text, mediaUrl, myId) => {
   return confirmations.length > olderPending.length
 }
 
+// Room+content keys of sends currently in flight, so a double-fired submit
+// cannot post the same text twice with two different idempotency keys.
+const inFlightSendKeys = new Map()
+
 // -----------------------------------------------------------------------------
 // INSTANT HYDRATION CACHE (Stale-While-Revalidate)
 // Ensures conversations, friends, and active chat load in 0ms on startup / refresh
@@ -3320,10 +3324,43 @@ export const useChatStore = create((set, get) => ({
   },
 
   // 4. Send Message in Current or Specific Room
-  sendRoomMessage: async (roomId, text, mediaUrl = null, messageType = 'text', replyToId = null, existingTempId = null) => {
+  sendRoomMessage: async (roomId, text, mediaUrl = null, messageType = 'text', replyToId = null, existingTempId = null, existingClientMessageId = null) => {
     const token = get().chatToken
     const targetRoomId = roomId || get().activeRoomId
     if (!token || !targetRoomId) return { success: false, error: 'No active chat room' }
+
+    // One send per room+content at a time. A double-fired submit (Enter plus
+    // form submit, or a double tap) used to create a second bubble with its own
+    // idempotency key, and the backend could only store it as a second message.
+    const sendKey = `${targetRoomId}|${messageType}|${mediaUrl || ''}|${text || ''}`
+    let ownsSendKey = false
+    if (!existingTempId) {
+      const now = Date.now()
+      for (const [key, at] of inFlightSendKeys) {
+        if (now - at > 60000) inFlightSendKeys.delete(key)
+      }
+      if (inFlightSendKeys.has(sendKey)) return { success: true, deduped: true }
+      inFlightSendKeys.set(sendKey, now)
+      ownsSendKey = true
+
+      // A failed bubble whose text the user submits again is a retry, not a new
+      // message: reuse its idempotency key so the backend can dedupe a send that
+      // actually committed before the timeout.
+      const failedDuplicate = get().messages.find((m) => (
+        isOptimisticMessage(m) && m._failed
+        && sameId(m.room_id, targetRoomId)
+        && (m.media_url || '') === (mediaUrl || '')
+        && (m.message || '') === (text || '')
+      ))
+      if (failedDuplicate) {
+        inFlightSendKeys.delete(sendKey)
+        ownsSendKey = false
+        return get().sendRoomMessage(
+          roomId, text, mediaUrl, messageType, replyToId,
+          failedDuplicate.id, failedDuplicate._clientId
+        )
+      }
+    }
 
     // Show the bubble immediately. The network + encryption still finish in
     // the background; on failure the optimistic bubble stays with a retry indicator.
@@ -3334,7 +3371,12 @@ export const useChatStore = create((set, get) => ({
     const existingBubble = existingTempId
       ? get().messages.find((m) => sameId(m.id, existingTempId))
       : null
-    const clientMessageId = existingBubble?._clientId
+    // The retry path passes the id it already used. Without that, a retry whose
+    // bubble had been reconciled away generated a fresh key, so a send that had
+    // actually committed was stored a second time (two rows 18s apart in
+    // production) and the user saw the same text twice.
+    const clientMessageId = existingClientMessageId
+      || existingBubble?._clientId
       || `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
     if (!existingTempId) {
       const optimisticMessage = {
@@ -3553,7 +3595,9 @@ export const useChatStore = create((set, get) => ({
       // so a message that did commit can never be duplicated.
       if (!existingTempId && !err?.httpStatus) {
         console.warn('[chat] retrying message send once after transport failure')
-        return get().sendRoomMessage(targetRoomId, text, mediaUrl, messageType, replyToId, tempId)
+        return get().sendRoomMessage(
+          targetRoomId, text, mediaUrl, messageType, replyToId, tempId, clientMessageId
+        )
       }
 
       set((state) => ({
@@ -3566,6 +3610,7 @@ export const useChatStore = create((set, get) => ({
       }))
       return { success: false, error: isTimeout ? 'Message sending timed out. Please check connection and try again.' : (err?.message || 'Failed to send message') }
     } finally {
+      if (ownsSendKey) inFlightSendKeys.delete(sendKey)
       set({ sending: false })
     }
   },
