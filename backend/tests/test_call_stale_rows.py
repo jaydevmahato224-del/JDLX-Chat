@@ -87,6 +87,33 @@ def test_abandoned_active_call_does_not_block_a_new_offer(client, db):
     assert ringing is not None
 
 
+def test_offer_wakes_the_callee_even_when_the_profile_has_no_name(client, db, monkeypatch):
+    """The offer no longer SELECTs the caller's name (it comes from the token),
+    and it wakes the callee's watcher instead of waiting out its 2s poll."""
+    import chat_routes
+
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    db.execute("UPDATE chat_users SET name = '', username = '' WHERE id = ?", (alice,))
+    db.commit()
+    room = _direct_room(db, alice, bob)
+
+    sent = []
+    monkeypatch.setattr(
+        chat_routes, "broadcast_supabase_chat_event", lambda messages: sent.extend(messages)
+    )
+
+    assert _offer(client, room, _headers(alice)).status_code == 200
+
+    assert sent, "the callee was never woken for the ringing call"
+    topic, event, payload = sent[0]
+    assert topic == f"chat_user_{bob}"
+    assert event == "incoming_call"
+    assert payload["room_id"] == room
+    # Falls back to the verified token payload when the profile has no name.
+    assert payload["caller_name"] == f"User {alice}"
+
+
 def test_live_call_still_blocks_a_second_offer(client, db):
     alice = _chat_user(db, "Alice")
     bob = _chat_user(db, "Bob")

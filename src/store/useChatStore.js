@@ -443,6 +443,26 @@ const hasFreshConfirmation = (messages, optimistic, text, mediaUrl, myId) => {
 // cannot post the same text twice with two different idempotency keys.
 const inFlightSendKeys = new Map()
 
+// The callee learns about a ringing call by polling /calls/incoming every 2s.
+// A Supabase broadcast from the backend wakes that poll immediately, so the
+// phone rings as soon as the offer row exists instead of up to 2-3s later.
+let callWatcherWake = null
+const wakeCallWatcher = () => {
+  if (typeof callWatcherWake === 'function') callWatcherWake()
+}
+const waitForCallWatcherTick = (ms) => new Promise((resolve) => {
+  const timer = setTimeout(() => { callWatcherWake = null; resolve() }, ms)
+  callWatcherWake = () => { clearTimeout(timer); callWatcherWake = null; resolve() }
+})
+
+// ICE config rarely changes, and fetching it on every call put a network
+// round-trip in front of the mic prompt. Cached per session (and warmed when a
+// conversation is opened) so the call button can start negotiating at once.
+const CALL_ICE_CACHE_MS = 10 * 60 * 1000
+let cachedCallIceServers = null
+let cachedCallIceServersAt = 0
+let callIceServersPromise = null
+
 // -----------------------------------------------------------------------------
 // INSTANT HYDRATION CACHE (Stale-While-Revalidate)
 // Ensures conversations, friends, and active chat load in 0ms on startup / refresh
@@ -2136,6 +2156,9 @@ export const useChatStore = create((set, get) => ({
       return m
     })
     if (uid) setCachedActiveRoomId(uid, conv.id)
+    // Warm the ICE config while the user is reading, so a call tap does not
+    // wait on it (fire-and-forget; failures fall back to STUN).
+    get().fetchCallIceServers().catch(() => {})
     set((state) => ({
       // Never carry a stale last_message preview from the conversation list
       // when there are no actual cached messages — that causes the "chat leak"
@@ -3734,6 +3757,11 @@ export const useChatStore = create((set, get) => ({
           privateReady ? { config: { private: true } } : undefined
         )
         userChannel
+          .on('broadcast', { event: 'incoming_call' }, () => {
+            // Backend hint only: the watcher re-reads /calls/incoming, so the
+            // payload can never inject a fake call.
+            wakeCallWatcher()
+          })
           .on('broadcast', { event: 'incoming_chat' }, (ev) => {
             get().fetchConversations()
             get().fetchUnreadCount()
@@ -4193,17 +4221,30 @@ export const useChatStore = create((set, get) => ({
   fetchCallIceServers: async () => {
     const token = get().chatToken
     if (!token) return get()._callStunServers
-    try {
-      const res = await apiFetch('/chat/ice-servers', {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      const json = await res.json().catch(() => null)
-      const servers = json?.data?.ice_servers
-      if (res.ok && Array.isArray(servers) && servers.length) return servers
-    } catch (e) {
-      console.warn('fetch ICE servers error:', e)
+    if (cachedCallIceServers && Date.now() - cachedCallIceServersAt < CALL_ICE_CACHE_MS) {
+      return cachedCallIceServers
     }
-    return get()._callStunServers
+    if (callIceServersPromise) return callIceServersPromise
+    callIceServersPromise = (async () => {
+      try {
+        const res = await apiFetch('/chat/ice-servers', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        const json = await res.json().catch(() => null)
+        const servers = json?.data?.ice_servers
+        if (res.ok && Array.isArray(servers) && servers.length) {
+          cachedCallIceServers = servers
+          cachedCallIceServersAt = Date.now()
+          return servers
+        }
+      } catch (e) {
+        console.warn('fetch ICE servers error:', e)
+      } finally {
+        callIceServersPromise = null
+      }
+      return get()._callStunServers
+    })()
+    return callIceServersPromise
   },
 
   startCallTimer: () => {
@@ -4342,6 +4383,26 @@ export const useChatStore = create((set, get) => ({
     if (!roomId) return { success: false, error: 'No room' }
 
     const roomConversation = get().conversations.find((c) => sameId(c.id, roomId))
+    const peerName = roomConversation?.contact_name || roomConversation?.other_user?.name || null
+    const peerAvatar = roomConversation?.contact_avatar || roomConversation?.other_user?.profile_image || null
+
+    // Show the call screen on the tap itself. The mic prompt, the ICE fetch and
+    // the offer round-trips used to run first, so the button looked dead for
+    // 2-3 seconds before anything appeared. cleanupCallResources() clears this
+    // state on every failure path.
+    set({
+      activeCall: {
+        roomId,
+        callType,
+        callerId: chatUser.id,
+        calleeId: null,
+        state: 'ringing',
+        startedAt: Date.now(),
+        peerName,
+        peerAvatar,
+        _connecting: true
+      }
+    })
 
     // Unlock the remote-audio sink inside this tap; the peer's track arrives
     // later, when a first play() would be rejected by the iOS autoplay policy.
@@ -4447,8 +4508,9 @@ export const useChatStore = create((set, get) => ({
           calleeId: null,
           state: 'ringing',
           startedAt: Date.now(),
-          peerName: roomConversation?.contact_name || roomConversation?.other_user?.name || null,
-          peerAvatar: roomConversation?.contact_avatar || roomConversation?.other_user?.profile_image || null
+          peerName,
+          peerAvatar,
+          _connecting: false
         }
       })
       // The timer starts when the call is actually answered (pollCallState), so
@@ -4768,7 +4830,7 @@ export const useChatStore = create((set, get) => ({
         && currentCall.state === 'ringing'
         && currentCall.callerId !== get().chatUser?.id
       if (currentCall && !isIncomingRing) {
-        await new Promise((r) => setTimeout(r, 2000))
+        await waitForCallWatcherTick(2000)
         continue
       }
       if (!get().chatToken) break
@@ -4815,7 +4877,7 @@ export const useChatStore = create((set, get) => ({
           // The caller hung up (or the offer expired) before we answered.
           get().cleanupCallResources()
         }
-        await new Promise((r) => setTimeout(r, 2000))
+        await waitForCallWatcherTick(2000)
       } catch (e) {
         if (e.name === 'AbortError') break
         console.warn('call watcher error:', e)

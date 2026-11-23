@@ -5796,31 +5796,21 @@ def chat_call_offer(room_id):
         # (closed the tab mid-ring) or an 'active' row abandoned long ago
         # would otherwise block every new offer for this room with 409 forever.
         now_ts = int(time.time())
+        # One statement instead of three sequential round-trips (each is a
+        # ~200-300ms hop to Turso, and all of it sat in front of the ringing
+        # UI). A ringing row older than 90s, an active row nobody refreshed for
+        # 60s, or an active row past four hours are all dead and must not block
+        # this offer.
         cursor.execute(
             """UPDATE official_chat_calls
                SET state = 'ended', ended_at = ?
-               WHERE room_id = ? AND state = 'ringing'
-                 AND started_at IS NOT NULL AND ? - started_at > 90""",
-            (now_ts, room_id, now_ts)
-        )
-        # A call nobody is polling any more is dead even if the row still says
-        # 'active': the caller closed the tab, the phone died, or the answer
-        # round-trip was lost. Both peers refresh last_seen every few seconds
-        # while the call screen is open, so a >60s gap means the call is over
-        # and must not block this new offer for the old 4-hour window.
-        cursor.execute(
-            """UPDATE official_chat_calls
-               SET state = 'ended', ended_at = ?
-               WHERE room_id = ? AND state = 'active'
-                 AND COALESCE(last_seen, started_at, 0) < ?""",
-            (now_ts, room_id, now_ts - 60)
-        )
-        cursor.execute(
-            """UPDATE official_chat_calls
-               SET state = 'ended', ended_at = ?
-               WHERE room_id = ? AND state = 'active'
-                 AND started_at IS NOT NULL AND ? - started_at > 14400""",
-            (now_ts, room_id, now_ts)
+               WHERE room_id = ?
+                 AND (
+                   (state = 'ringing' AND COALESCE(started_at, 0) < ? - 90)
+                   OR (state = 'active' AND COALESCE(last_seen, started_at, 0) < ? - 60)
+                   OR (state = 'active' AND COALESCE(started_at, 0) < ? - 14400)
+                 )""",
+            (now_ts, room_id, now_ts, now_ts, now_ts)
         )
         conn.commit()
 
@@ -5841,14 +5831,34 @@ def chat_call_offer(room_id):
             (room_id, my_id, other_id, call_type, offer_sdp, now, now)
         )
         call_id = cursor.lastrowid
-        cursor.execute(
-            "SELECT name, username FROM chat_users WHERE id = ?", (my_id,)
-        )
-        caller = cursor.fetchone()
-        caller_name = ''
-        if caller:
-            caller_name = str(caller['name'] or caller['username'] or '').strip()
+        # The caller's display name is already in the verified token payload, so
+        # this no longer needs its own SELECT (one less Turso round-trip before
+        # the callee can be woken).
+        chat_user = request.chat_user or {}
+        caller_name = str(
+            chat_user.get('name') or chat_user.get('username') or ''
+        ).strip()
         conn.commit()
+
+        # Ring the callee right away when the app is open. The client watcher
+        # polls /calls/incoming every 2s; this hint wakes that poll immediately,
+        # so ringing no longer waits out the poll interval. It is only a wake-up
+        # signal — the client re-reads the call row, so the payload cannot fake
+        # a call. Dispatched on a background thread like the push below.
+        try:
+            broadcast_supabase_chat_event([(
+                f"chat_user_{other_id}",
+                "incoming_call",
+                {
+                    "room_id": room_id,
+                    "call_id": call_id,
+                    "call_type": call_type,
+                    "caller_id": my_id,
+                    "caller_name": caller_name,
+                },
+            )])
+        except Exception as bcast_err:
+            logger.debug("Call broadcast dispatch failed for %s: %s", other_id, bcast_err)
 
         # Wake the callee's phone even when the app is backgrounded or killed.
         # Best-effort and off the request thread: a push failure must never
