@@ -103,6 +103,7 @@ import {
 } from '../utils/screenProtection'
 import toast from 'react-hot-toast'
 import IncomingCallModal from '../components/IncomingCallModal'
+import { playSound, setSoundEnabled } from '../utils/sounds'
 import CallScreen from '../components/CallScreen'
 
 // Intl formatters are expensive to construct. Reuse one per format instead of
@@ -2236,46 +2237,9 @@ export default function ChatConversation() {
     return () => window.removeEventListener('jdlx_stealth_mode_changed', handleStealthChange)
   }, [])
 
-  // Small synthesized chime for incoming messages (no audio asset needed).
-  const audioContextRef = useRef(null)
-  const playChatSound = useCallback(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext
-      if (!AudioCtx) return
-
-      let ctx = audioContextRef.current
-      if (!ctx || ctx.state === 'closed') {
-        ctx = new AudioCtx()
-        audioContextRef.current = ctx
-      }
-      if (ctx.state === 'suspended') ctx.resume().catch(() => {})
-
-      const now = ctx.currentTime
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = 'sine'
-      osc.frequency.setValueAtTime(880, now)
-      osc.frequency.exponentialRampToValueAtTime(660, now + 0.12)
-      gain.gain.setValueAtTime(0.0001, now)
-      gain.gain.exponentialRampToValueAtTime(0.06, now + 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18)
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      osc.start(now)
-      osc.stop(now + 0.2)
-    } catch {
-      // Autoplay policy or unsupported browser: silently skip the chime.
-    }
-  }, [])
-
-  useEffect(() => () => {
-    const ctx = audioContextRef.current
-    audioContextRef.current = null
-    if (ctx && ctx.state !== 'closed') {
-      Promise.resolve(ctx.close()).catch(() => {})
-    }
-  }, [])
+  // Chimes, ringtone and call tones all live in the shared sounds module: one
+  // AudioContext for the whole app and one preference behind the toggle.
+  const playChatSound = useCallback(() => playSound('receive'), [])
 
   // Prefill editable fields when Profile drawer opens
   useEffect(() => {
@@ -2301,9 +2265,10 @@ export default function ChatConversation() {
 
   const handleToggleChatSounds = (enabled) => {
     setChatSounds(enabled)
+    setSoundEnabled(enabled)
     try { localStorage.setItem('jdlx_chat_sound', String(enabled)) } catch {}
-    // Preview the chime on enable (also unlocks AudioContext on iOS).
-    if (enabled) playChatSound()
+    // Preview the chime on enable (also unlocks the AudioContext on iOS).
+    if (enabled) playSound('receive')
   }
 
   const handleToggleDoodle = (enabled) => {
@@ -9628,7 +9593,7 @@ export default function ChatConversation() {
                           <span>Sound Effects</span>
                         </div>
                         <div className={`text-[10px] font-medium mt-0.5 ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-                          Play acoustic chimes on incoming &amp; sent messages
+                          Chimes for messages, plus the call ringtone &amp; connect tones
                         </div>
                       </div>
                       <button

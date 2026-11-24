@@ -3,6 +3,7 @@ import { Phone, Mic, Volume2, VolumeX, X, Loader2, RefreshCw } from 'lucide-reac
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
 import toast from 'react-hot-toast'
+import { startIncomingRingtone, stopIncomingRingtone, unlockSounds } from '../utils/sounds'
 
 export default function IncomingCallModal() {
   const {
@@ -27,6 +28,7 @@ export default function IncomingCallModal() {
   const handleAnswer = async () => {
     if (answeringRef.current) return
     answeringRef.current = true
+    stopIncomingRingtone()
     setAnswering(true)
     try {
       const res = await answerCall()
@@ -50,6 +52,21 @@ export default function IncomingCallModal() {
     }, 45000)
     return () => clearTimeout(t)
   }, [activeCall?.callerId, activeCall?.state, endCall])
+
+  // Ring the phone while the prompt is up. Stops on answer/decline, when the
+  // caller hangs up (activeCall cleared) or when this modal unmounts.
+  useEffect(() => {
+    const isIncoming = Boolean(
+      activeCall && activeCall.state === 'ringing' && activeCall.callerId !== chatUser?.id
+    )
+    if (!isIncoming) {
+      stopIncomingRingtone()
+      return undefined
+    }
+    unlockSounds()
+    startIncomingRingtone()
+    return () => stopIncomingRingtone()
+  }, [activeCall?.state, activeCall?.callerId, activeCall?.roomId, chatUser?.id])
 
   if (!activeCall || activeCall.state !== 'ringing') return null
   // The caller's own outgoing call also sits in 'ringing' state; they get the

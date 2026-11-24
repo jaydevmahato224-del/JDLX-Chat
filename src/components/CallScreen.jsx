@@ -3,6 +3,7 @@ import { Phone, Mic, Volume2, VolumeX, X, User, Video } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
 import { playRemoteCallAudio } from '../utils/callAudio'
+import { playSound, startOutgoingRingback, stopOutgoingRingback } from '../utils/sounds'
 
 export default function CallScreen() {
   const {
@@ -22,6 +23,10 @@ export default function CallScreen() {
 
   const remoteVideoRef = useRef(null)
   const localVideoRef = useRef(null)
+  // Tone bookkeeping: one "picked up" cue per call, and the end cue only for a
+  // call that had actually been answered.
+  const connectedTonePlayedRef = useRef(false)
+  const previousCallRef = useRef(null)
   // Mobile browsers can reject the async play() after the "answer" gesture
   // (autoplay policy), leaving a connected call completely silent with no way
   // to start audio. Surface a tap target and retry on the next interaction.
@@ -82,6 +87,39 @@ export default function CallScreen() {
       localVideoRef.current.play().catch(() => {})
     }
   }, [callLocalStream, isVideo])
+
+  // Outgoing ringback while the peer's phone is ringing.
+  useEffect(() => {
+    const isRinging = Boolean(
+      activeCall && activeCall.state === 'ringing' && activeCall.callerId === chatUser?.id
+    )
+    if (isRinging) startOutgoingRingback()
+    else stopOutgoingRingback()
+    return () => stopOutgoingRingback()
+  }, [activeCall?.state, activeCall?.callerId, chatUser?.id])
+
+  // One "picked up" tone when the media path actually comes up.
+  useEffect(() => {
+    if (callConnectionState === 'connected' && !connectedTonePlayedRef.current) {
+      connectedTonePlayedRef.current = true
+      playSound('connect')
+    }
+  }, [callConnectionState])
+
+  // A call that was answered and then disappeared (either side hung up) gets
+  // the falling end tone.
+  useEffect(() => {
+    if (activeCall) {
+      previousCallRef.current = activeCall
+      return
+    }
+    if (previousCallRef.current) {
+      const endedState = previousCallRef.current.state
+      previousCallRef.current = null
+      connectedTonePlayedRef.current = false
+      if (endedState === 'active') playSound('end')
+    }
+  }, [activeCall])
 
   if (!activeCall) return null
 

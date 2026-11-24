@@ -18,6 +18,7 @@ import {
   unlockRemoteAudio,
   stopRemoteCallAudio
 } from '../utils/callAudio'
+import { playSound, stopAllCallSounds, unlockSounds } from '../utils/sounds'
 import {
   encryptChatMessage,
   decryptChatMessage,
@@ -60,6 +61,25 @@ const isMissingCallRoute = (res, json) =>
   || (res.status === 404 && /resource not found/i.test(json?.error || json?.message || ''))
 
 const CALL_ROUTES_MISSING_ERROR = 'Voice calling is not available on this server yet.'
+
+// A muted conversation must stay silent even for a message that arrives while
+// another chat is open: that chime is produced here, not by the chat screen.
+// Mute entries live in the same localStorage map the mute UI writes
+// ({ until: 'always' | timestamp }), so this needs no extra state.
+const isRoomSoundMuted = (roomId) => {
+  if (!roomId || typeof window === 'undefined') return false
+  try {
+    const raw = window.localStorage.getItem('jdlx_chat_muted_rooms_v2')
+    if (!raw) return false
+    const entry = JSON.parse(raw)?.[String(roomId)]
+    if (!entry) return false
+    if (entry.until === 'always') return true
+    if (typeof entry.until === 'number') return Date.now() < entry.until
+    return true
+  } catch {
+    return false
+  }
+}
 
 // ICE candidates are exchanged through the backend as strings. Send the whole
 // candidate init (sdpMid/sdpMLineIndex matter for video calls with several
@@ -3542,6 +3562,9 @@ export const useChatStore = create((set, get) => ({
         if (uid) {
           setCachedMessages(uid, targetRoomId, merged)
         }
+        // Sent-message cue: the bubble is already on screen, this just confirms
+        // the server accepted it.
+        playSound('send')
         clearTimeout(postSendRefreshTimer)
         postSendRefreshTimer = setTimeout(() => {
           postSendRefreshTimer = null
@@ -3644,6 +3667,9 @@ export const useChatStore = create((set, get) => ({
             : m
         )
       }))
+      // Audible failure cue: the bubble shows a retry icon, but a send that
+      // fails while the user looks elsewhere needs a sound too.
+      playSound('error')
       return { success: false, error: isTimeout ? 'Message sending timed out. Please check connection and try again.' : (err?.message || 'Failed to send message') }
     } finally {
       if (ownsSendKey) inFlightSendKeys.delete(sendKey)
@@ -3811,6 +3837,14 @@ export const useChatStore = create((set, get) => ({
             }
             if (roomId && String(get().activeRoomId) === String(roomId)) {
               get().fetchRoomMessages(roomId)
+            } else if (!isRoomSoundMuted(roomId)) {
+              // Message for a room that is not on screen: the open-room chime
+              // cannot fire, so cue it here — softer when the app is backgrounded.
+              playSound(
+                typeof document !== 'undefined' && document.visibilityState === 'visible'
+                  ? 'receive'
+                  : 'notification'
+              )
             }
           })
           .on('broadcast', { event: 'delivery_receipt' }, ({ payload }) => {
@@ -3859,6 +3893,9 @@ export const useChatStore = create((set, get) => ({
             })
           })
           .on('broadcast', { event: 'friend_event' }, () => {
+            // New friend request / accepted request: a soft notification cue,
+            // the same one the app uses for background alerts.
+            playSound('notification')
             get().fetchFriendsAndRequests()
             get().fetchConversations()
           })
@@ -4300,6 +4337,7 @@ export const useChatStore = create((set, get) => ({
     const state = get()
     stopNativeCallAudio()
     stopRemoteCallAudio()
+    stopAllCallSounds()
     get().stopCallTimer()
     appliedCallCandidates.clear()
     pendingCallCandidates.length = 0
@@ -4336,6 +4374,9 @@ export const useChatStore = create((set, get) => ({
   endCall: async () => {
     const { activeCall, chatToken } = get()
     if (!activeCall) return
+    // Stop any ringtone/ringback before the network round-trip so the phone
+    // goes quiet the instant the button is tapped.
+    stopAllCallSounds()
     try {
       if (chatToken) {
         await apiFetch(`/chat/rooms/${activeCall.roomId}/call/end`, {
@@ -4468,6 +4509,9 @@ export const useChatStore = create((set, get) => ({
     if (!chatToken || !chatUser) return { success: false, error: 'Not signed in' }
     if (!roomId) roomId = activeRoomId
     if (!roomId) return { success: false, error: 'No room' }
+    // Unlock the audio context inside this tap, otherwise the ringback and the
+    // connect tone are blocked by the autoplay policy.
+    unlockSounds()
 
     const roomConversation = get().conversations.find((c) => sameId(c.id, roomId))
     const peerName = roomConversation?.contact_name || roomConversation?.other_user?.name || null
@@ -4622,6 +4666,8 @@ export const useChatStore = create((set, get) => ({
     const isVideo = activeCall?.callType === 'video'
     // Unlock playback from the answer tap so the remote audio is audible.
     unlockRemoteAudio()
+    // Same gesture unlocks the ringtone/connect tones.
+    unlockSounds()
     // Ask for the mic straight from the answer tap (iOS user activation), then
     // reuse the warm track from a previous call when there is one.
     const iceServersPromise = get().fetchCallIceServers()
