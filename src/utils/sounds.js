@@ -66,6 +66,22 @@ export const unlockSounds = () => {
   getCtx()
 }
 
+// The first tap/keypress anywhere counts as a user gesture, so the context is
+// already running by the time a NETWORK event wants a tone (an incoming
+// message, or a call ringing while the user has not tapped anything yet).
+// Without this, iOS/Safari keep the context suspended and those cues are silent.
+if (isBrowser && typeof window.addEventListener === 'function') {
+  const unlockOnce = () => {
+    unlockSounds()
+    window.removeEventListener('pointerdown', unlockOnce)
+    window.removeEventListener('touchstart', unlockOnce)
+    window.removeEventListener('keydown', unlockOnce)
+  }
+  window.addEventListener('pointerdown', unlockOnce, { passive: true })
+  window.addEventListener('touchstart', unlockOnce, { passive: true })
+  window.addEventListener('keydown', unlockOnce)
+}
+
 // One enveloped oscillator. `slideTo` glides the pitch for the sweeps used by
 // the connect/end cues; a plain tone keeps a constant frequency.
 const tone = (freq, startAt, duration, { type = 'sine', gain = 0.22, slideTo = null } = {}) => {

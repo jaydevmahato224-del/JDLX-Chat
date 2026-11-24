@@ -4512,6 +4512,8 @@ export const useChatStore = create((set, get) => ({
     // Unlock the audio context inside this tap, otherwise the ringback and the
     // connect tone are blocked by the autoplay policy.
     unlockSounds()
+    // Starting a call must also silence any ringtone still playing.
+    stopAllCallSounds()
 
     const roomConversation = get().conversations.find((c) => sameId(c.id, roomId))
     const peerName = roomConversation?.contact_name || roomConversation?.other_user?.name || null
@@ -4668,6 +4670,8 @@ export const useChatStore = create((set, get) => ({
     unlockRemoteAudio()
     // Same gesture unlocks the ringtone/connect tones.
     unlockSounds()
+    // Answering silences the incoming ringtone immediately.
+    stopAllCallSounds()
     // Ask for the mic straight from the answer tap (iOS user activation), then
     // reuse the warm track from a previous call when there is one.
     const iceServersPromise = get().fetchCallIceServers()
