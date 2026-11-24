@@ -123,6 +123,15 @@ _TRANSIENT_CONNECTION_MARKERS = (
     "database busy",
     "databasebusy",
     "databaselocked",
+    # Turso/Hrana rolls back an interactive transaction whose stream sat idle
+    # (long-poll sleeps, pooled streams): "SQLITE_BUSY ... interactive
+    # transaction was rolled back because the stream was idle for too long".
+    # The transaction is already gone, so retrying on a fresh connection is
+    # safe — and routes that treat this as best-effort bookkeeping can skip the
+    # lost write instead of returning a 500.
+    "sqlite_busy",
+    "idle for too long",
+    "was rolled back",
     "statements in progress",
     "cannot commit transaction",
     "network",

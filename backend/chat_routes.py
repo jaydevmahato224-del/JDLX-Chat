@@ -4827,11 +4827,27 @@ def poll_room_events(room_id):
             # and cuts these write+commit round-trips to a third; they used to
             # compete with message writes on every open chat.
             if now - last_presence_ping >= 45:
-                cursor.execute(
-                    "UPDATE chat_users SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (my_id,)
-                )
-                conn.commit()
+                try:
+                    cursor.execute(
+                        "UPDATE chat_users SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (my_id,)
+                    )
+                    conn.commit()
+                except Exception as hb_err:
+                    # Presence is only a heartbeat: never fail the poll for it.
+                    # Turso rolls back an interactive transaction that sat idle
+                    # on a pooled stream ("SQLITE_BUSY ... idle for too long"),
+                    # which leaves that connection unusable, so the next
+                    # statement turned the whole long-poll into a 500 for the
+                    # client. Swap in a fresh connection and keep polling; the
+                    # next ping retries the write.
+                    logger.warning("Long-poll presence heartbeat failed: %s", hb_err)
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = get_db()
+                    cursor = conn.cursor()
                 last_presence_ping = now
 
             cursor.execute(
