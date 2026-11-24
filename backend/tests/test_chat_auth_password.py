@@ -74,7 +74,8 @@ def test_chat_registration_and_password_login_flow(client, db):
         'password': '123'
     })
     assert short_pw_res.status_code == 400
-    assert "at least 6 characters" in short_pw_res.get_json()['message']
+    # The policy was strengthened to 8+ characters with mixed case and a digit.
+    assert "at least 8 characters" in short_pw_res.get_json()['message']
 
     # 5. Check username availability for taken username
     chk_res = client.get('/api/chat/auth/check-username?username=aarav_patel')

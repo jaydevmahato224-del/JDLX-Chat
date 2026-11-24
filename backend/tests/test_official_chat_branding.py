@@ -36,8 +36,11 @@ def test_chat_branding_and_logo_upload(client, db, make_user, mint_token):
     # identity of the stored file lives in `filename` (always chat_logo_ fixed).
     assert 'chat_logo_' in upload_data['data']['filename']
 
-    # 3. Verify public settings reflect the new logo
-    pub_res = client.get('/api/settings')
+    # 3. Verify the public branding endpoint reflects the new logo. The
+    # storefront `/api/settings` route lives in a different repository; this
+    # standalone backend publishes the same two display fields at
+    # /api/chat/branding.
+    pub_res = client.get('/api/chat/branding')
     assert pub_res.status_code == 200
     pub_settings = pub_res.get_json()['data']
     assert pub_settings.get('official_chat_logo') == logo_url
