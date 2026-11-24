@@ -5796,32 +5796,39 @@ def chat_call_offer(room_id):
         # (closed the tab mid-ring) or an 'active' row abandoned long ago
         # would otherwise block every new offer for this room with 409 forever.
         now_ts = int(time.time())
-        # One statement instead of three sequential round-trips (each is a
-        # ~200-300ms hop to Turso, and all of it sat in front of the ringing
-        # UI). A ringing row older than 90s, an active row nobody refreshed for
-        # 60s, or an active row past four hours are all dead and must not block
-        # this offer.
+        # One SELECT answers both questions this route needs: is a call already
+        # live, and is that row stale? The unconditional expiry UPDATE used to
+        # run first, so every offer paid three sequential Turso round-trips
+        # (1-2.5s each on a distant region) before the callee could be rung —
+        # the caller sat on a dead-looking screen for seconds. The common path,
+        # with no live call at all, now costs two statements.
         cursor.execute(
-            """UPDATE official_chat_calls
-               SET state = 'ended', ended_at = ?
-               WHERE room_id = ?
-                 AND (
-                   (state = 'ringing' AND COALESCE(started_at, 0) < ? - 90)
-                   OR (state = 'active' AND COALESCE(last_seen, started_at, 0) < ? - 60)
-                   OR (state = 'active' AND COALESCE(started_at, 0) < ? - 14400)
-                 )""",
-            (now_ts, room_id, now_ts, now_ts, now_ts)
-        )
-        conn.commit()
-
-        # Only one live call per room at a time.
-        cursor.execute(
-            "SELECT id, state FROM official_chat_calls WHERE room_id = ? AND state IN ('ringing','active') ORDER BY id DESC LIMIT 1",
+            """SELECT id, state, COALESCE(started_at, 0) AS started_at,
+                      COALESCE(last_seen, started_at, 0) AS last_seen
+               FROM official_chat_calls
+               WHERE room_id = ? AND state IN ('ringing','active')
+               ORDER BY id DESC LIMIT 1""",
             (room_id,)
         )
         existing = cursor.fetchone()
         if existing:
-            return error_response("A call is already in progress in this room", 409)
+            started_at = int(existing['started_at'] or 0)
+            last_seen = int(existing['last_seen'] or 0)
+            # A ringing row older than 90s, an active row nobody refreshed for
+            # 60s, or an active row past four hours are all dead and must not
+            # block this offer.
+            stale = (
+                (existing['state'] == 'ringing' and started_at < now_ts - 90)
+                or (existing['state'] == 'active' and last_seen < now_ts - 60)
+                or (existing['state'] == 'active' and started_at < now_ts - 14400)
+            )
+            if not stale:
+                return error_response("A call is already in progress in this room", 409)
+            cursor.execute(
+                "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",
+                (now_ts, existing['id'])
+            )
+            conn.commit()
 
         now = int(time.time())
         cursor.execute(
@@ -5896,13 +5903,18 @@ def chat_call_answer(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        other_id = _call_peer_ids(cursor, room_id, my_id)
-        if other_id is None:
-            return error_response("Access denied to this chat room", 403)
-
+        # Membership check and the ringing row in ONE statement: this used to be
+        # two Turso round-trips (1-2.5s each) in front of the answer, which is
+        # exactly the wait the callee feels as "Connecting…".
         cursor.execute(
-            "SELECT id, caller_id, state FROM official_chat_calls WHERE room_id = ? AND state = 'ringing' ORDER BY id DESC LIMIT 1",
-            (room_id,)
+            """SELECT c.id, c.caller_id, c.state
+               FROM official_chat_calls c
+               JOIN official_chat_rooms r ON r.id = c.room_id
+               WHERE c.room_id = ? AND c.state = 'ringing'
+                 AND r.room_type = 'direct'
+                 AND (r.user_id = ? OR r.user_two_id = ?)
+               ORDER BY c.id DESC LIMIT 1""",
+            (room_id, my_id, my_id)
         )
         call = cursor.fetchone()
         if not call:
@@ -5915,6 +5927,25 @@ def chat_call_answer(room_id):
             (answer_sdp, my_id, int(time.time()), call['id'])
         )
         conn.commit()
+
+        # Hand the caller the answer the moment it exists. Waiting for its
+        # /call/state poll meant the caller learned of the answer only on the
+        # next tick — and a tick can sit behind a multi-second DB write — so its
+        # ICE never started and the call stayed on "Connecting…". The stored row
+        # above remains the fallback for a caller that misses this.
+        try:
+            broadcast_supabase_chat_event([(
+                f"chat_user_{call['caller_id']}",
+                "call_answered",
+                {
+                    "room_id": room_id,
+                    "call_id": call['id'],
+                    "answer_sdp": answer_sdp,
+                },
+            )])
+        except Exception as bcast_err:
+            logger.debug("Call answer broadcast failed for %s: %s", call['caller_id'], bcast_err)
+
         return success_response({"state": "active"}, "Call answered")
     finally:
         conn.close()
@@ -5950,6 +5981,26 @@ def chat_call_ice_candidate(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
+        # Deliver the candidates over Realtime FIRST. The row append below is a
+        # remote-DB write that has taken 1-10s in production, and the peer needs
+        # these to start its ICE checks; waiting for the write (and then for a
+        # 1.5s /call/state poll) is why a call sat on "Connecting…" for a
+        # minute. The stored copy stays as the fallback for a missed broadcast.
+        peer_id = None
+        try:
+            peer_id = _call_peer_ids(cursor, room_id, my_id)
+        except Exception as peer_err:
+            logger.debug("ICE peer lookup failed for room %s: %s", room_id, peer_err)
+        if peer_id is not None:
+            try:
+                broadcast_supabase_chat_event([(
+                    f"chat_user_{peer_id}",
+                    "call_ice",
+                    {"room_id": room_id, "candidates": cands},
+                )])
+            except Exception as bcast_err:
+                logger.debug("ICE broadcast failed for %s: %s", peer_id, bcast_err)
+
         cursor.execute(
             f"""UPDATE official_chat_calls
                 SET candidates = json_insert(COALESCE(candidates, '[]'), {placeholders}),

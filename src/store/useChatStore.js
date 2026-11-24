@@ -118,6 +118,16 @@ const createIceBatcher = (roomId, getToken) => {
   }
 }
 
+// Remote signalling reaches the client twice: the Supabase broadcast (fast,
+// fired by the backend) and the /call/state poll (fallback). Both go through
+// the helpers below so the peer connection never applies the same answer or
+// candidate twice. Candidates that arrive before the remote answer are parked:
+// addIceCandidate() before setRemoteDescription() throws, and the candidate
+// would otherwise be lost for good.
+const appliedCallCandidates = new Set()
+const pendingCallCandidates = []
+let callAnswerApplied = false
+
 const parseIceCandidate = (raw) => {
   if (!raw) return null
   if (typeof raw === 'object') return raw.candidate ? raw : null
@@ -3765,6 +3775,27 @@ export const useChatStore = create((set, get) => ({
             // payload can never inject a fake call.
             wakeCallWatcher()
           })
+          .on('broadcast', { event: 'call_answered' }, (ev) => {
+            const payload = ev?.payload || {}
+            const call = get().activeCall
+            const myId = get().chatUser?.id
+            // Only the caller applies the peer's answer; the callee already set
+            // that SDP as its own local description.
+            if (!call || !myId || String(call.callerId) !== String(myId)) return
+            if (payload.room_id && String(payload.room_id) !== String(call.roomId)) return
+            set((s) => ({
+              activeCall: s.activeCall ? { ...s.activeCall, state: 'active' } : s.activeCall
+            }))
+            get().startCallTimer()
+            get().applyCallAnswer(payload.answer_sdp)
+          })
+          .on('broadcast', { event: 'call_ice' }, (ev) => {
+            const payload = ev?.payload || {}
+            const call = get().activeCall
+            if (!call || !payload.candidates) return
+            if (payload.room_id && String(payload.room_id) !== String(call.roomId)) return
+            get().applyCallIceCandidates(payload.candidates)
+          })
           .on('broadcast', { event: 'incoming_chat' }, (ev) => {
             get().fetchConversations()
             get().fetchUnreadCount()
@@ -4270,6 +4301,9 @@ export const useChatStore = create((set, get) => ({
     stopNativeCallAudio()
     stopRemoteCallAudio()
     get().stopCallTimer()
+    appliedCallCandidates.clear()
+    pendingCallCandidates.length = 0
+    callAnswerApplied = false
     if (state.callAbortController) {
       try { state.callAbortController.abort() } catch {}
       set({ callAbortController: null })
@@ -4347,6 +4381,55 @@ export const useChatStore = create((set, get) => ({
       .replace(/a=extmap-allow-mixed\r\n/g, '')
       .replace(/a=extmap-allow-mixed\n/g, '')
       .replace(/a=ssrc:\d+ msid:[^\r\n]*(\r?\n|$)/g, '')
+  },
+
+  // Apply the caller's remote answer exactly once (broadcast and poll both call
+  // this). Candidates parked while the answer was missing are released here.
+  applyCallAnswer: async (answerSdp) => {
+    const pc = get().callPeerConnection
+    if (!pc || !answerSdp || callAnswerApplied) return false
+    callAnswerApplied = true
+    try {
+      await pc.setRemoteDescription({ type: 'answer', sdp: get().sanitizeRemoteSdp(answerSdp) })
+    } catch (e) {
+      callAnswerApplied = false
+      console.warn('set remote answer error:', e)
+      return false
+    }
+    for (const init of pendingCallCandidates.splice(0)) {
+      try { await pc.addIceCandidate(init) } catch { /* stale candidate */ }
+    }
+    return true
+  },
+
+  // Apply ICE candidates from either path, skipping duplicates by value. Before
+  // the remote answer is set they are parked instead of dropped.
+  applyCallIceCandidates: async (list) => {
+    if (!Array.isArray(list) || !list.length) return 0
+    const pc = get().callPeerConnection
+    if (!pc) return 0
+    let applied = 0
+    for (const raw of list) {
+      const init = parseIceCandidate(raw)
+      if (!init) continue
+      if (!pc.remoteDescription) {
+        const key = JSON.stringify(init)
+        if (!pendingCallCandidates.some((c) => JSON.stringify(c) === key)) {
+          pendingCallCandidates.push(init)
+        }
+        continue
+      }
+      const key = typeof raw === 'string' ? raw : JSON.stringify(init)
+      if (appliedCallCandidates.has(key)) continue
+      appliedCallCandidates.add(key)
+      try {
+        await pc.addIceCandidate(init)
+        applied += 1
+      } catch (e) {
+        // Own or stale candidates are rejected harmlessly.
+      }
+    }
+    return applied
   },
 
   // Create an RTCPeerConnection with ICE + track handling wired to the store.
@@ -4650,8 +4733,6 @@ export const useChatStore = create((set, get) => ({
     const abort = new AbortController()
     set({ callAbortController: abort })
     const ringingSince = Date.now()
-    let answerApplied = false
-    let appliedCandidates = 0
 
     while (!abort.signal.aborted) {
       try {
@@ -4693,31 +4774,13 @@ export const useChatStore = create((set, get) => ({
           // Start the duration at answer time, not at offer time.
           get().startCallTimer()
           // Only the CALLER applies the remote answer: the callee already set
-          // this SDP as its LOCAL description when it answered.
-          if (call.answer_sdp && isCaller && !answerApplied) {
-            answerApplied = true
-            try {
-              const pc = get().callPeerConnection
-              if (pc) {
-                await pc.setRemoteDescription({ type: 'answer', sdp: get().sanitizeRemoteSdp(call.answer_sdp) })
-              }
-            } catch (e) {
-              console.warn('set remote answer error:', e)
-            }
+          // this SDP as its LOCAL description when it answered. The backend
+          // broadcasts the answer too, so this is only the fallback path.
+          if (call.answer_sdp && isCaller) {
+            await get().applyCallAnswer(call.answer_sdp)
           }
-          // Candidates accumulate server-side; only apply the unseen ones.
-          const cands = call.candidates || []
-          for (const cand of cands.slice(appliedCandidates)) {
-            appliedCandidates += 1
-            const init = parseIceCandidate(cand)
-            if (!init) continue
-            try {
-              const pc = get().callPeerConnection
-              if (pc) await pc.addIceCandidate(init)
-            } catch (e) {
-              console.warn('add ice candidate error:', e)
-            }
-          }
+          // Candidates arrive by broadcast AND in this poll; the helper dedupes.
+          await get().applyCallIceCandidates(call.candidates)
         } else if (state === 'ended' || state === 'idle') {
           get().cleanupCallResources()
           break
@@ -4836,7 +4899,7 @@ export const useChatStore = create((set, get) => ({
         && currentCall.state === 'ringing'
         && currentCall.callerId !== get().chatUser?.id
       if (currentCall && !isIncomingRing) {
-        await waitForCallWatcherTick(2000)
+        await waitForCallWatcherTick(1000)
         continue
       }
       if (!get().chatToken) break
@@ -4883,7 +4946,7 @@ export const useChatStore = create((set, get) => ({
           // The caller hung up (or the offer expired) before we answered.
           get().cleanupCallResources()
         }
-        await waitForCallWatcherTick(2000)
+        await waitForCallWatcherTick(1000)
       } catch (e) {
         if (e.name === 'AbortError') break
         console.warn('call watcher error:', e)
