@@ -241,8 +241,10 @@ def test_answer_survives_a_transient_commit(client, db, monkeypatch):
         "SELECT state, answer_sdp FROM official_chat_calls WHERE id = ?", (call_id,)
     ).fetchone()
     assert row["state"] == "active"
-    # The route strips surrounding whitespace from the SDP before storing it.
-    assert row["answer_sdp"] == "v=0"
+    # The SDP is stored verbatim: stripping the trailing CRLF made Chrome reject
+    # the description on the caller ("Invalid SDP line"), so the call never
+    # connected.
+    assert row["answer_sdp"] == "v=0\r\n"
 
 
 def test_end_survives_a_transient_commit(client, db, monkeypatch):

@@ -5821,8 +5821,13 @@ def chat_call_offer(room_id):
     call_type = str(data.get('call_type') or 'voice')
     if call_type not in ('voice', 'video'):
         call_type = 'voice'
-    offer_sdp = str(data.get('offer_sdp') or '').strip()
-    if not offer_sdp:
+    # Keep the SDP byte-for-byte: stripping removed the trailing CRLF and
+    # Chrome then rejected the whole description on the callee ("Failed to
+    # parse SessionDescription ... Invalid SDP line"). Validate on a trimmed
+    # copy instead, so old clients that still send a trimmed answer keep
+    # working once the stored value is intact.
+    offer_sdp = str(data.get('offer_sdp') or '')
+    if not offer_sdp.strip():
         return error_response("Offer SDP is required", 400)
 
     conn = get_db()
@@ -5940,8 +5945,10 @@ def chat_call_answer(room_id):
     """Callee answers with an SDP answer, moving the call to 'active'."""
     my_id = request.chat_user['user_id']
     data = request.get_json(silent=True) or {}
-    answer_sdp = str(data.get('answer_sdp') or '').strip()
-    if not answer_sdp:
+    # Unstripped for the same reason as the offer: the trailing CRLF is part of
+    # a parseable SDP for Chrome.
+    answer_sdp = str(data.get('answer_sdp') or '')
+    if not answer_sdp.strip():
         return error_response("Answer SDP is required", 400)
 
     conn = get_db()

@@ -4482,11 +4482,17 @@ export const useChatStore = create((set, get) => ({
   // by the media-level `a=msid` line, so drop those redundant lines.
   // (Cross-browser calls: e.g. a Chrome caller -> Firefox callee.)
   sanitizeRemoteSdp: (sdp) => {
-    if (typeof sdp !== 'string') return sdp
-    return sdp
+    if (typeof sdp !== 'string' || !sdp.trim()) return sdp
+    const cleaned = sdp
       .replace(/a=extmap-allow-mixed\r\n/g, '')
       .replace(/a=extmap-allow-mixed\n/g, '')
       .replace(/a=ssrc:\d+ msid:[^\r\n]*(\r?\n|$)/g, '')
+    // The stored SDP lost its final CRLF (the backend stripped it, and older
+    // rows are still trimmed). Chrome rejects the WHOLE description when the
+    // last line has no line terminator — "Failed to parse SessionDescription
+    // ... Invalid SDP line" — so the caller could never apply the answer and
+    // every call sat on "Connecting…". Re-terminate the last line.
+    return /\n$/.test(cleaned) ? cleaned : cleaned + '\r\n'
   },
 
   // Apply the caller's remote answer exactly once (broadcast and poll both call
