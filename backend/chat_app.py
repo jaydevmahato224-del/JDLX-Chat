@@ -8,6 +8,7 @@ chat fallback enabled until the new URL is verified.
 
 import logging
 import os
+import threading
 
 from dotenv import load_dotenv
 
@@ -25,7 +26,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from chat_oauth import chat_oauth_bp
 from chat_routes import chat_bp
-from database import get_db, init_db
+from database import USE_TURSO, _open_connection, get_db, init_db
 from jwt_config import get_jwt_secret
 
 logging.basicConfig(
@@ -128,23 +129,61 @@ def _bytes_value(raw):
     return bytes(raw)
 
 
-@app.get("/health")
-@app.get("/api/health")
-def health():
-    db_ok = True
-    try:
+_HEALTH_PROBE_SEM = threading.Semaphore(2)
+_HEALTH_PROBE_TIMEOUT_S = 2.5
+
+
+def _probe_health_db():
+    """Bounded SELECT 1 check so a Turso stall cannot block health workers."""
+    if not USE_TURSO:
         conn = get_db()
         try:
             conn.execute("SELECT 1").fetchone()
         finally:
             conn.close()
+        return "ok"
+
+    if not _HEALTH_PROBE_SEM.acquire(blocking=False):
+        return "busy"
+
+    result = {"status": "timeout"}
+    done = threading.Event()
+
+    def _run():
+        conn = None
+        try:
+            conn = _open_connection()
+            conn.execute("SELECT 1").fetchone()
+            result["status"] = "ok"
+        except Exception as exc:
+            logger.warning("Chat health check DB probe warning: %s", exc)
+            result["status"] = "unreachable"
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            _HEALTH_PROBE_SEM.release()
+            done.set()
+
+    threading.Thread(target=_run, daemon=True, name="health-db-probe").start()
+    done.wait(timeout=_HEALTH_PROBE_TIMEOUT_S)
+    return result["status"]
+
+
+@app.get("/health")
+@app.get("/api/health")
+def health():
+    try:
+        db_state = _probe_health_db()
     except Exception as exc:
         logger.warning("Chat health check DB probe warning: %s", exc)
-        db_ok = False
+        db_state = "unreachable"
     return jsonify({
-        "status": "ok" if db_ok else "degraded",
+        "status": "ok" if db_state == "ok" else "degraded",
         "service": "jdlx-chat",
-        "database": "ok" if db_ok else "unreachable"
+        "database": db_state,
     }), 200
 
 

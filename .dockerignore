@@ -5,3 +5,10 @@ android
 .vercel
 .pytest_cache
 *.apk
+.env
+.env.*
+backend/.env
+backend/.env.*
+*.db
+**/__pycache__
+__pycache__

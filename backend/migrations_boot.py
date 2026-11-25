@@ -20,10 +20,16 @@ logger = logging.getLogger("migrations_boot")
 
 
 def main() -> int:
-    from database import init_db  # imported late so env vars are already read
+    # One-shot CLI boot check: never spawn background pool-warmer threads that
+    # open extra Turso connections only to exit seconds later.
+    os.environ.setdefault("DB_POOL_WARM_MIN", "0")
+    from database import chat_schema_is_current, init_db  # imported late so env vars are already read
 
+    if chat_schema_is_current():
+        logger.info("chat schema is up to date (fast probe)")
+        return 0
     init_db()
-    logger.info("chat schema is up to date")
+    logger.info("chat schema initialized/updated")
     return 0
 
 

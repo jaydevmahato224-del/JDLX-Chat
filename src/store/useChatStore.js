@@ -2335,7 +2335,8 @@ export const useChatStore = create((set, get) => ({
 
     const existing = sameId(get().activeRoomId, targetRoomId) ? get().messages : []
     const hasLockedMessages = existing.some((m) => m && (m._locked || m.message === '🔒 [Encrypted Message]'))
-    const newestId = (!hasLockedMessages && existing.length) ? Math.max(...existing.map((m) => m.id)) : null
+    const confirmedIds = existing.filter((m) => m && typeof m.id === 'number' && m.id > 0).map((m) => m.id)
+    const newestId = (!hasLockedMessages && confirmedIds.length) ? Math.max(...confirmedIds) : null
     // Smart Chat Load: 35 messages on initial load (fast & lightweight), 50 on incremental polling
     const SMART_LIMIT = newestId ? 50 : 35
     const query = newestId ? `?after_id=${newestId}&limit=${SMART_LIMIT}` : `?limit=${SMART_LIMIT}`
@@ -2538,6 +2539,7 @@ export const useChatStore = create((set, get) => ({
           }
         }
       } else {
+        if (!sameId(get().activeRoomId, targetRoomId)) return
         const hasCached = get().messages.length > 0
         set({
           messagesLoading: false,
@@ -2545,6 +2547,7 @@ export const useChatStore = create((set, get) => ({
         })
       }
     } catch (e) {
+      if (!sameId(get().activeRoomId, targetRoomId)) return
       const hasCached = get().messages.length > 0
       set({
         messagesLoading: false,

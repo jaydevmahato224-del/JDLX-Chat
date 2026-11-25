@@ -22,7 +22,7 @@ def _ipv4_preferred_getaddrinfo(host, port, family=0, *args, **kwargs):
 socket.getaddrinfo = _ipv4_preferred_getaddrinfo
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"), override=True)
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
 
 # Local-testing escape hatch: set FORCE_LOCAL_DB=1 in the environment to run
 # against the local SQLite file even when Turso credentials are present in .env.
@@ -247,6 +247,8 @@ class LibsqlCursorWrapper:
         """
         try:
             getattr(self._cursor, method_name)(sql, parameters)
+            if self._conn is not None:
+                self._conn._needs_quiesce = True
             return
         except Exception as e:
             if self._conn is None or not self._conn._recover_from_transient(e):
@@ -257,6 +259,8 @@ class LibsqlCursorWrapper:
         self._cursor = self._conn._conn.cursor()
         try:
             getattr(self._cursor, method_name)(sql, parameters)
+            if self._conn is not None:
+                self._conn._needs_quiesce = True
         except Exception as e:
             self._conn._mark_unhealthy()
             _raise_turso_config_error(e)
@@ -302,6 +306,7 @@ class LibsqlConnectionWrapper:
         self._discarded = False
         self._in_pool = False
         self._dirty = False
+        self._needs_quiesce = False
 
     def _mark_unhealthy(self):
         self._discarded = True
@@ -329,6 +334,7 @@ class LibsqlConnectionWrapper:
         # can never release/close the same raw stream later.
         replacement._conn = None
         self._dirty = False
+        self._needs_quiesce = False
         _destroy_raw_handle_async(old_raw)
         return True
 
@@ -348,7 +354,11 @@ class LibsqlConnectionWrapper:
             raise
         # Transaction fully committed — nothing left to roll back at release.
         self._dirty = False
-    def rollback(self): self._conn.rollback()
+        self._needs_quiesce = False
+    def rollback(self):
+        self._conn.rollback()
+        self._dirty = False
+        self._needs_quiesce = False
     def close(self):
         # Releasing to the pool replaces the old hard close. Idempotent per
         # ownership cycle; unhealthy connections are destroyed instead.
@@ -432,6 +442,10 @@ def _quiesce_connection(conn):
     """
     try:
         conn.commit()
+        try:
+            conn._needs_quiesce = False
+        except Exception:
+            pass
         return True
     except Exception:
         # A stream whose transaction is already gone cannot be trusted.
@@ -441,26 +455,37 @@ def _quiesce_connection(conn):
 def _warm_pool_once():
     """Drop expired pooled streams and keep a couple of clean ones ready."""
     pool = _get_pool()
-    fresh = 0
-    while True:
+    # Drain into a temporary list FIRST rather than re-queuing inside the loop:
+    # pool is a LifoQueue, so put_nowait() inside the drain loop re-popped the
+    # same connection in an infinite loop, hammering Turso with commits nonstop.
+    candidates = []
+    while len(candidates) < _POOL_MAX_SIZE:
         try:
-            conn = pool.get_nowait()
+            candidates.append(pool.get_nowait())
         except queue.Empty:
             break
+
+    kept = []
+    for conn in candidates:
         expired = getattr(conn, "_discarded", False) or (
             time.monotonic() - getattr(conn, "_released_at", 0.0) > _POOL_MAX_IDLE_SECONDS
         )
         if expired:
             _destroy_raw_connection_async(conn)
             continue
-        if not _quiesce_connection(conn):
+        if getattr(conn, "_needs_quiesce", True) and not _quiesce_connection(conn):
             # The failed commit already scheduled the destroy.
             continue
+        kept.append(conn)
+
+    fresh = 0
+    for conn in kept:
         try:
             pool.put_nowait(conn)
             fresh += 1
         except queue.Full:
             _destroy_raw_connection_async(conn)
+
     for _ in range(max(0, _POOL_WARM_MIN - fresh)):
         try:
             conn = _create_turso_connection()
@@ -806,6 +831,89 @@ def schema_is_current():
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_delivery_otps'"
         )
         if cur.fetchone() is None:
+            return False
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def chat_schema_is_current():
+    """Fast boot probe for the standalone JDLX Chat service.
+
+    Verifies every chat table, migrated column, and default branding row in
+    a handful of metadata reads so container boots skip the ~400-statement
+    storefront+chat DDL pass when the schema is already up to date.
+    """
+    required_tables = (
+        "uploaded_media",
+        "official_chat_rooms",
+        "official_chat_friend_requests",
+        "official_chat_messages",
+        "chat_message_hides",
+        "chat_message_reactions",
+        "official_chat_room_clears",
+        "chat_typing",
+        "official_chat_read_state",
+        "official_chat_calls",
+        "official_chat_group_members",
+        "chat_blocks",
+        "chat_reports",
+        "official_chat_notifications",
+        "official_chat_security_events",
+        "official_chat_sso_codes",
+        "chat_users",
+        "chat_push_subscriptions",
+        "chat_push_tokens",
+        "chat_vapid_keys",
+        "chat_rate_limits",
+        "system_settings",
+        "oauth_handoff_codes",
+    )
+    required_columns = {
+        "official_chat_rooms": {
+            "status", "assigned_specialist", "last_message", "last_message_at",
+            "username", "user_two_id", "room_type", "e2e_secret", "avatar",
+        },
+        "official_chat_messages": {
+            "media_url", "message_type", "is_read", "username", "sender_type",
+            "reply_to_id", "deleted", "edited_at", "updated_at", "client_message_id",
+        },
+        "official_chat_calls": {
+            "candidates", "callee_id", "call_type", "state", "offer_sdp",
+            "answer_sdp", "ended_at", "last_seen", "answered_at",
+        },
+        "official_chat_notifications": {"is_read"},
+        "chat_users": {
+            "password_hash", "public_key", "identity_backup", "min_token_iat",
+            "gender", "bio", "profile_image", "last_seen_at",
+        },
+    }
+    conn = _open_connection()
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in required_tables)
+        cur.execute(
+            f"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ({placeholders})",
+            required_tables,
+        )
+        found_tables = {row[0] for row in cur.fetchall()}
+        if not set(required_tables).issubset(found_tables):
+            return False
+        for table, cols in required_columns.items():
+            cur.execute(f"PRAGMA table_info({table})")
+            existing_cols = {row[1] for row in cur.fetchall()}
+            if not cols.issubset(existing_cols):
+                return False
+        cur.execute(
+            "SELECT COUNT(*) FROM system_settings WHERE key IN ('official_chat_logo', 'official_chat_name')"
+        )
+        row = cur.fetchone()
+        if not row or int(row[0]) < 2:
             return False
         return True
     except Exception:

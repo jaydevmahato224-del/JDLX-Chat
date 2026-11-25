@@ -514,17 +514,27 @@ def chat_token_required(f):
         # Revocation check: logout bumps chat_users.min_token_iat, so every
         # token issued before it (access AND refresh) dies immediately instead
         # of living out its full 1h / 14d lifetime.
-        try:
-            conn = get_db()
+        row = None
+        for attempt in (0, 1):
             try:
-                row = conn.execute(
-                    "SELECT is_active, min_token_iat, created_at FROM chat_users WHERE id = ?",
-                    (user_id,)
-                ).fetchone()
-            finally:
-                conn.close()
-        except Exception:
-            return error_response("Invalid chat credentials", 401)
+                conn = get_db()
+                try:
+                    row = conn.execute(
+                        "SELECT is_active, min_token_iat, created_at FROM chat_users WHERE id = ?",
+                        (user_id,)
+                    ).fetchone()
+                finally:
+                    conn.close()
+                break
+            except Exception as auth_db_err:
+                if not attempt and is_transient_db_error(auth_db_err):
+                    logger.warning("chat_token_required hit transient DB error, retrying: %s", auth_db_err)
+                    reset_request_db()
+                    time.sleep(0.05)
+                    continue
+                if is_transient_db_error(auth_db_err):
+                    return error_response("Chat service temporarily unavailable", 503)
+                return error_response("Invalid chat credentials", 401)
         if not row or not row['is_active']:
             return error_response("Chat account not found. Please sign in again.", 401)
         issued_at = payload.get('iat')
@@ -544,6 +554,32 @@ def chat_token_required(f):
         }
         return f(*args, **kwargs)
     return decorated
+
+
+def db_retry_on_transient(view):
+    """Replay a read-only view when Turso rolled back a stale pooled stream.
+
+    Production showed random 500s on plain history reads:
+    "interactive transaction was rolled back because the stream was idle for
+    too long" (SQLITE_BUSY). The client turned that into "Could not load
+    messages", so one bad stream made an open chat look offline. The rollback
+    kills that connection, so the retry has to start from a fresh one.
+    """
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        for attempt in (0, 1):
+            try:
+                return view(*args, **kwargs)
+            except Exception as exc:
+                if attempt or not is_transient_db_error(exc):
+                    raise
+                logger.warning(
+                    "%s hit a transient DB error, retrying on a fresh connection: %s",
+                    view.__name__, exc
+                )
+                reset_request_db()
+                time.sleep(0.1)
+    return wrapper
 
 
 def get_chat_user_row(conn, chat_user_id):
@@ -2501,6 +2537,7 @@ def search_chat_users():
 
 @chat_bp.route('/conversations', methods=['GET'])
 @chat_token_required
+@db_retry_on_transient
 def get_chat_conversations():
     """Returns list of active conversation threads for current user (WhatsApp-like inbox).
     Optimized: Replaces 51+ sequential N+1 Turso queries with a single unified SQL query.
@@ -3132,32 +3169,6 @@ def leave_chat_group(room_id):
         )
     finally:
         conn.close()
-
-
-def db_retry_on_transient(view):
-    """Replay a read-only view when Turso rolled back a stale pooled stream.
-
-    Production showed random 500s on plain history reads:
-    "interactive transaction was rolled back because the stream was idle for
-    too long" (SQLITE_BUSY). The client turned that into "Could not load
-    messages", so one bad stream made an open chat look offline. The rollback
-    kills that connection, so the retry has to start from a fresh one.
-    """
-    @wraps(view)
-    def wrapper(*args, **kwargs):
-        for attempt in (0, 1):
-            try:
-                return view(*args, **kwargs)
-            except Exception as exc:
-                if attempt or not is_transient_db_error(exc):
-                    raise
-                logger.warning(
-                    "%s hit a transient DB error, retrying on a fresh connection: %s",
-                    view.__name__, exc
-                )
-                reset_request_db()
-                time.sleep(0.1)
-    return wrapper
 
 
 @chat_bp.route('/rooms/<int:room_id>/messages', methods=['GET'])
@@ -3850,6 +3861,7 @@ def chat_social_events():
 
 @chat_bp.route('/friends', methods=['GET'])
 @chat_token_required
+@db_retry_on_transient
 def get_chat_friends_and_requests():
     """Get accepted friends, incoming friend requests, and outgoing requests."""
     my_id = request.chat_user['user_id']
@@ -4875,6 +4887,7 @@ def poll_room_events(room_id):
                         conn.close()
                     except Exception:
                         pass
+                    reset_request_db()
                     conn = get_db()
                     cursor = conn.cursor()
                 last_presence_ping = now
@@ -6101,6 +6114,7 @@ def chat_call_answer(room_id):
                     conn.close()
                 except Exception:
                     pass
+                reset_request_db()
                 conn = get_db()
                 cursor = conn.cursor()
 
@@ -6244,6 +6258,7 @@ def chat_call_end(room_id):
                         conn.close()
                     except Exception:
                         pass
+                    reset_request_db()
                     conn = get_db()
                     cursor = conn.cursor()
         return success_response(None, "Call ended")
