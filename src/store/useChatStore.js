@@ -110,12 +110,22 @@ const serializeIceCandidate = (candidate) => {
 const createIceBatcher = (roomId, getToken) => {
   let batch = []
   let timer = null
+  let retries = 0
+  let inFlight = false
+
+  const schedule = (delay) => {
+    if (timer) return
+    timer = setTimeout(() => { timer = null; flush() }, delay)
+  }
+
   const flush = async () => {
     if (timer) { clearTimeout(timer); timer = null }
-    if (!batch.length) return
+    if (inFlight || !batch.length) return
+    inFlight = true
     const candidates = batch.splice(0)
+    let retryable = true
     try {
-      await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
+      const res = await apiFetch(`/chat/rooms/${roomId}/call/ice-candidate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -123,16 +133,44 @@ const createIceBatcher = (roomId, getToken) => {
         },
         body: JSON.stringify({ candidates })
       })
+      if (res.ok) {
+        retries = 0
+        retryable = false
+      } else if (res.status === 403 || res.status === 404 || res.status === 410) {
+        // The call is over (or we no longer belong to it): these candidates
+        // can never be used, so do not keep retrying them.
+        retries = 0
+        retryable = false
+      }
     } catch (e) {
+      // Network failure / timeout: retryable below.
       console.warn('send ice candidates error:', e)
+    } finally {
+      inFlight = false
     }
+
+    if (retryable) {
+      if (retries < 3) {
+        retries += 1
+        // Put them back at the FRONT: ICE candidate order matters.
+        batch.unshift(...candidates)
+        schedule(600 * retries)
+        return
+      }
+      retries = 0
+      // Never silent: a lost batch is exactly why a call stays silent.
+      console.warn('dropping ice candidates after repeated failures:', candidates.length)
+    }
+
+    // Anything gathered while the request was in flight goes out next.
+    if (batch.length) schedule(120)
   }
+
   return {
     add: (payload) => {
       if (!payload) return
       batch.push(payload)
-      if (timer) return
-      timer = setTimeout(() => { timer = null; flush() }, 120)
+      schedule(120)
     },
     flush
   }
