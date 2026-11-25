@@ -4559,6 +4559,15 @@ export const useChatStore = create((set, get) => ({
     if (!chatToken || !chatUser) return { success: false, error: 'Not signed in' }
     if (!roomId) roomId = activeRoomId
     if (!roomId) return { success: false, error: 'No room' }
+    // One call at a time. Without this guard a second initiateCall replaced the
+    // peer connection and local stream without cleaning the first one up,
+    // leaving two live calls (and the old row active on the server). Tapping
+    // call again in the same room is a no-op instead of a restart.
+    const existingCall = get().activeCall
+    if (existingCall) {
+      if (sameId(existingCall.roomId, roomId)) return { success: true }
+      return { success: false, error: 'You are already in a call' }
+    }
     // Unlock the audio context inside this tap, otherwise the ringback and the
     // connect tone are blocked by the autoplay policy.
     unlockSounds()
