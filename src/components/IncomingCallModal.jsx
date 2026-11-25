@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Phone, Mic, Volume2, VolumeX, X, Loader2, RefreshCw } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { useChatStore } from '../store/useChatStore'
+import { useChatStore, CALL_RING_TIMEOUT_MS } from '../store/useChatStore'
 import toast from 'react-hot-toast'
 import { startIncomingRingtone, stopIncomingRingtone, unlockSounds } from '../utils/sounds'
 
@@ -55,15 +55,16 @@ export default function IncomingCallModal() {
     }
   }
 
-  // Auto-decline after ~45s if no answer. The guard lives INSIDE the effect so
-  // the hook order stays stable across renders (early returns must come after
-  // all hooks — rules of hooks).
+  // Stop ringing on the same clock the caller uses (CALL_RING_TIMEOUT_MS), so
+  // the two sides never disagree about whether the call is still live. The
+  // guard lives INSIDE the effect so the hook order stays stable across renders
+  // (early returns must come after all hooks — rules of hooks).
   useEffect(() => {
     if (!activeCall || activeCall.state !== 'ringing') return undefined
     const t = setTimeout(() => {
       toast('Call timed out')
       endCall()
-    }, 45000)
+    }, CALL_RING_TIMEOUT_MS)
     return () => clearTimeout(t)
   }, [activeCall?.callerId, activeCall?.state, endCall])
 

@@ -217,6 +217,12 @@ const parseIceCandidate = (raw) => {
 // reuse it and ask for permission only once per app launch. It is released
 // after a short idle window (so the phone is not left capturing for long), when
 // the app goes to the background, on logout, or as soon as the browser ends it.
+// One ring window for both sides: the caller gives up and the callee's modal
+// stops ringing at the same moment, so a call can never look missed on one
+// side while it still rings on the other. The backend retires abandoned rows
+// later (90s), which is only a safety net for clients that vanished.
+export const CALL_RING_TIMEOUT_MS = 60000
+
 const CALL_MIC_IDLE_KEEP_MS = 2 * 60 * 1000
 let idleCallMicStream = null
 let idleCallMicTimer = null
@@ -4934,7 +4940,7 @@ export const useChatStore = create((set, get) => ({
         } else if (state === 'ringing' && isCaller) {
           // No-answer guard: never ring forever, otherwise the stale 'ringing'
           // row keeps blocking new offers ("A call is already in progress").
-          if (Date.now() - ringingSince > 60000) {
+          if (Date.now() - ringingSince > CALL_RING_TIMEOUT_MS) {
             toast('No answer')
             await get().endCall()
             break
