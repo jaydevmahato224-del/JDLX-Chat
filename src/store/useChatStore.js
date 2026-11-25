@@ -151,6 +151,9 @@ let callAnswerApplied = false
 // initiateCall still awaiting the mic prompt / ICE fetch can tell the user
 // cancelled and must not resurrect the call when those promises resolve.
 let callStartGeneration = 0
+// endCall() fires its hangup request in the background. A new offer must not
+// race it, or the previous row is still 'active' and the server answers 409.
+let pendingEndCallRequest = null
 
 const parseIceCandidate = (raw) => {
   if (!raw) return null
@@ -4381,21 +4384,20 @@ export const useChatStore = create((set, get) => ({
   endCall: async () => {
     const { activeCall, chatToken } = get()
     if (!activeCall) return
-    // Stop any ringtone/ringback before the network round-trip so the phone
-    // goes quiet the instant the button is tapped.
-    stopAllCallSounds()
-    try {
-      if (chatToken) {
-        await apiFetch(`/chat/rooms/${activeCall.roomId}/call/end`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${chatToken}` }
-        })
-      }
-    } catch (e) {
-      console.warn('end call signal error:', e)
-    } finally {
-      get().cleanupCallResources()
-    }
+    const roomId = activeCall.roomId
+    // Tear the call down IMMEDIATELY: /call/end has taken 57-64s on a stalled
+    // DB, and awaiting it kept the screen, mic and remote audio live for that
+    // whole wait after the user had already hung up. cleanupCallResources()
+    // also silences the ringtone/ringback and aborts the state poller.
+    get().cleanupCallResources()
+    if (!chatToken || !roomId) return
+    // The peer still needs the row ended, so the request goes out
+    // fire-and-forget with its own deadline; nothing in the UI waits for it.
+    pendingEndCallRequest = apiFetch(`/chat/rooms/${roomId}/call/end`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${chatToken}` },
+      timeoutMs: 10000
+    }).catch((e) => console.warn('end call signal error:', e))
   },
 
   toggleMute: () => {
@@ -4635,6 +4637,16 @@ export const useChatStore = create((set, get) => ({
     } catch (e) {
       get().cleanupCallResources()
       return { success: false, error: describeCallError(e, 'Could not start the call') }
+    }
+
+    // Let a just-tapped hangup land first: its row is still 'active' until the
+    // request completes, and the server would reject this offer with 409.
+    if (pendingEndCallRequest) {
+      const ended = pendingEndCallRequest
+      pendingEndCallRequest = null
+      try {
+        await Promise.race([ended, new Promise((r) => setTimeout(r, 3000))])
+      } catch {}
     }
 
     if (startGeneration !== callStartGeneration) {
