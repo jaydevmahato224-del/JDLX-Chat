@@ -724,6 +724,34 @@ class _RequestScopedConnection:
             pass
 
 
+def reset_request_db():
+    """Drops the request-cached connection so the next get_db() reconnects.
+
+    A Turso Hrana stream can be rolled back server-side while a request is
+    running ("interactive transaction was rolled back because the stream was
+    idle for too long"). That connection is unusable, but the request cache in
+    ``flask.g`` would hand it straight back on a retry, so read-only handlers
+    call this first.
+    """
+    if not _has_flask_app_context():
+        return
+    try:
+        import flask
+        cached = flask.g.pop('_jdlx_request_db', None)
+    except Exception:
+        return
+    if cached is None:
+        return
+    try:
+        hard_close = getattr(cached, '_hard_close', None)
+        if callable(hard_close):
+            hard_close()
+        else:
+            cached.close()
+    except Exception:
+        pass
+
+
 def get_db():
     if _has_flask_app_context():
         import flask

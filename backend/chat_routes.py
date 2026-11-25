@@ -18,7 +18,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
-from database import get_db, is_transient_db_error
+from database import get_db, is_transient_db_error, reset_request_db
 from jwt_config import get_jwt_secret
 from media_signing import signed_media_url
 from utils.response_utils import success_response, error_response
@@ -3134,8 +3134,35 @@ def leave_chat_group(room_id):
         conn.close()
 
 
+def db_retry_on_transient(view):
+    """Replay a read-only view when Turso rolled back a stale pooled stream.
+
+    Production showed random 500s on plain history reads:
+    "interactive transaction was rolled back because the stream was idle for
+    too long" (SQLITE_BUSY). The client turned that into "Could not load
+    messages", so one bad stream made an open chat look offline. The rollback
+    kills that connection, so the retry has to start from a fresh one.
+    """
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        for attempt in (0, 1):
+            try:
+                return view(*args, **kwargs)
+            except Exception as exc:
+                if attempt or not is_transient_db_error(exc):
+                    raise
+                logger.warning(
+                    "%s hit a transient DB error, retrying on a fresh connection: %s",
+                    view.__name__, exc
+                )
+                reset_request_db()
+                time.sleep(0.1)
+    return wrapper
+
+
 @chat_bp.route('/rooms/<int:room_id>/messages', methods=['GET'])
 @chat_token_required
+@db_retry_on_transient
 def get_room_messages(room_id):
     """Get all messages for a specific chat room, marking incoming messages as read."""
     my_id = request.chat_user['user_id']
@@ -3778,6 +3805,7 @@ def _chat_social_state(cursor, my_id):
 
 @chat_bp.route('/social/events', methods=['GET'])
 @chat_token_required
+@db_retry_on_transient
 def chat_social_events():
     """Long-poll friend requests/accepts so they land instantly.
 
@@ -4765,6 +4793,7 @@ def set_room_typing(room_id):
 
 @chat_bp.route('/rooms/<int:room_id>/events', methods=['GET'])
 @chat_token_required
+@db_retry_on_transient
 def poll_room_events(room_id):
     """Long-poll realtime events for a room: new messages + presence.
 
