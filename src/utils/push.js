@@ -16,6 +16,21 @@ function urlBase64ToUint8Array(base64String) {
   return out
 }
 
+// A subscription is bound to the VAPID key it was created with; the browser
+// exposes that key as `options.applicationServerKey`. Compare bytes so a
+// rotated server key is detected instead of silently reusing a dead
+// subscription (which the provider rejects with VapidPkHashMismatch).
+function hasApplicationServerKey(subscription, expected) {
+  const current = subscription?.options?.applicationServerKey
+  if (!current) return false
+  const bytes = new Uint8Array(current)
+  if (bytes.length !== expected.length) return false
+  for (let i = 0; i < bytes.length; i += 1) {
+    if (bytes[i] !== expected[i]) return false
+  }
+  return true
+}
+
 export function isChatPushSupported() {
   return typeof window !== 'undefined'
     && 'serviceWorker' in navigator
@@ -67,11 +82,22 @@ export async function subscribeToChatPush({ requestPermission = true } = {}) {
     }
 
     const registration = await navigator.serviceWorker.register('/sw.js')
-    const existing = await registration.pushManager.getSubscription()
-    const subscription = existing || await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey)
-    })
+    const applicationServerKey = urlBase64ToUint8Array(publicKey)
+    let subscription = await registration.pushManager.getSubscription()
+    // If the server rotated its key (or env/DB keys disagreed), this
+    // subscription can never be delivered to again: every push fails with
+    // VapidPkHashMismatch and the device goes silent forever. Drop it and
+    // subscribe again with the current key.
+    if (subscription && !hasApplicationServerKey(subscription, applicationServerKey)) {
+      try { await subscription.unsubscribe() } catch { /* stale anyway */ }
+      subscription = null
+    }
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey
+      })
+    }
 
     const res = await apiFetch('/chat/push/subscribe', {
       method: 'POST',

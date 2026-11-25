@@ -239,6 +239,31 @@ def _delete_push_subscription(subscription_id):
         conn.close()
 
 
+_VAPID_MISMATCH_MARKERS = (
+    'vapidpkhashmismatch',  # provider reason: VapidPkHashMismatch
+    'vapid credentials do not correspond',
+    'do not correspond to the credentials',
+)
+
+
+def _is_vapid_key_mismatch(exc):
+    """True when the push provider rejected the VAPID key itself.
+
+    That means the stored subscription was created with a different key (the
+    server rotated its keypair, or env vars now disagree with the DB row). It
+    can never be delivered to again, so it must be pruned instead of logging a
+    warning on every event forever.
+    """
+    response = getattr(exc, 'response', None)
+    body = ''
+    try:
+        body = getattr(response, 'text', '') or ''
+    except Exception:
+        body = ''
+    text = f"{body} {exc}".lower()
+    return any(marker in text for marker in _VAPID_MISMATCH_MARKERS)
+
+
 def send_chat_push(chat_user_id, title, body, url='/chat', tag=None, extra=None):
     """Send a Web Push to every browser registered by ``chat_user_id``.
 
@@ -289,12 +314,21 @@ def send_chat_push(chat_user_id, title, body, url='/chat', tag=None, extra=None)
             sent += 1
         except WebPushException as exc:
             status_code = getattr(getattr(exc, 'response', None), 'status_code', None)
-            if status_code in (404, 410):
-                # The browser unsubscribed or the endpoint expired.
+            vapid_mismatch = _is_vapid_key_mismatch(exc)
+            if status_code in (404, 410) or vapid_mismatch:
+                # Gone for good: the browser unsubscribed, the endpoint expired,
+                # or the subscription was created with a different VAPID key.
+                # Prune it so the client's next subscribe registers the current
+                # key instead of failing on every future push.
                 try:
                     _delete_push_subscription(sub['id'])
                 except Exception as cleanup_err:
                     logger.warning('Chat web push: stale subscription cleanup failed: %s', cleanup_err)
+                if vapid_mismatch and status_code not in (404, 410):
+                    logger.warning(
+                        'Chat web push: pruned subscription %s created with a stale VAPID key (%s)',
+                        sub['id'], status_code,
+                    )
             else:
                 logger.warning('Chat web push failed (%s): %s', status_code, exc)
         except Exception as exc:
