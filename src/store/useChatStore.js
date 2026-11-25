@@ -527,9 +527,15 @@ const hasFreshConfirmation = (messages, optimistic, text, mediaUrl, myId) => {
 // cannot post the same text twice with two different idempotency keys.
 const inFlightSendKeys = new Map()
 
-// The callee learns about a ringing call by polling /calls/incoming every 2s.
-// A Supabase broadcast from the backend wakes that poll immediately, so the
-// phone rings as soon as the offer row exists instead of up to 2-3s later.
+// The callee learns about a ringing call by polling /calls/incoming. A Supabase
+// broadcast from the backend wakes that poll immediately, so the phone rings as
+// soon as the offer row exists — the interval below is only the safety net for
+// a dropped realtime socket. Polling every second (the old cadence) put one
+// Turso query per open client per second behind that net, which is what made
+// the DB stall under load.
+const CALL_WATCH_IDLE_MS = 5000
+const CALL_WATCH_HIDDEN_MS = 20000
+const CALL_STATE_POLL_MS = 3000
 let callWatcherWake = null
 const wakeCallWatcher = () => {
   if (typeof callWatcherWake === 'function') callWatcherWake()
@@ -4972,7 +4978,7 @@ export const useChatStore = create((set, get) => ({
           break
         }
 
-        await new Promise((r) => setTimeout(r, 1500))
+        await new Promise((r) => setTimeout(r, CALL_STATE_POLL_MS))
       } catch (e) {
         if (e.name === 'AbortError') break
         console.warn('poll call state error:', e)
@@ -5091,7 +5097,7 @@ export const useChatStore = create((set, get) => ({
       if (!get().chatToken) break
       // Do not hammer the backend while the tab/app is in the background.
       if (typeof document !== 'undefined' && document.hidden) {
-        await new Promise((r) => setTimeout(r, 5000))
+        await new Promise((r) => setTimeout(r, CALL_WATCH_HIDDEN_MS))
         continue
       }
       try {
@@ -5135,7 +5141,7 @@ export const useChatStore = create((set, get) => ({
           // The caller hung up (or the offer expired) before we answered.
           get().cleanupCallResources()
         }
-        await waitForCallWatcherTick(1000)
+        await waitForCallWatcherTick(CALL_WATCH_IDLE_MS)
       } catch (e) {
         // Only OUR abort stops the watcher. A timeout abort also surfaces as
         // AbortError, and breaking on it would end incoming calls for the rest
