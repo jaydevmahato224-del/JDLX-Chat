@@ -5082,6 +5082,10 @@ export const useChatStore = create((set, get) => ({
     const abort = new AbortController()
     set({ callWatchAbortController: abort })
 
+    // Consecutive failed polls, used to back off instead of hammering a sick
+    // backend. Reset on the first good response.
+    let watchFailures = 0
+
     while (!abort.signal.aborted) {
       const currentCall = get().activeCall
       // Skip polling only while an outgoing ring or an active call is running
@@ -5111,8 +5115,20 @@ export const useChatStore = create((set, get) => ({
           // deadline so the loop can retry; the caller's abort still stops it.
           timeoutMs: 10000
         })
-        const json = await res.json()
-        if (!res.ok || !json.success) break
+        // Auth is the ONLY fatal answer: a dead/expired token cannot be fixed
+        // by polling again. Everything else (500, 502, 429, a proxy error page
+        // that is not even JSON) is transient — breaking on it used to kill
+        // incoming calls for the rest of the session after one bad response.
+        if (res.status === 401 || res.status === 403) break
+        const json = await res.json().catch(() => null)
+        if (!res.ok || !json || !json.success) {
+          watchFailures += 1
+          const backoff = Math.min(CALL_WATCH_IDLE_MS * 2 ** watchFailures, 30000)
+          console.warn('call watcher transient failure:', res.status, 'retrying in', backoff)
+          await waitForCallWatcherTick(backoff)
+          continue
+        }
+        watchFailures = 0
         const call = json.data || {}
         if (
           call.state === 'ringing'
