@@ -246,3 +246,52 @@ def test_end_survives_a_transient_commit(client, db, monkeypatch):
     ).fetchone()
     assert row["state"] == "ended"
     assert row["ended_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# One user, one call. A second ringing call in a different room used to reach
+# a busy callee (and a push), and answering it silently dropped the first call.
+# ---------------------------------------------------------------------------
+
+def test_callee_busy_in_another_room_is_rejected(client, db):
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    carol = _chat_user(db, "Carol")
+    room_ab = _direct_room(db, alice, bob)
+    room_bc = _direct_room(db, bob, carol)
+    now = int(time.time())
+
+    _insert_call(db, room_bc, carol, bob, "active", started_at=now - 10, last_seen=now)
+
+    res = _offer(client, room_ab, _headers(alice))
+    assert res.status_code == 409, res.get_json()
+    assert "another call" in res.get_json()["message"].lower()
+
+
+def test_caller_busy_in_another_room_is_rejected(client, db):
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    carol = _chat_user(db, "Carol")
+    room_ab = _direct_room(db, alice, bob)
+    room_ac = _direct_room(db, alice, carol)
+    now = int(time.time())
+
+    _insert_call(db, room_ac, alice, carol, "active", started_at=now - 10, last_seen=now)
+
+    res = _offer(client, room_ab, _headers(alice))
+    assert res.status_code == 409, res.get_json()
+    assert "already in another call" in res.get_json()["message"].lower()
+
+
+def test_stale_call_in_another_room_does_not_block(client, db):
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    carol = _chat_user(db, "Carol")
+    room_ab = _direct_room(db, alice, bob)
+    room_ac = _direct_room(db, alice, carol)
+    now = int(time.time())
+
+    _insert_call(db, room_ac, alice, carol, "active", started_at=now - 600, last_seen=now - 600)
+
+    res = _offer(client, room_ab, _headers(alice))
+    assert res.status_code == 200, res.get_json()

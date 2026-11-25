@@ -5643,6 +5643,30 @@ def _call_peer_ids(cursor, room_id, my_id):
     return other_id
 
 
+def _call_is_stale(row, now_ts):
+    """True when a ringing/active row no longer represents a live call.
+
+    A ringing row expires after 90s, an active call whose heartbeat stopped
+    60s ago is abandoned, and an active call past four hours is always dead.
+    Legacy rows can carry a string timestamp; treat those as stale instead of
+    letting the conversion raise and turn an offer into a 500.
+    """
+    def _epoch(value):
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    started_at = _epoch(row['started_at'])
+    last_seen = _epoch(row['last_seen'])
+    state = row['state']
+    return (
+        (state == 'ringing' and started_at < now_ts - 90)
+        or (state == 'active' and last_seen < now_ts - 60)
+        or (state == 'active' and started_at < now_ts - 14400)
+    )
+
+
 def _parse_candidates(raw):
     if not raw:
         return []
@@ -5812,38 +5836,42 @@ def chat_call_offer(room_id):
         # (closed the tab mid-ring) or an 'active' row abandoned long ago
         # would otherwise block every new offer for this room with 409 forever.
         now_ts = int(time.time())
-        # One SELECT answers both questions this route needs: is a call already
-        # live, and is that row stale? The unconditional expiry UPDATE used to
-        # run first, so every offer paid three sequential Turso round-trips
-        # (1-2.5s each on a distant region) before the callee could be rung —
-        # the caller sat on a dead-looking screen for seconds. The common path,
-        # with no live call at all, now costs two statements.
+        # One SELECT answers every question this route needs: is a call live in
+        # this room, is that row stale, and is either participant already busy
+        # in another room? The old room-only lookup let a callee who was
+        # already talking in another chat receive a second ringing call (and a
+        # push); answering it silently dropped the first call.
         cursor.execute(
-            """SELECT id, state, COALESCE(started_at, 0) AS started_at,
+            """SELECT id, room_id, caller_id, callee_id, state,
+                      COALESCE(started_at, 0) AS started_at,
                       COALESCE(last_seen, started_at, 0) AS last_seen
                FROM official_chat_calls
-               WHERE room_id = ? AND state IN ('ringing','active')
-               ORDER BY id DESC LIMIT 1""",
-            (room_id,)
+               WHERE state IN ('ringing','active')
+                 AND (room_id = ? OR caller_id IN (?, ?) OR callee_id IN (?, ?))
+               ORDER BY id DESC""",
+            (room_id, my_id, other_id, my_id, other_id)
         )
-        existing = cursor.fetchone()
-        if existing:
-            started_at = int(existing['started_at'] or 0)
-            last_seen = int(existing['last_seen'] or 0)
-            # A ringing row older than 90s, an active row nobody refreshed for
-            # 60s, or an active row past four hours are all dead and must not
-            # block this offer.
-            stale = (
-                (existing['state'] == 'ringing' and started_at < now_ts - 90)
-                or (existing['state'] == 'active' and last_seen < now_ts - 60)
-                or (existing['state'] == 'active' and started_at < now_ts - 14400)
-            )
-            if not stale:
-                return error_response("A call is already in progress in this room", 409)
+        rows = cursor.fetchall()
+        live_rows = [row for row in rows if not _call_is_stale(row, now_ts)]
+        if any(int(row['room_id']) == room_id for row in live_rows):
+            return error_response("A call is already in progress in this room", 409)
+        for row in live_rows:
+            if my_id in (row['caller_id'], row['callee_id']):
+                return error_response("You are already in another call", 409)
+            return error_response("This person is on another call right now", 409)
+
+        # Retire abandoned rows in this room so they stop appearing in state
+        # polls (the insert below becomes the newest row either way).
+        stale_in_room = [
+            row for row in rows
+            if int(row['room_id']) == room_id and _call_is_stale(row, now_ts)
+        ]
+        for row in stale_in_room:
             cursor.execute(
                 "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",
-                (now_ts, existing['id'])
+                (now_ts, row['id'])
             )
+        if stale_in_room:
             conn.commit()
 
         now = int(time.time())
