@@ -6180,11 +6180,20 @@ def chat_call_state(room_id):
                     logger.warning("Call heartbeat update failed: %s", hb_err)
 
         if call['state'] == 'ringing' and call['started_at'] and (int(time.time()) - int(call['started_at'])) > 90:
-            cursor.execute(
-                "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",
-                (int(time.time()), call['id'])
-            )
-            conn.commit()
+            try:
+                cursor.execute(
+                    "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",
+                    (int(time.time()), call['id'])
+                )
+                conn.commit()
+            except Exception as expiry_err:
+                if not is_transient_db_error(expiry_err):
+                    raise
+                # The row is past the 90s ring window either way. Reporting
+                # 'idle' stops both peers instead of 500ing the poll; the next
+                # offer/state call retires the row.
+                logger.warning("Call expiry update failed, reporting idle: %s", expiry_err)
+                return success_response({"state": "idle"}, "Call expired")
             cursor.execute(call_state_sql, (room_id, my_id, my_id))
             call = cursor.fetchone()
             if not call:

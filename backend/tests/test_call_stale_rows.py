@@ -190,17 +190,34 @@ class _FlakyCommit:
 
 
 def _patch_first_commit(monkeypatch, chat_routes):
+    """Make the FIRST commit of the request die like a Turso idle rollback.
+
+    Every connection is wrapped (the auth decorator opens one before the route
+    body), and the failure is shared across them, so the route's own commit is
+    the one that fails — not the decorator's read-only connection.
+    """
     real_get_db = chat_routes.get_db
-    holder = {"flaky": None}
+    state = {"failed": False}
 
-    def flaky_get_db():
-        conn = real_get_db()
-        if holder["flaky"] is None:
-            holder["flaky"] = _FlakyCommit(conn)
-            return holder["flaky"]
-        return conn
+    class Flaky:
+        def __init__(self, inner):
+            self._inner = inner
 
-    monkeypatch.setattr(chat_routes, "get_db", flaky_get_db)
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def commit(self):
+            if not state["failed"]:
+                state["failed"] = True
+                raise ValueError(
+                    'Hrana: `stream error: `Error { message: "SQLite error: '
+                    'interactive transaction was rolled back because the stream '
+                    'was idle for too long; retry the transaction", code: '
+                    '"SQLITE_BUSY" }``'
+                )
+            self._inner.commit()
+
+    monkeypatch.setattr(chat_routes, "get_db", lambda: Flaky(real_get_db()))
 
 
 def test_answer_survives_a_transient_commit(client, db, monkeypatch):
@@ -344,3 +361,21 @@ def test_ice_broadcast_carries_the_call_id(client, db, monkeypatch):
     assert sent and sent[0][1] == "call_ice"
     assert sent[0][2]["call_id"] == call_id
     assert sent[0][2]["room_id"] == room
+
+
+def test_state_poll_survives_a_transient_expiry_commit(client, db, monkeypatch):
+    """A dead Turso stream while retiring an expired ring must not 500 the
+    poll: both peers should be told the call is gone."""
+    import chat_routes
+
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    room = _direct_room(db, alice, bob)
+    now = int(time.time())
+    # last_seen is fresh so the 30s heartbeat does not consume the first commit.
+    _insert_call(db, room, alice, bob, "ringing", started_at=now - 100, last_seen=now)
+    _patch_first_commit(monkeypatch, chat_routes)
+
+    res = client.get(f"/api/chat/rooms/{room}/call/state", headers=_headers(alice))
+    assert res.status_code == 200, res.get_json()
+    assert res.get_json()["data"]["state"] == "idle"
