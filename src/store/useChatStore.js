@@ -223,7 +223,10 @@ const parseIceCandidate = (raw) => {
 // later (90s), which is only a safety net for clients that vanished.
 export const CALL_RING_TIMEOUT_MS = 60000
 
-const CALL_MIC_IDLE_KEEP_MS = 2 * 60 * 1000
+// Grace period for a redial: the parked mic keeps the OS permission warm, but
+// a live capture keeps the microphone indicator on and drains battery, so hold
+// it for seconds (enough to redial), not minutes.
+const CALL_MIC_IDLE_KEEP_MS = 10 * 1000
 let idleCallMicStream = null
 let idleCallMicTimer = null
 
