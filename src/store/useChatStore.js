@@ -5027,7 +5027,10 @@ export const useChatStore = create((set, get) => ({
         const res = await apiFetch('/chat/calls/incoming', {
           headers: { Authorization: `Bearer ${get().chatToken}` },
           signal: abort.signal,
-          timeoutMs: 0
+          // A stalled poll (production saw 62s) used to hang the watcher for
+          // good: no poll, no ring, no recovery until reload. Give it a
+          // deadline so the loop can retry; the caller's abort still stops it.
+          timeoutMs: 10000
         })
         const json = await res.json()
         if (!res.ok || !json.success) break
@@ -5061,7 +5064,10 @@ export const useChatStore = create((set, get) => ({
         }
         await waitForCallWatcherTick(1000)
       } catch (e) {
-        if (e.name === 'AbortError') break
+        // Only OUR abort stops the watcher. A timeout abort also surfaces as
+        // AbortError, and breaking on it would end incoming calls for the rest
+        // of the session after one slow poll.
+        if (abort.signal.aborted) break
         console.warn('call watcher error:', e)
         await new Promise((r) => setTimeout(r, 3000))
       }
