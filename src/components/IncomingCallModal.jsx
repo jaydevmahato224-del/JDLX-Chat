@@ -30,11 +30,25 @@ export default function IncomingCallModal() {
     answeringRef.current = true
     stopIncomingRingtone()
     setAnswering(true)
+    // Answering silences the ringtone immediately. If it fails while the call
+    // is still ringing (mic denied, expired offer), resume it — the modal
+    // staying open but silent reads as a missed call.
+    const resumeRingingIfStillIncoming = () => {
+      const state = useChatStore.getState()
+      const call = state.activeCall
+      if (call && call.state === 'ringing' && String(call.callerId) !== String(state.chatUser?.id)) {
+        startIncomingRingtone()
+      }
+    }
     try {
       const res = await answerCall()
-      if (res && !res.success) toast.error(res.error || 'Call failed')
+      if (res && !res.success) {
+        toast.error(res.error || 'Call failed')
+        resumeRingingIfStillIncoming()
+      }
     } catch (e) {
       toast.error(e?.message || 'Call failed')
+      resumeRingingIfStillIncoming()
     } finally {
       answeringRef.current = false
       setAnswering(false)
