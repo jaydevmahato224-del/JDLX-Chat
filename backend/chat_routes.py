@@ -6041,22 +6041,38 @@ def chat_call_ice_candidate(room_id):
     conn = get_db()
     try:
         cursor = conn.cursor()
-        # Deliver the candidates over Realtime FIRST. The row append below is a
-        # remote-DB write that has taken 1-10s in production, and the peer needs
-        # these to start its ICE checks; waiting for the write (and then for a
-        # 1.5s /call/state poll) is why a call sat on "Connecting…" for a
-        # minute. The stored copy stays as the fallback for a missed broadcast.
-        peer_id = None
-        try:
-            peer_id = _call_peer_ids(cursor, room_id, my_id)
-        except Exception as peer_err:
-            logger.debug("ICE peer lookup failed for room %s: %s", room_id, peer_err)
+        # Resolve the live call BEFORE broadcasting: candidates must never
+        # reach the peer for a call that already ended (its next call would
+        # apply them), and the sender must not get a 404 after the peer has
+        # already received them. This one indexed lookup replaces both the old
+        # room lookup and the subquery inside the UPDATE, so the request still
+        # costs one SELECT plus one UPDATE.
+        cursor.execute(
+            """SELECT c.id AS call_id,
+                      CASE WHEN c.caller_id = ? THEN c.callee_id ELSE c.caller_id END AS peer_id
+               FROM official_chat_calls c
+               JOIN official_chat_rooms r ON r.id = c.room_id
+               WHERE c.room_id = ? AND c.state IN ('ringing','active')
+                 AND r.room_type = 'direct'
+                 AND (r.user_id = ? OR r.user_two_id = ?)
+               ORDER BY c.id DESC LIMIT 1""",
+            (my_id, room_id, my_id, my_id)
+        )
+        live_call = cursor.fetchone()
+        if not live_call:
+            return error_response("No active call to exchange candidates with", 404)
+        call_id = live_call['call_id']
+        peer_id = live_call['peer_id']
+
+        # Broadcast before the write: the append has taken 1-10s, and the peer
+        # needs these to start its ICE checks. call_id lets the client ignore a
+        # candidate that belongs to an older call.
         if peer_id is not None:
             try:
                 broadcast_supabase_chat_event([(
                     f"chat_user_{peer_id}",
                     "call_ice",
-                    {"room_id": room_id, "candidates": cands},
+                    {"room_id": room_id, "call_id": call_id, "candidates": cands},
                 )])
             except Exception as bcast_err:
                 logger.debug("ICE broadcast failed for %s: %s", peer_id, bcast_err)
@@ -6065,20 +6081,10 @@ def chat_call_ice_candidate(room_id):
             f"""UPDATE official_chat_calls
                 SET candidates = json_insert(COALESCE(candidates, '[]'), {placeholders}),
                     last_seen = ?
-                WHERE id = (
-                    SELECT c.id FROM official_chat_calls c
-                    JOIN official_chat_rooms r ON r.id = c.room_id
-                    WHERE c.room_id = ? AND c.state IN ('ringing','active')
-                      AND r.room_type = 'direct'
-                      AND (r.user_id = ? OR r.user_two_id = ?)
-                    ORDER BY c.id DESC LIMIT 1
-                )""",
-            (*cands, int(time.time()), room_id, my_id, my_id)
+                WHERE id = ?""",
+            (*cands, int(time.time()), call_id)
         )
-        updated = cursor.rowcount
         conn.commit()
-        if updated == 0:
-            return error_response("No active call to exchange candidates with", 404)
         return success_response(None, "Candidate stored")
     finally:
         conn.close()

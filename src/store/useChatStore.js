@@ -3827,6 +3827,9 @@ export const useChatStore = create((set, get) => ({
             const call = get().activeCall
             if (!call || !payload.candidates) return
             if (payload.room_id && String(payload.room_id) !== String(call.roomId)) return
+            // A candidate that belongs to an older call in the same room must
+            // not be added to the new peer connection.
+            if (payload.call_id && call.callId && String(payload.call_id) !== String(call.callId)) return
             get().applyCallIceCandidates(payload.candidates)
           })
           .on('broadcast', { event: 'incoming_chat' }, (ev) => {
@@ -4700,6 +4703,7 @@ export const useChatStore = create((set, get) => ({
       set({
         activeCall: {
           roomId,
+          callId: json.data?.call_id || null,
           callType,
           callerId: chatUser.id,
           calleeId: null,
@@ -4864,6 +4868,7 @@ export const useChatStore = create((set, get) => ({
           set({
             activeCall: {
               roomId,
+              callId: call.call_id,
               callType: call.call_type || 'voice',
               callerId: call.caller_id,
               calleeId: call.callee_id || null,

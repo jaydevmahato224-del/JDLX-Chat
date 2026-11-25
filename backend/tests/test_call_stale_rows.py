@@ -295,3 +295,52 @@ def test_stale_call_in_another_room_does_not_block(client, db):
 
     res = _offer(client, room_ab, _headers(alice))
     assert res.status_code == 200, res.get_json()
+
+
+# ---------------------------------------------------------------------------
+# ICE candidates must belong to a live call, and must name it, so a candidate
+# from an ended call is never applied to the next peer connection.
+# ---------------------------------------------------------------------------
+
+def test_ice_without_a_live_call_does_not_broadcast(client, db, monkeypatch):
+    import chat_routes
+
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    room = _direct_room(db, alice, bob)
+    sent = []
+    monkeypatch.setattr(
+        chat_routes, "broadcast_supabase_chat_event", lambda msgs: sent.extend(msgs)
+    )
+
+    res = client.post(
+        f"/api/chat/rooms/{room}/call/ice-candidate",
+        headers=_headers(alice),
+        json={"candidates": ["candidate:1 1 udp 1 1.2.3.4 5000 typ host"]},
+    )
+    assert res.status_code == 404, res.get_json()
+    assert sent == []
+
+
+def test_ice_broadcast_carries_the_call_id(client, db, monkeypatch):
+    import chat_routes
+
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    room = _direct_room(db, alice, bob)
+    now = int(time.time())
+    call_id = _insert_call(db, room, alice, bob, "ringing", started_at=now, last_seen=now)
+    sent = []
+    monkeypatch.setattr(
+        chat_routes, "broadcast_supabase_chat_event", lambda msgs: sent.extend(msgs)
+    )
+
+    res = client.post(
+        f"/api/chat/rooms/{room}/call/ice-candidate",
+        headers=_headers(alice),
+        json={"candidates": ["candidate:1 1 udp 1 1.2.3.4 5000 typ host"]},
+    )
+    assert res.status_code == 200, res.get_json()
+    assert sent and sent[0][1] == "call_ice"
+    assert sent[0][2]["call_id"] == call_id
+    assert sent[0][2]["room_id"] == room
