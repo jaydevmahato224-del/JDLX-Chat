@@ -1138,6 +1138,13 @@ export const useChatStore = create((set, get) => ({
   // call screen can say "Connecting…" instead of pretending the call is up.
   callConnectionState: null,
   callTimerRef: null,
+  // Summary shown right after a call drops (who, how long, what happened).
+  callEndedInfo: null,
+  // Call history sheet (GET /chat/calls/history).
+  callHistory: [],
+  callHistoryLoading: false,
+  callHistoryError: null,
+  callHistoryOpen: false,
   callAbortController: null,   // in-call poller (pollCallState)
   callWatchAbortController: null, // passive incoming-call watcher (startCallWatcher)
   callDeepLinkHandled: null,   // dedupes answer/decline deep links from native UI
@@ -1350,6 +1357,12 @@ export const useChatStore = create((set, get) => ({
       activeRoomId: null,
       conversations: [],
       friends: [],
+      // Never leave a post-call summary or the history sheet on the login
+      // screen of the next account.
+      callEndedInfo: null,
+      callHistoryOpen: false,
+      callHistory: [],
+      callHistoryFetchedAt: 0,
       incomingRequests: [],
       outgoingRequests: [],
       pendingRequestsCount: 0,
@@ -4437,9 +4450,66 @@ export const useChatStore = create((set, get) => ({
     })
   },
 
+  // Builds the post-call summary BEFORE the call is torn down (the timer and
+  // activeCall are gone afterwards). `outcome` is what the end screen says:
+  // completed | no_answer | missed | declined | cancelled | failed.
+  finishCallWithSummary: (outcome) => {
+    const { activeCall, callTimerSeconds, chatUser, conversations } = get()
+    if (!activeCall) return
+    const outgoing = String(activeCall.callerId) === String(chatUser?.id)
+    const conv = (conversations || []).find((c) => String(c.id) === String(activeCall.roomId))
+    const wasActive = activeCall.state === 'active'
+    set({
+      callEndedInfo: {
+        roomId: activeCall.roomId,
+        callType: activeCall.callType || 'voice',
+        peerName: activeCall.peerName || conv?.contact_name || 'Unknown',
+        peerAvatar: activeCall.peerAvatar || conv?.contact_avatar || null,
+        direction: outgoing ? 'outgoing' : 'incoming',
+        outcome: wasActive ? 'completed' : outcome,
+        durationSeconds: wasActive ? (callTimerSeconds || 0) : 0,
+        at: Date.now()
+      }
+    })
+  },
+
+  dismissCallEnded: () => set({ callEndedInfo: null }),
+
+  openCallHistory: () => {
+    set({ callHistoryOpen: true })
+    return get().fetchCallHistory()
+  },
+
+  closeCallHistory: () => set({ callHistoryOpen: false }),
+
+  fetchCallHistory: async ({ force = false } = {}) => {
+    const { chatToken } = get()
+    if (!chatToken) return []
+    const now = Date.now()
+    const cachedAt = get().callHistoryFetchedAt || 0
+    if (!force && cachedAt && now - cachedAt < 30000) return get().callHistory
+    set({ callHistoryLoading: true, callHistoryError: null })
+    try {
+      const res = await apiFetch('/chat/calls/history?limit=50', {
+        headers: { Authorization: `Bearer ${chatToken}` }
+      })
+      const json = await res.json()
+      if (!res.ok || !json?.success) throw new Error(json?.message || 'Could not load call history')
+      const calls = Array.isArray(json.data?.calls) ? json.data.calls : []
+      set({ callHistory: calls, callHistoryFetchedAt: Date.now(), callHistoryLoading: false })
+      return calls
+    } catch (e) {
+      console.warn('call history error:', e)
+      set({ callHistoryLoading: false, callHistoryError: 'Could not load call history. Check your connection.' })
+      return []
+    }
+  },
+
   endCall: async () => {
     const { activeCall, chatToken } = get()
     if (!activeCall) return
+    const outgoing = String(activeCall.callerId) === String(get().chatUser?.id)
+    get().finishCallWithSummary(outgoing ? 'cancelled' : 'declined')
     const roomId = activeCall.roomId
     // Tear the call down IMMEDIATELY: /call/end has taken 57-64s on a stalled
     // DB, and awaiting it kept the screen, mic and remote audio live for that
@@ -4980,6 +5050,11 @@ export const useChatStore = create((set, get) => ({
           // Candidates arrive by broadcast AND in this poll; the helper dedupes.
           await get().applyCallIceCandidates(call.candidates)
         } else if (state === 'ended' || state === 'idle') {
+          // The row is closed: show the summary (completed / no answer / missed)
+          // before the call screen disappears.
+          const current = get().activeCall
+          const outgoing = String(current?.callerId) === String(get().chatUser?.id)
+          get().finishCallWithSummary(outgoing ? 'no_answer' : 'missed')
           get().cleanupCallResources()
           break
         }
@@ -5161,6 +5236,7 @@ export const useChatStore = create((set, get) => ({
           && call.state !== 'ringing'
         ) {
           // The caller hung up (or the offer expired) before we answered.
+          get().finishCallWithSummary('missed')
           get().cleanupCallResources()
         }
         await waitForCallWatcherTick(CALL_WATCH_IDLE_MS)

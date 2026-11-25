@@ -2300,6 +2300,9 @@ def init_db():
         # 'active' row (caller closed the tab, phone died) blocked every new
         # call in that room until the 4-hour expiry.
         ('last_seen', 'INTEGER'),
+        # When the callee actually picked up. Call history needs it to show the
+        # real talk time instead of "ring + talk" (started_at is the offer).
+        ('answered_at', 'INTEGER'),
     ])
 
     # Group membership is the ONLY access-control source for group rooms.

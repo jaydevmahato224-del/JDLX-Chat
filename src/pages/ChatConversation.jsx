@@ -78,7 +78,8 @@ import {
   BellOff,
   Calendar,
   Star,
-  AlertTriangle
+  AlertTriangle,
+  History
 } from 'lucide-react'
 import QRCode from 'qrcode'
 import { useChatStore } from '../store/useChatStore'
@@ -105,6 +106,8 @@ import toast from 'react-hot-toast'
 import IncomingCallModal from '../components/IncomingCallModal'
 import { playSound, setSoundEnabled } from '../utils/sounds'
 import CallScreen from '../components/CallScreen'
+import CallHistorySheet from '../components/CallHistorySheet'
+import CallEndedScreen from '../components/CallEndedScreen'
 
 // Intl formatters are expensive to construct. Reuse one per format instead of
 // building a new formatter for every timestamp on every render.
@@ -1123,6 +1126,7 @@ export default function ChatConversation() {
     // Voice / Video call state & actions
     activeCall,
     initiateCall,
+    openCallHistory,
     answerCall,
     handleCallDeepLink,
     endCall,
@@ -6815,6 +6819,20 @@ export default function ChatConversation() {
                     className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
                   >
                     <Video className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${activeCall?.state === 'ringing' || activeCall?.state === 'active' ? 'opacity-50' : 'opacity-100'}`} />
+                  </button>}
+
+                  {/* Call history — voice/video only, so direct chats only */}
+                  {!activeConversation?.is_group && <button
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('light')
+                      openCallHistory()
+                    }}
+                    title="Call history"
+                    aria-label="Call history"
+                    className="ui-icon-btn h-8 w-8 sm:h-9 sm:w-9"
+                  >
+                    <History className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </button>}
 
                   {/* Search in conversation */}
@@ -14614,6 +14632,9 @@ export default function ChatConversation() {
       {/* ── INCOMING CALL MODAL / ACTIVE CALL SCREEN ── */}
       <IncomingCallModal />
       <CallScreen />
+      {/* Post-call summary + the call history sheet they can open from */}
+      <CallEndedScreen />
+      <CallHistorySheet />
     </div>
   )
 }

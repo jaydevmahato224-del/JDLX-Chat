@@ -381,3 +381,57 @@ def test_state_poll_survives_a_transient_expiry_commit(client, db, monkeypatch):
     res = client.get(f"/api/chat/rooms/{room}/call/state", headers=_headers(alice))
     assert res.status_code == 200, res.get_json()
     assert res.get_json()["data"]["state"] == "idle"
+
+
+def _ended_call(db, room, caller, callee, started, answered, ended):
+    cursor = db.execute(
+        """INSERT INTO official_chat_calls
+           (room_id, caller_id, callee_id, call_type, state, offer_sdp, answer_sdp,
+            candidates, started_at, last_seen, answered_at, ended_at)
+           VALUES (?, ?, ?, 'voice', 'ended', 'v=0', 'v=0', '[]', ?, ?, ?, ?)""",
+        (room, caller, callee, started, ended, answered, ended),
+    )
+    db.commit()
+    return cursor.lastrowid
+
+
+def test_call_history_reports_talk_time_for_both_sides(client, db):
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    room = _direct_room(db, alice, bob)
+    now = int(time.time())
+    # Rang for 20s, then talked for 65s.
+    _ended_call(db, room, alice, bob, now - 85, now - 65, now)
+
+    mine = client.get("/api/chat/calls/history", headers=_headers(alice)).get_json()["data"]["calls"]
+    assert len(mine) == 1
+    assert mine[0]["direction"] == "outgoing"
+    assert mine[0]["outcome"] == "completed"
+    assert mine[0]["duration_seconds"] == 65
+    assert mine[0]["peer"]["id"] == bob
+
+    theirs = client.get("/api/chat/calls/history", headers=_headers(bob)).get_json()["data"]["calls"]
+    assert theirs[0]["direction"] == "incoming"
+    assert theirs[0]["duration_seconds"] == 65
+
+
+def test_call_history_marks_unanswered_calls(client, db):
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    room = _direct_room(db, alice, bob)
+    now = int(time.time())
+    db.execute(
+        """INSERT INTO official_chat_calls
+           (room_id, caller_id, callee_id, call_type, state, offer_sdp, candidates,
+            started_at, last_seen, ended_at)
+           VALUES (?, ?, ?, 'voice', 'ended', 'v=0', '[]', ?, ?, ?)""",
+        (room, alice, bob, now - 30, now - 20, now - 5),
+    )
+    db.commit()
+
+    mine = client.get("/api/chat/calls/history", headers=_headers(alice)).get_json()["data"]["calls"]
+    assert mine[0]["outcome"] == "no_answer"
+    assert mine[0]["duration_seconds"] == 0
+
+    theirs = client.get("/api/chat/calls/history", headers=_headers(bob)).get_json()["data"]["calls"]
+    assert theirs[0]["outcome"] == "missed"

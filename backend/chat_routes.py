@@ -5837,6 +5837,85 @@ def chat_incoming_call():
         conn.close()
 
 
+@chat_bp.route('/calls/history', methods=['GET'])
+@chat_token_required
+@db_retry_on_transient
+def chat_call_history():
+    """Recent calls for the signed-in user, newest first.
+
+    Powers the in-app call history: direction, outcome and the REAL talk time
+    (answered_at -> ended_at) rather than ring + talk, which is what started_at
+    would give.
+    """
+    my_id = request.chat_user['user_id']
+    try:
+        limit = int(request.args.get('limit') or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, 100))
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT c.id, c.room_id, c.caller_id, c.callee_id, c.call_type,
+                      c.state, c.started_at, c.answered_at, c.ended_at,
+                      CASE WHEN c.answer_sdp IS NOT NULL AND c.answer_sdp != ''
+                           THEN 1 ELSE 0 END AS has_sdp,
+                      u.id AS peer_id, u.name AS peer_name,
+                      u.username AS peer_username, u.profile_image AS peer_avatar
+               FROM official_chat_calls c
+               LEFT JOIN chat_users u
+                 ON u.id = CASE WHEN c.caller_id = ? THEN c.callee_id ELSE c.caller_id END
+               WHERE (c.caller_id = ? OR c.callee_id = ?)
+                 AND c.state != 'ringing'
+               ORDER BY c.id DESC LIMIT ?""",
+            (my_id, my_id, my_id, limit)
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    calls = []
+    for row in rows:
+        outgoing = int(row['caller_id'] or 0) == int(my_id)
+        started = int(row['started_at'] or 0)
+        answered = int(row['answered_at']) if row['answered_at'] else None
+        ended = int(row['ended_at']) if row['ended_at'] else None
+        live = row['state'] == 'active'
+        completed = bool(answered) or bool(row['has_sdp'])
+
+        if live:
+            duration = max(0, int(time.time()) - (answered or started)) if completed else 0
+            outcome = 'in_progress'
+        elif completed:
+            # Older rows predate answered_at; fall back to the whole row span.
+            duration = max(0, (ended or started) - (answered or started))
+            outcome = 'completed'
+        else:
+            duration = 0
+            outcome = 'no_answer' if outgoing else 'missed'
+
+        calls.append({
+            'id': row['id'],
+            'room_id': row['room_id'],
+            'call_type': row['call_type'] or 'voice',
+            'direction': 'outgoing' if outgoing else 'incoming',
+            'outcome': outcome,
+            'started_at': started,
+            'ended_at': ended,
+            'duration_seconds': duration,
+            'peer': {
+                'id': row['peer_id'],
+                'name': row['peer_name'],
+                'username': row['peer_username'],
+                'profile_image': row['peer_avatar'],
+            },
+        })
+
+    return success_response({'calls': calls}, 'Call history')
+
+
 @chat_bp.route('/rooms/<int:room_id>/call/offer', methods=['POST'])
 @chat_token_required
 def chat_call_offer(room_id):
@@ -6007,9 +6086,10 @@ def chat_call_answer(room_id):
         # a fresh connection instead of leaving the callee on "Connecting…".
         for attempt in (0, 1):
             try:
+                answered_at = int(time.time())
                 cursor.execute(
-                    "UPDATE official_chat_calls SET state = 'active', answer_sdp = ?, callee_id = ?, last_seen = ? WHERE id = ?",
-                    (answer_sdp, my_id, int(time.time()), call['id'])
+                    "UPDATE official_chat_calls SET state = 'active', answer_sdp = ?, callee_id = ?, last_seen = ?, answered_at = ? WHERE id = ?",
+                    (answer_sdp, my_id, answered_at, answered_at, call['id'])
                 )
                 conn.commit()
                 break
