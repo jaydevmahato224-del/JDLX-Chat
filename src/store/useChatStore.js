@@ -4552,6 +4552,11 @@ export const useChatStore = create((set, get) => ({
     } catch (e) {
       iceServersPromise.catch(() => {})
       console.warn('Microphone access denied:', e)
+      // The ringing screen is shown optimistically before the permission
+      // prompt, so a denied mic used to leave "Calling…" on screen forever —
+      // and the call watcher skips polling while a call exists, so incoming
+      // calls stopped ringing too. Tear the optimistic call down.
+      get().cleanupCallResources()
       return { success: false, error: 'Microphone access denied' }
     }
     const iceServers = await iceServersPromise
@@ -4600,11 +4605,21 @@ export const useChatStore = create((set, get) => ({
     set({ callPeerConnection: pc })
     localStream.getTracks().forEach((t) => pc.addTrack(t, localStream))
 
-    const offer = await pc.createOffer()
-    // Low-data voice profile: mono Opus with a hard bitrate ceiling.
-    const offerSdp = applyLowDataAudioSdp(offer.sdp)
-    await pc.setLocalDescription({ type: offer.type, sdp: offerSdp })
-    await applyCallAudioBitrate(pc)
+    // Negotiation can throw (no usable codec, SDP rejected by the browser).
+    // That failure happened outside every try, so it escaped with the call
+    // screen still on "Calling…" and the mic live. Clean up like every other
+    // start failure instead.
+    let offerSdp
+    try {
+      const offer = await pc.createOffer()
+      // Low-data voice profile: mono Opus with a hard bitrate ceiling.
+      offerSdp = applyLowDataAudioSdp(offer.sdp)
+      await pc.setLocalDescription({ type: offer.type, sdp: offerSdp })
+      await applyCallAudioBitrate(pc)
+    } catch (e) {
+      get().cleanupCallResources()
+      return { success: false, error: describeCallError(e, 'Could not start the call') }
+    }
 
     const abort = new AbortController()
     set({ callAbortController: abort })
