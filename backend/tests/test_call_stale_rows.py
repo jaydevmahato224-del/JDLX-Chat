@@ -148,3 +148,101 @@ def test_state_poll_refreshes_the_heartbeat(client, db):
     # The refreshed heartbeat keeps the room blocked for a second caller, i.e.
     # a running call is not ended by the next offer.
     assert _offer(client, room, _headers(alice)).status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Turso stream failures during a call write must not surface as 500s.
+# Production showed: answer -> 404/500 and end -> 500 with
+# "Hrana: ... stream not found" / "interactive transaction was rolled back
+# because the stream was idle for too long".
+# ---------------------------------------------------------------------------
+
+def test_stream_not_found_is_treated_as_transient():
+    from database import is_transient_db_error
+
+    err = ValueError(
+        'Hrana: `api error: `status=404 Not Found, '
+        'body={"error":"stream not found: 7f05ffc3:1b22505"}``'
+    )
+    assert is_transient_db_error(err) is True
+
+
+class _FlakyCommit:
+    """First commit dies like a Turso idle-stream rollback, then works."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.failed = False
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def commit(self):
+        if not self.failed:
+            self.failed = True
+            raise ValueError(
+                'Hrana: `stream error: `Error { message: "SQLite error: '
+                'interactive transaction was rolled back because the stream '
+                'was idle for too long; retry the transaction", code: '
+                '"SQLITE_BUSY" }``'
+            )
+        self._inner.commit()
+
+
+def _patch_first_commit(monkeypatch, chat_routes):
+    real_get_db = chat_routes.get_db
+    holder = {"flaky": None}
+
+    def flaky_get_db():
+        conn = real_get_db()
+        if holder["flaky"] is None:
+            holder["flaky"] = _FlakyCommit(conn)
+            return holder["flaky"]
+        return conn
+
+    monkeypatch.setattr(chat_routes, "get_db", flaky_get_db)
+
+
+def test_answer_survives_a_transient_commit(client, db, monkeypatch):
+    import chat_routes
+
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    room = _direct_room(db, alice, bob)
+    now = int(time.time())
+    call_id = _insert_call(db, room, alice, bob, "ringing", started_at=now, last_seen=now)
+    _patch_first_commit(monkeypatch, chat_routes)
+
+    res = client.post(
+        f"/api/chat/rooms/{room}/call/answer",
+        headers=_headers(bob),
+        json={"answer_sdp": "v=0\r\n"},
+    )
+    assert res.status_code == 200, res.get_json()
+
+    row = db.execute(
+        "SELECT state, answer_sdp FROM official_chat_calls WHERE id = ?", (call_id,)
+    ).fetchone()
+    assert row["state"] == "active"
+    # The route strips surrounding whitespace from the SDP before storing it.
+    assert row["answer_sdp"] == "v=0"
+
+
+def test_end_survives_a_transient_commit(client, db, monkeypatch):
+    import chat_routes
+
+    alice = _chat_user(db, "Alice")
+    bob = _chat_user(db, "Bob")
+    room = _direct_room(db, alice, bob)
+    now = int(time.time())
+    call_id = _insert_call(db, room, alice, bob, "active", started_at=now - 5, last_seen=now)
+    _patch_first_commit(monkeypatch, chat_routes)
+
+    res = client.post(f"/api/chat/rooms/{room}/call/end", headers=_headers(alice))
+    assert res.status_code == 200, res.get_json()
+
+    row = db.execute(
+        "SELECT state, ended_at FROM official_chat_calls WHERE id = ?", (call_id,)
+    ).fetchone()
+    assert row["state"] == "ended"
+    assert row["ended_at"] is not None

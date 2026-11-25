@@ -5938,11 +5938,27 @@ def chat_call_answer(room_id):
         if call['caller_id'] == my_id:
             return error_response("You cannot answer your own call", 403)
 
-        cursor.execute(
-            "UPDATE official_chat_calls SET state = 'active', answer_sdp = ?, callee_id = ?, last_seen = ? WHERE id = ?",
-            (answer_sdp, my_id, int(time.time()), call['id'])
-        )
-        conn.commit()
+        # The UPDATE is idempotent (keyed by the call id), so a Turso stream
+        # that rolls its idle transaction back at commit time is retried once on
+        # a fresh connection instead of leaving the callee on "Connecting…".
+        for attempt in (0, 1):
+            try:
+                cursor.execute(
+                    "UPDATE official_chat_calls SET state = 'active', answer_sdp = ?, callee_id = ?, last_seen = ? WHERE id = ?",
+                    (answer_sdp, my_id, int(time.time()), call['id'])
+                )
+                conn.commit()
+                break
+            except Exception as answer_err:
+                if attempt or not is_transient_db_error(answer_err):
+                    raise
+                logger.warning("Call answer commit hit a transient DB error, retrying: %s", answer_err)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = get_db()
+                cursor = conn.cursor()
 
         # Hand the caller the answer the moment it exists. Waiting for its
         # /call/state poll meant the caller learned of the answer only on the
@@ -6059,11 +6075,27 @@ def chat_call_end(room_id):
         )
         call = cursor.fetchone()
         if call:
-            cursor.execute(
-                "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",
-                (int(time.time()), call['id'])
-            )
-            conn.commit()
+            # Idempotent hangup: a rolled-back idle transaction at commit time
+            # used to surface as a 500 and leave the row ringing/active, which
+            # then blocked the room's next call.
+            for attempt in (0, 1):
+                try:
+                    cursor.execute(
+                        "UPDATE official_chat_calls SET state = 'ended', ended_at = ? WHERE id = ?",
+                        (int(time.time()), call['id'])
+                    )
+                    conn.commit()
+                    break
+                except Exception as end_err:
+                    if attempt or not is_transient_db_error(end_err):
+                        raise
+                    logger.warning("Call end commit hit a transient DB error, retrying: %s", end_err)
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = get_db()
+                    cursor = conn.cursor()
         return success_response(None, "Call ended")
     finally:
         conn.close()

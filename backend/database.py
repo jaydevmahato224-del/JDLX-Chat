@@ -95,6 +95,10 @@ _TRANSIENT_CONNECTION_MARKERS = (
     "stream expired",
     "stream has been closed",
     "stream error",
+    # Turso can drop a pooled stream entirely; the server then answers
+    # 404 {"error": "stream not found: <id>"}. That is a dead transport, not a
+    # missing row, so it must reconnect instead of becoming a 500.
+    "stream not found",
     "client stream",
     "no result has been returned",
     "unexpected response from server",
