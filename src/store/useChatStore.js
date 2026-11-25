@@ -147,6 +147,10 @@ const createIceBatcher = (roomId, getToken) => {
 const appliedCallCandidates = new Set()
 const pendingCallCandidates = []
 let callAnswerApplied = false
+// Every start attempt gets a generation. cleanupCallResources() bumps it, so an
+// initiateCall still awaiting the mic prompt / ICE fetch can tell the user
+// cancelled and must not resurrect the call when those promises resolve.
+let callStartGeneration = 0
 
 const parseIceCandidate = (raw) => {
   if (!raw) return null
@@ -4335,6 +4339,9 @@ export const useChatStore = create((set, get) => ({
 
   cleanupCallResources: () => {
     const state = get()
+    // Invalidate any initiateCall still in flight (mic prompt, ICE fetch,
+    // offer POST) so a cancel cannot be undone by a late resolution.
+    callStartGeneration += 1
     stopNativeCallAudio()
     stopRemoteCallAudio()
     stopAllCallSounds()
@@ -4514,6 +4521,8 @@ export const useChatStore = create((set, get) => ({
     unlockSounds()
     // Starting a call must also silence any ringtone still playing.
     stopAllCallSounds()
+    // Generation for THIS attempt; cleanupCallResources() bumps it on cancel.
+    const startGeneration = ++callStartGeneration
 
     const roomConversation = get().conversations.find((c) => sameId(c.id, roomId))
     const peerName = roomConversation?.contact_name || roomConversation?.other_user?.name || null
@@ -4560,6 +4569,13 @@ export const useChatStore = create((set, get) => ({
       return { success: false, error: 'Microphone access denied' }
     }
     const iceServers = await iceServersPromise
+    // The user may have tapped end while the permission prompt / ICE fetch was
+    // still pending. Continuing used to set the call up again and POST an
+    // offer, ringing the peer after the caller had already cancelled.
+    if (startGeneration !== callStartGeneration) {
+      localStream.getTracks().forEach((t) => { try { t.stop() } catch {} })
+      return { success: false, error: 'Call cancelled' }
+    }
     set({ callLocalStream: localStream, callIsMuted: false })
     startNativeCallAudio({ video: callType === 'video', speaker: get().callIsSpeakerOn })
 
@@ -4621,6 +4637,12 @@ export const useChatStore = create((set, get) => ({
       return { success: false, error: describeCallError(e, 'Could not start the call') }
     }
 
+    if (startGeneration !== callStartGeneration) {
+      try { pc.onconnectionstatechange = null; pc.close() } catch {}
+      localStream.getTracks().forEach((t) => { try { t.stop() } catch {} })
+      return { success: false, error: 'Call cancelled' }
+    }
+
     const abort = new AbortController()
     set({ callAbortController: abort })
     try {
@@ -4642,6 +4664,20 @@ export const useChatStore = create((set, get) => ({
             ? CALL_ROUTES_MISSING_ERROR
             : (json.error || 'Call offer failed')
         }
+      }
+      // Cancelled while the offer was in flight: the row now exists, so remove
+      // it — otherwise the peer keeps ringing and the room stays blocked. Skip
+      // the end when a newer call already took over.
+      if (startGeneration !== callStartGeneration) {
+        if (!get().activeCall) {
+          apiFetch(`/chat/rooms/${roomId}/call/end`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${chatToken}` }
+          }).catch(() => {})
+        }
+        try { pc.onconnectionstatechange = null; pc.close() } catch {}
+        localStream.getTracks().forEach((t) => { try { t.stop() } catch {} })
+        return { success: false, error: 'Call cancelled' }
       }
       // The call row now exists: release the candidates gathered while the
       // offer request was in flight.
