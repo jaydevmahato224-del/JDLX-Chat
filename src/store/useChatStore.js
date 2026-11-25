@@ -4940,6 +4940,11 @@ export const useChatStore = create((set, get) => ({
             break
           }
         } else if (state === 'active') {
+          // The poll can outlive a call that was already cleared (cleanup
+          // raced this response). Spreading a null activeCall would build a
+          // roomless call: a "Call" screen whose end button posts to
+          // /rooms/undefined. Nothing to update — stop the loop.
+          if (!get().activeCall) break
           set((s) => ({
             activeCall: { ...s.activeCall, state: 'active', calleeId: call.callee_id || s.activeCall?.calleeId }
           }))
