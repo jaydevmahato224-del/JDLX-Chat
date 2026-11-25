@@ -4789,7 +4789,14 @@ export const useChatStore = create((set, get) => ({
       return { success: false, error: isVideo ? 'Camera or microphone access denied' : 'Microphone access denied' }
     }
     const iceServers = await iceServersPromise
-    set({ callLocalStream: localStream, callIsMuted: false })
+    // Respect a mute chosen while the call was still ringing: the mute button
+    // is available in the incoming-call modal, and resetting it here turned
+    // the microphone on the moment the user answered.
+    const stayMuted = get().callIsMuted
+    set({ callLocalStream: localStream, callIsMuted: stayMuted })
+    if (stayMuted) {
+      localStream.getAudioTracks().forEach((t) => { t.enabled = false })
+    }
     startNativeCallAudio({ video: isVideo, speaker: get().callIsSpeakerOn })
 
     try {
