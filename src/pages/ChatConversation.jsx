@@ -438,15 +438,34 @@ function SwipeableConversationRow({
   const isVerticalScrollRef = useRef(false)
   const hasTickHapticRef = useRef(false)
   const offsetXRef = useRef(0)
+  const animTimerRef = useRef(null)
+
+  const triggerRowSnapAnimation = useCallback(() => {
+    clearTimeout(animTimerRef.current)
+    setIsAnimating(true)
+    // Fallback ensures behind-card actions hide even if transitionend doesn't fire (e.g. reduced motion)
+    animTimerRef.current = setTimeout(() => {
+      animTimerRef.current = null
+      setIsAnimating(false)
+    }, 260)
+  }, [])
+
+  const finishRowSnapAnimation = useCallback(() => {
+    clearTimeout(animTimerRef.current)
+    animTimerRef.current = null
+    setIsAnimating(false)
+  }, [])
+
+  useEffect(() => () => clearTimeout(animTimerRef.current), [])
 
   // Keep internal offset synchronized with external isOpen state
   useEffect(() => {
     if (!isOpen && offsetXRef.current !== 0) {
-      setIsAnimating(true)
+      triggerRowSnapAnimation()
       offsetXRef.current = 0
       setOffsetX(0)
     }
-  }, [isOpen])
+  }, [isOpen, triggerRowSnapAnimation])
 
   useEffect(() => {
     const el = rowRef.current
@@ -463,7 +482,7 @@ function SwipeableConversationRow({
       isSwipingRef.current = false
       isVerticalScrollRef.current = false
       hasTickHapticRef.current = false
-      setIsAnimating(false)
+      finishRowSnapAnimation()
     }
 
     const handleTouchMove = (e) => {
@@ -515,7 +534,7 @@ function SwipeableConversationRow({
 
     const handleTouchEnd = () => {
       if (isSwipingRef.current) {
-        setIsAnimating(true)
+        triggerRowSnapAnimation()
         if (startOffsetRef.current === 0) {
           if (offsetXRef.current <= -60) {
             offsetXRef.current = -140
@@ -554,13 +573,13 @@ function SwipeableConversationRow({
       el.removeEventListener('touchmove', handleTouchMove)
       el.removeEventListener('touchend', handleTouchEnd)
     }
-  }, [isOpen, conv.id, onOpen, onClose])
+  }, [isOpen, conv.id, onOpen, onClose, triggerRowSnapAnimation, finishRowSnapAnimation])
 
   const handleCardClick = (e) => {
     if (isOpen || Math.abs(offsetX) > 10) {
       e.preventDefault()
       e.stopPropagation()
-      setIsAnimating(true)
+      triggerRowSnapAnimation()
       offsetXRef.current = 0
       setOffsetX(0)
       onClose?.()
@@ -569,10 +588,17 @@ function SwipeableConversationRow({
     onSelect?.(conv)
   }
 
+  // Keep swipe tray hidden at rest so its amber/rose background cannot bleed 1px seams on HiDPI screens
+  const showSwipeActions = isOpen || Math.abs(offsetX) > 0.5 || isAnimating
+
   return (
     <div ref={rowRef} className="relative overflow-hidden w-full select-none">
       {/* Background Action Buttons (Revealed on Swipe Left) */}
-      <div className="absolute inset-y-0 right-0 flex items-stretch w-[140px] z-0">
+      <div
+        className={`absolute inset-y-px right-0 flex items-stretch w-[140px] z-0 ${
+          showSwipeActions ? 'opacity-100 pointer-events-auto visible' : 'opacity-0 pointer-events-none invisible'
+        }`}
+      >
         {/* Pin / Unpin Button */}
         <button
           type="button"
@@ -582,7 +608,7 @@ function SwipeableConversationRow({
             e.stopPropagation()
             triggerHaptic('medium')
             onTogglePin?.(e, conv.id)
-            setIsAnimating(true)
+            triggerRowSnapAnimation()
             offsetXRef.current = 0
             setOffsetX(0)
             onClose?.()
@@ -602,7 +628,7 @@ function SwipeableConversationRow({
           onClick={(e) => {
             e.stopPropagation()
             triggerHaptic('medium')
-            setIsAnimating(true)
+            triggerRowSnapAnimation()
             offsetXRef.current = 0
             setOffsetX(0)
             onClose?.()
@@ -619,6 +645,11 @@ function SwipeableConversationRow({
       {/* Foreground Content Card */}
       <div
         onClick={handleCardClick}
+        onTransitionEnd={(e) => {
+          if (e.target === e.currentTarget && e.propertyName === 'transform') {
+            finishRowSnapAnimation()
+          }
+        }}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return
           if (e.key === 'Enter' || e.key === ' ') {
@@ -630,7 +661,7 @@ function SwipeableConversationRow({
         tabIndex={0}
         aria-label={`Open chat with ${conv.contact_name || conv.name || 'contact'}`}
         style={{
-          transform: `translateX(${offsetX}px)`,
+          transform: offsetX !== 0 || isAnimating ? `translateX(${offsetX}px)` : undefined,
           transition: isAnimating ? 'transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)' : 'none'
         }}
         className={`relative z-10 w-full ${isLight ? 'bg-white' : 'bg-[#0f1114]'}`}
@@ -1164,7 +1195,9 @@ export default function ChatConversation() {
     startSocialRealtime,
     stopSocialRealtime,
     sendTyping,
+    stopTyping,
     peerTyping,
+    peerTypingUser,
     peerOnline,
     peerLastReadId,
     peerLastDeliveredId,
@@ -1946,7 +1979,7 @@ export default function ChatConversation() {
       : Boolean(targetMsg._pending || targetMsg._uploading)
     if (isPending) {
       return (
-        <span className="inline-flex items-center ml-0.5 select-none pointer-events-none" title="Sending…">
+        <span key="pending" className="inline-flex items-center ml-0.5 select-none pointer-events-none" title="Sending…">
           <span className={`w-3 h-3 border-2 border-t-transparent rounded-full animate-spin ${
             isFloatingDark ? 'border-white/80' : 'border-current opacity-70'
           }`} />
@@ -1962,6 +1995,7 @@ export default function ChatConversation() {
       if (onRetry) {
         return (
           <button
+            key="failed-retry"
             type="button"
             onClick={(e) => { e.stopPropagation(); onRetry(targetMsg); }}
             className="inline-flex items-center gap-1 text-[9px] font-black text-rose-900 bg-rose-200/90 px-1.5 py-0.5 rounded-md hover:scale-105 active:scale-95 transition cursor-pointer shadow-xs ml-0.5"
@@ -1973,7 +2007,7 @@ export default function ChatConversation() {
         )
       }
       return (
-        <span className="inline-flex items-center ml-0.5 select-none" title="Failed to send">
+        <span key="failed" className="inline-flex items-center ml-0.5 select-none" title="Failed to send">
           <span className="text-rose-500 font-black text-xs">!</span>
         </span>
       )
@@ -2002,6 +2036,7 @@ export default function ChatConversation() {
     if (isRead) {
       return (
         <span 
+          key="read"
           title="Seen" 
           className="inline-flex items-center ml-0.5 select-none animate-tick-pop"
         >
@@ -2018,6 +2053,7 @@ export default function ChatConversation() {
     if (isDelivered) {
       return (
         <span 
+          key="delivered"
           title="Delivered" 
           className="inline-flex items-center ml-0.5 select-none animate-tick-pop"
         >
@@ -2033,8 +2069,9 @@ export default function ChatConversation() {
     // C) Sent to server only (Recipient offline / waiting for delivery) -> Single tick
     return (
       <span 
+        key="sent"
         title="Sent" 
-        className="inline-flex items-center ml-0.5 select-none"
+        className="inline-flex items-center ml-0.5 select-none animate-tick-pop"
       >
         {isFloatingDark ? (
           <Check className="w-3.5 h-3.5 text-white/70 stroke-[2]" />
@@ -3643,6 +3680,19 @@ export default function ChatConversation() {
     }
   }, [messages, scrollToBottom, showScrollBottomFab])
 
+  // 3a. Keep the typing bubble inside the viewport when the reader is already
+  // near the bottom, without ever yanking someone scrolling older history.
+  useEffect(() => {
+    if (!peerTyping || showScrollBottomFab) return
+    const el = messagesContainerRef.current
+    if (!el) return
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (distanceToBottom <= 140) {
+      const rafId = requestAnimationFrame(() => scrollToBottom(true))
+      return () => cancelAnimationFrame(rafId)
+    }
+  }, [peerTyping, showScrollBottomFab, scrollToBottom])
+
   // 3b. Keep the newest message in view while a freshly opened chat settles.
   // After a refresh the first paint grows underneath us (attachment thumbnails,
   // media players and decrypted bubbles replacing "Tap to decrypt"
@@ -3891,6 +3941,7 @@ export default function ChatConversation() {
 
     const replyToId = replyTo?.id || null
     const pendingReply = replyTo
+    stopTyping(activeRoomId)
     setInputText('')
     setReplyTo(null)
     updateDraft(activeRoomId, '')
@@ -5354,6 +5405,131 @@ export default function ChatConversation() {
     return result
   }, [messages, isChatImageMessage])
 
+  // Track which bubbles have already rendered or reconciled from an optimistic
+  // send so live sends/receives animate crisply without double-popping or
+  // flashing existing history when opening a room / loading older messages.
+  const bubbleAnimStateRef = useRef({
+    roomId: null,
+    hydrated: false,
+    seenMsgIds: new Set(),
+    maxConfirmedId: 0,
+    prevPendingMsgs: [],
+    animByItemId: new Map()
+  })
+
+  const bubbleAnimById = useMemo(() => {
+    const state = bubbleAnimStateRef.current
+    const nextMap = new Map()
+    const sameRoom = sameId(state.roomId, activeRoomId)
+    if (!activeRoomId || !groupedMessages.length) return nextMap
+
+    const activeOptIds = new Set(
+      (messages || []).filter((m) => m && typeof m.id === 'number' && m.id < 0).map((m) => m.id)
+    )
+    const disappearingPending = sameRoom
+      ? (state.prevPendingMsgs || []).filter((opt) => !activeOptIds.has(opt.id))
+      : []
+    const claimedPending = new Set()
+    let livePeerBatchIdx = 0
+
+    for (const item of groupedMessages) {
+      const m = item.message
+      const isUser = Boolean(
+        m && (sameId(m.user_id, chatUser?.id) || (m.sender_type === 'user' && m.username === chatUser?.username))
+      )
+      const isPendingItem = (item.messages || [m]).some((pm) => Boolean(pm?._pending || pm?._uploading))
+
+      // Preserve any committed animation decision so re-renders mid-animation never snap/restart
+      if (sameRoom && state.animByItemId.has(item.id)) {
+        nextMap.set(item.id, state.animByItemId.get(item.id))
+        continue
+      }
+
+      if (sameRoom && item.type === 'album' && (item.messages || []).some((pm) => state.seenMsgIds.has(pm.id))) {
+        nextMap.set(item.id, { className: '', delayMs: 0 })
+        continue
+      }
+
+      if (isPendingItem) {
+        nextMap.set(item.id, { className: 'animate-bubble-user', delayMs: 0 })
+        continue
+      }
+
+      if (!sameRoom || !state.hydrated) {
+        nextMap.set(item.id, { className: '', delayMs: 0 })
+        continue
+      }
+
+      const numId = typeof m?.id === 'number' ? m.id : 0
+      if (numId > 0 && state.maxConfirmedId > 0 && numId <= state.maxConfirmedId) {
+        nextMap.set(item.id, { className: '', delayMs: 0 })
+        continue
+      }
+
+      // Skip re-animating a sent bubble when its optimistic placeholder swaps for the server row
+      if (isUser && numId > 0 && disappearingPending.length > 0) {
+        const matchIdx = disappearingPending.findIndex((opt, idx) => {
+          if (claimedPending.has(idx)) return false
+          const floor = Number(opt._baseMaxId)
+          if (Number.isFinite(floor) && numId <= floor) return false
+          if ((opt.message_type || 'text') !== (m.message_type || 'text')) return false
+          if (opt.media_url && m.media_url) {
+            if (opt.media_url === m.media_url) return true
+            return String(opt.media_url).startsWith('blob:') && (opt.message || '') === (m.message || '')
+          }
+          return !opt.media_url && !m.media_url && (opt.message || '') === (m.message || '')
+        })
+        if (matchIdx !== -1) {
+          claimedPending.add(matchIdx)
+          nextMap.set(item.id, { className: '', delayMs: 0 })
+          continue
+        }
+      }
+
+      if (isUser) {
+        nextMap.set(item.id, { className: 'animate-bubble-user', delayMs: 0 })
+      } else {
+        const delayMs = Math.min(livePeerBatchIdx * 45, 135)
+        livePeerBatchIdx += 1
+        nextMap.set(item.id, { className: 'animate-bubble-peer', delayMs })
+      }
+    }
+
+    return nextMap
+  }, [activeRoomId, groupedMessages, messages, chatUser?.id, chatUser?.username])
+
+  useLayoutEffect(() => {
+    const state = bubbleAnimStateRef.current
+    const roomChanged = !sameId(state.roomId, activeRoomId)
+    const nextSeenMsgIds = roomChanged ? new Set() : new Set(state.seenMsgIds)
+    const nextAnimByItemId = roomChanged ? new Map() : new Map(state.animByItemId)
+    let maxConfirmedId = roomChanged ? 0 : state.maxConfirmedId
+
+    for (const item of groupedMessages) {
+      for (const pm of (item.messages || [item.message])) {
+        if (pm?.id != null) nextSeenMsgIds.add(pm.id)
+        if (typeof pm?.id === 'number' && pm.id > maxConfirmedId) {
+          maxConfirmedId = pm.id
+        }
+      }
+      const anim = bubbleAnimById.get(item.id)
+      if (anim && !nextAnimByItemId.has(item.id)) {
+        nextAnimByItemId.set(item.id, anim)
+      }
+    }
+
+    const hydrated = (roomChanged ? false : state.hydrated) || groupedMessages.length > 0 || !messagesLoading
+
+    bubbleAnimStateRef.current = {
+      roomId: activeRoomId,
+      hydrated,
+      seenMsgIds: nextSeenMsgIds,
+      maxConfirmedId,
+      prevPendingMsgs: (messages || []).filter((m) => m && typeof m.id === 'number' && m.id < 0),
+      animByItemId: nextAnimByItemId
+    }
+  }, [activeRoomId, groupedMessages, messages, messagesLoading, bubbleAnimById])
+
   // All photos in conversation for full Lightbox gallery browsing
   const allChatImages = useMemo(() => {
     return (messages || [])
@@ -6448,13 +6624,19 @@ export default function ChatConversation() {
                           {/* Message preview snippet or live typing */}
                           <div className="flex items-center justify-between gap-1.5">
                             {isPeerTypingThisRoom ? (
-                              <div className="flex items-center gap-1.5 text-xs font-bold text-[#facc15] animate-pulse min-w-0">
-                                <span className="flex items-center gap-0.5">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-[#facc15] animate-bounce [animation-delay:-0.3s]" />
-                                  <span className="w-1.5 h-1.5 rounded-full bg-[#facc15] animate-bounce [animation-delay:-0.15s]" />
-                                  <span className="w-1.5 h-1.5 rounded-full bg-[#facc15] animate-bounce" />
+                              <div className={`flex items-center gap-1.5 h-4 text-xs font-semibold min-w-0 ${
+                                isLight ? 'text-amber-600' : 'text-[#facc15]'
+                              }`}>
+                                <span className="flex items-center gap-0.5 shrink-0 pt-0.5">
+                                  <span className={`w-1.5 h-1.5 rounded-full animate-typing-dot-1 ${isLight ? 'bg-amber-500' : 'bg-[#facc15]'}`} />
+                                  <span className={`w-1.5 h-1.5 rounded-full animate-typing-dot-2 ${isLight ? 'bg-amber-500' : 'bg-[#facc15]'}`} />
+                                  <span className={`w-1.5 h-1.5 rounded-full animate-typing-dot-3 ${isLight ? 'bg-amber-500' : 'bg-[#facc15]'}`} />
                                 </span>
-                                <span className="tracking-tight text-[11px]">typing...</span>
+                                <span className="truncate tracking-tight text-[11px]">
+                                  {(conv.is_group || conv.room_type === 'group') && peerTypingUser?.name
+                                    ? `${peerTypingUser.name.split(' ')[0]} typing…`
+                                    : 'typing…'}
+                                </span>
                               </div>
                             ) : hasDraft ? (
                               <p className="text-xs truncate font-medium flex items-center gap-1 min-w-0">
@@ -6674,12 +6856,12 @@ export default function ChatConversation() {
                           getContactDisplayName(activeConversation)?.[0]?.toUpperCase() || 'U'
                         )}
                       </div>
-                      {activeConversation?.is_group ? null : peerTyping ? (
+                      {peerTyping ? (
                         <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center pointer-events-none" title="Typing…">
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
                           <span className="relative inline-flex h-2.5 w-2.5 rounded-full border-2 border-white bg-amber-500 dark:border-[#0f1114]" />
                         </span>
-                      ) : isContactOnline ? (
+                      ) : !activeConversation?.is_group && isContactOnline ? (
                         <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center pointer-events-none" title="Online">
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
                           <span className="presence-beacon relative inline-flex h-2.5 w-2.5 rounded-full border-2 border-white bg-emerald-500 dark:border-[#0f1114]" />
@@ -6770,20 +6952,35 @@ export default function ChatConversation() {
                       </div>
                       <p className="text-[10.5px] sm:text-[11px] font-medium flex items-center gap-1 sm:gap-1.5">
                         <span className={`font-bold flex items-center gap-1 sm:gap-1.5 ${
-                          activeConversation?.is_group
+                          peerTyping
                             ? 'text-amber-600 dark:text-amber-400'
-                            : peerTyping 
-                              ? 'text-amber-500 animate-pulse' 
-                              : isContactOnline 
-                                ? 'text-emerald-600 dark:text-emerald-400' 
+                            : activeConversation?.is_group
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : isContactOnline
+                                ? 'text-emerald-600 dark:text-emerald-400'
                                 : isLight ? 'text-slate-500' : 'text-zinc-400'
                         }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            activeConversation?.is_group
-                              ? 'bg-amber-400'
-                              : peerTyping ? 'bg-amber-400 animate-ping' : isContactOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' : 'bg-zinc-500/50'
-                          }`} />
-                          <span>{activeConversation?.is_group ? `${activeConversation?.member_count || 0} members` : peerTyping ? 'typing…' : (isContactOnline ? 'Online' : 'Offline')}</span>
+                          {peerTyping ? (
+                            <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+                              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500" />
+                            </span>
+                          ) : (
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                              activeConversation?.is_group
+                                ? 'bg-amber-400'
+                                : isContactOnline ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' : 'bg-zinc-500/50'
+                            }`} />
+                          )}
+                          <span className="truncate">
+                            {peerTyping
+                              ? ((activeConversation?.is_group || activeConversation?.room_type === 'group') && peerTypingUser?.name
+                                ? `${peerTypingUser.name.split(' ')[0]} typing…`
+                                : 'typing…')
+                              : activeConversation?.is_group
+                                ? `${activeConversation?.member_count || 0} members`
+                                : (isContactOnline ? 'Online' : 'Offline')}
+                          </span>
                         </span>
                         <span className={`opacity-30 ${isLight ? 'text-slate-400' : 'text-zinc-600'}`}>•</span>
                         <span className="flex items-center gap-1 text-[9.5px] sm:text-[10px] font-medium text-emerald-600 dark:text-emerald-400 truncate" title="End-to-End Encrypted Messaging">
@@ -7345,14 +7542,18 @@ export default function ChatConversation() {
                         )}
 
                         {/* Message Bubble Body with Swipe-to-reply and Double-tap */}
-                        <div
-                          className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[85%] sm:max-w-[70%] ${
-                            isUser ? 'ml-auto' : 'mr-auto'
-                          } ${isFirstInGroup ? 'mt-2.5 sm:mt-3' : 'mt-1'} ${isLastInGroup ? 'mb-2' : 'mb-0.5'} ${
-                            m._pending ? 'animate-message-pop' : (isUser ? 'animate-bubble-user' : 'animate-bubble-peer')
-                          }`}
-                        >
-                          <SwipeableMessageBubble
+                        {(() => {
+                          const bubbleAnim = bubbleAnimById.get(item.id)
+                          return (
+                            <div
+                              style={bubbleAnim?.delayMs ? { animationDelay: `${bubbleAnim.delayMs}ms` } : undefined}
+                              className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[85%] sm:max-w-[70%] ${
+                                isUser ? 'ml-auto' : 'mr-auto'
+                              } ${isFirstInGroup ? 'mt-2.5 sm:mt-3' : 'mt-1'} ${isLastInGroup ? 'mb-2' : 'mb-0.5'} ${
+                                bubbleAnim?.className || ''
+                              }`}
+                            >
+                              <SwipeableMessageBubble
                             isUser={isUser}
                             m={m}
                             onSwipeReply={handleSwipeReply}
@@ -7853,9 +8054,11 @@ export default function ChatConversation() {
                                   )}
                                 </>
                               )}
-                            </div>
-                          </SwipeableMessageBubble>
-                        </div>
+                              </div>
+                            </SwipeableMessageBubble>
+                          </div>
+                        )
+                      })()}
                       </div>
                     )
                   })
@@ -7863,13 +8066,32 @@ export default function ChatConversation() {
 
                 {/* Modern iMessage/Telegram 3-Dot Wave Typing Indicator */}
                 {peerTyping && (
-                  <div className="flex items-center gap-2 mb-2 animate-bubble-peer">
-                    <div className={`flex items-center gap-1.5 rounded-2xl rounded-bl-md border px-4 py-2.5 shadow-sm ${
-                      isLight ? 'border-[#e4e7ec] bg-white text-slate-700' : 'border-white/[0.06] bg-[#16181d] text-zinc-300'
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    aria-label={peerTypingUser?.name ? `${peerTypingUser.name} is typing` : 'Typing'}
+                    className="flex flex-col items-start mt-1.5 mb-2 animate-typing-bubble select-none"
+                  >
+                    {(activeConversation?.is_group || activeConversation?.room_type === 'group') && peerTypingUser?.name && (
+                      <span className={`mb-1 ml-1 text-[10.5px] font-bold tracking-tight ${
+                        isLight ? 'text-amber-700' : 'text-amber-400'
+                      }`}>
+                        {peerTypingUser.name} is typing
+                      </span>
+                    )}
+                    <div className={`relative flex items-center gap-1.5 rounded-2xl rounded-bl-none border px-4 py-3 shadow-sm ${
+                      isLight
+                        ? 'border-[#e4e7ec] bg-white text-slate-700'
+                        : 'border-white/[0.06] bg-[#16181d] text-zinc-300'
                     }`}>
-                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-typing-dot-1" />
-                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-typing-dot-2" />
-                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-typing-dot-3" />
+                      <span className="absolute -left-2 bottom-0 w-2 h-3.5 pointer-events-none select-none z-10" aria-hidden="true">
+                        <svg viewBox="0 0 8 14" className={`h-3.5 w-2 ${isLight ? 'fill-white' : 'fill-[#16181d]'}`}>
+                          <path d="M8,0 C8,7 5,12 0,14 L8,14 Z" />
+                        </svg>
+                      </span>
+                      <span className={`w-2 h-2 rounded-full animate-typing-dot-1 ${isLight ? 'bg-amber-500' : 'bg-[#facc15]'}`} />
+                      <span className={`w-2 h-2 rounded-full animate-typing-dot-2 ${isLight ? 'bg-amber-500' : 'bg-[#facc15]'}`} />
+                      <span className={`w-2 h-2 rounded-full animate-typing-dot-3 ${isLight ? 'bg-amber-500' : 'bg-[#facc15]'}`} />
                     </div>
                   </div>
                 )}
@@ -8395,13 +8617,15 @@ export default function ChatConversation() {
                             }, 120)
                           }
                         }}
+                        onBlur={() => stopTyping(activeRoomId)}
                         onPaste={handlePaste}
                         onChange={(e) => {
                           const val = e.target.value
                           setInputText(val)
                           updateDraft(activeRoomId, val)
                           adjustTextareaHeight()
-                          if (val) sendTyping(activeRoomId)
+                          if (val.trim()) sendTyping(activeRoomId)
+                          else stopTyping(activeRoomId)
                         }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && !e.shiftKey) {
@@ -8422,6 +8646,7 @@ export default function ChatConversation() {
                         <button
                           type="button"
                           onClick={() => {
+                            stopTyping(activeRoomId)
                             setInputText('')
                             updateDraft(activeRoomId, '')
                             adjustTextareaHeight()

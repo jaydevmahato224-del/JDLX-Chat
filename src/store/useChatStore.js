@@ -527,6 +527,13 @@ const hasFreshConfirmation = (messages, optimistic, text, mediaUrl, myId) => {
 // cannot post the same text twice with two different idempotency keys.
 const inFlightSendKeys = new Map()
 
+// Clear peer typing indicator + its expiry timeout consistently everywhere
+// (disconnects, room switches, incoming messages, explicit stop broadcasts).
+const resetPeerTypingState = (get, set) => {
+  clearTimeout(get()._typingTimer)
+  set({ peerTyping: false, peerTypingUser: null, _typingTimer: null })
+}
+
 // The callee learns about a ringing call by polling /calls/incoming. A Supabase
 // broadcast from the backend wakes that poll immediately, so the phone rings as
 // soon as the offer row exists — the interval below is only the safety net for
@@ -1099,6 +1106,7 @@ export const useChatStore = create((set, get) => ({
   recoveryPromptNonce: 0,
   // Realtime (long-poll) state for the open room
   peerTyping: false,
+  peerTypingUser: null,
   peerOnline: false,
   // True once Supabase presence has reported the room peer; while connected,
   // presence is authoritative over the slower server heartbeat window.
@@ -1115,6 +1123,7 @@ export const useChatStore = create((set, get) => ({
   supabaseRoomChannel: null,
   supabaseUserChannel: null,
   _typingTimer: null,
+  _selfTypingStopTimer: null,
   _lastTypingSentAt: 0,
   notifications: [],
   unreadCount: 0,
@@ -1287,6 +1296,7 @@ export const useChatStore = create((set, get) => ({
       outgoingRequests: userChanged ? [] : get().outgoingRequests,
       pendingRequestsCount: userChanged ? 0 : get().pendingRequestsCount,
       peerTyping: userChanged ? false : get().peerTyping,
+      peerTypingUser: userChanged ? null : get().peerTypingUser,
       peerOnline: userChanged ? false : get().peerOnline,
       _peerPresenceKnown: userChanged ? false : get()._peerPresenceKnown,
       peerLastReadId: userChanged ? 0 : get().peerLastReadId,
@@ -1380,6 +1390,10 @@ export const useChatStore = create((set, get) => ({
       conversationsLoaded: false,
       conversationsError: null,
       peerTyping: false,
+      peerTypingUser: null,
+      _typingTimer: null,
+      _selfTypingStopTimer: null,
+      _lastTypingSentAt: 0,
       peerOnline: false,
       _peerPresenceKnown: false,
       peerLastReadId: 0,
@@ -2222,6 +2236,7 @@ export const useChatStore = create((set, get) => ({
         return { success: false, error: json?.message || json?.error || 'Could not leave the group' }
       }
       if (sameId(get().activeRoomId, roomId)) {
+        get().stopTyping(roomId)
         get().stopRealtime()
         set({
           activeRoomId: null,
@@ -2230,6 +2245,7 @@ export const useChatStore = create((set, get) => ({
           messages: [],
           messagesLoading: false,
           peerTyping: false,
+          peerTypingUser: null,
           peerOnline: false
         })
       }
@@ -2246,6 +2262,10 @@ export const useChatStore = create((set, get) => ({
   // 2. Select a Conversation Thread
   selectConversation: async (conv) => {
     if (!conv) return
+    const prevRoomId = get().activeRoomId
+    if (prevRoomId && !sameId(prevRoomId, conv.id)) {
+      get().stopTyping(prevRoomId)
+    }
     get().stopRealtime()
     const uid = get().chatUser?.id
     const savedDelivered = getStoredDeliveredId(uid, conv.id)
@@ -2269,6 +2289,7 @@ export const useChatStore = create((set, get) => ({
       messagesLoading: cachedMsgs.length === 0,
       messagesHasMore: rawCachedMsgs.length > 35,
       peerTyping: false,
+      peerTypingUser: null,
       peerOnline: Boolean(conv.contact_online || conv.other_user?.is_online),
       _peerPresenceKnown: false,
       peerLastReadId: 0,
@@ -2479,6 +2500,20 @@ export const useChatStore = create((set, get) => ({
         if (uid) {
           setCachedMessages(uid, targetRoomId, merged)
         }
+        // If incremental fetch brought in a new peer message (e.g. poll fallback), clear active typing dots
+        if (confirmedIds.length > 0 && get().peerTyping && sameId(get().activeRoomId, targetRoomId)) {
+          const prevConfirmedSet = new Set(confirmedIds)
+          const typingUser = get().peerTypingUser
+          const arrivedPeerMsg = decryptedMsgs.some((m) => (
+            m && typeof m.id === 'number' && m.id > 0 &&
+            !prevConfirmedSet.has(m.id) &&
+            !sameId(m.user_id, uid) &&
+            (!typingUser?.id || sameId(m.user_id, typingUser.id))
+          ))
+          if (arrivedPeerMsg) {
+            resetPeerTypingState(get, set)
+          }
+        }
         const savedDelivered = uid ? getStoredDeliveredId(uid, targetRoomId) : 0
         if (savedDelivered > (get().peerLastDeliveredId || 0)) {
           set({ peerLastDeliveredId: savedDelivered })
@@ -2632,6 +2667,7 @@ export const useChatStore = create((set, get) => ({
       realtimeAbort: controller,
       realtimeRoomId: roomId,
       peerTyping: false,
+      peerTypingUser: null,
       peerOnline: false,
       _peerPresenceKnown: false,
       peerLastReadId: 0,
@@ -2670,6 +2706,15 @@ export const useChatStore = create((set, get) => ({
             // Anyone who knows a room id can publish here, so ignore the
             // payload and fetch the authoritative message through the API.
             if (!payload || !payload.id) return
+            const preFetchMyId = get().chatUser?.id
+            const preFetchKnownIds = new Set(get().messages.map((m) => m?.id).filter((id) => id != null))
+            if (payload.user_id == null || !preFetchMyId || !sameId(payload.user_id, preFetchMyId)) {
+              const typingUser = get().peerTypingUser
+              const isGroupConv = Boolean(get().activeConversation?.is_group || get().activeConversation?.room_type === 'group')
+              if (!isGroupConv || !typingUser?.id || payload.user_id == null || sameId(payload.user_id, typingUser.id)) {
+                resetPeerTypingState(get, set)
+              }
+            }
             await get().fetchRoomMessages(roomId).catch(() => {})
             // Room-switch guard: fetchRoomMessages is async; if the user
             // switched rooms while it ran, get().messages belongs to the other
@@ -2680,6 +2725,15 @@ export const useChatStore = create((set, get) => ({
             const peerMsgs = get().messages.filter(
               (m) => m && m.id > 0 && !sameId(m.user_id, currentMyId)
             )
+            // Clear lingering typing state when an authoritative message from the typing peer arrives
+            const currentTypingUser = get().peerTypingUser
+            const isGroupAfterFetch = Boolean(get().activeConversation?.is_group || get().activeConversation?.room_type === 'group')
+            if (get().peerTyping && peerMsgs.some((m) => (
+              !preFetchKnownIds.has(m.id) &&
+              (!isGroupAfterFetch || !currentTypingUser?.id || sameId(m.user_id, currentTypingUser.id))
+            ))) {
+              resetPeerTypingState(get, set)
+            }
             const maxPeerMsgId = peerMsgs.length
               ? Math.max(...peerMsgs.map((m) => Number(m.id) || 0))
               : 0
@@ -2742,15 +2796,45 @@ export const useChatStore = create((set, get) => ({
           })
           .on('broadcast', { event: 'typing' }, ({ payload }) => {
             const currentMyId = get().chatUser?.id
-            const peerId = getConversationPeerId(get().activeConversation, currentMyId)
-            if (!payload || !peerId) return
-            if (!sameId(payload.user_id, peerId)) return
-            set({ peerTyping: Boolean(payload.is_typing) })
-            clearTimeout(get()._typingTimer)
-            if (payload.is_typing) {
-              const timer = setTimeout(() => set({ peerTyping: false }), 4000)
-              set({ _typingTimer: timer })
+            if (!payload || payload.user_id == null) return
+            if (currentMyId && sameId(payload.user_id, currentMyId)) return
+            if (payload.room_id != null && !sameId(payload.room_id, roomId)) return
+
+            const activeConv = get().activeConversation
+            const isGroupConv = Boolean(activeConv?.is_group || activeConv?.room_type === 'group')
+            const peerId = getConversationPeerId(activeConv, currentMyId)
+            if (!isGroupConv && (!peerId || !sameId(payload.user_id, peerId))) return
+
+            const isTyping = Boolean(payload.is_typing)
+            if (!isTyping) {
+              const typingUser = get().peerTypingUser
+              if (!isGroupConv || !typingUser?.id || sameId(typingUser.id, payload.user_id)) {
+                resetPeerTypingState(get, set)
+              }
+              return
             }
+
+            let senderName = ''
+            if (isGroupConv) {
+              const knownMsg = (get().messages || []).find((m) => m && sameId(m.user_id, payload.user_id) && m.sender_name)
+              const knownFriend = (get().friends || []).find((f) => sameId(f.friend_id ?? f.id, payload.user_id))
+              const rawHint = typeof payload.user_name === 'string' ? payload.user_name.trim().slice(0, 32) : ''
+              senderName = knownMsg?.sender_name || knownFriend?.name || rawHint || ''
+            } else {
+              senderName = activeConv?.contact_name || activeConv?.other_user?.name || ''
+            }
+
+            clearTimeout(get()._typingTimer)
+            const timer = setTimeout(() => {
+              if (sameId(get().realtimeRoomId, roomId) && get()._typingTimer === timer) {
+                set({ peerTyping: false, peerTypingUser: null, _typingTimer: null })
+              }
+            }, 4000)
+            set({
+              peerTyping: true,
+              peerTypingUser: { id: payload.user_id, name: senderName },
+              _typingTimer: timer
+            })
           })
           .on('broadcast', { event: 'read_receipt' }, ({ payload }) => {
             const currentMyId = get().chatUser?.id
@@ -3017,7 +3101,10 @@ export const useChatStore = create((set, get) => ({
   },
 
   stopRealtime: () => {
+    const activeRtRoom = get().realtimeRoomId
+    if (activeRtRoom) get().stopTyping(activeRtRoom)
     clearTimeout(get()._typingTimer)
+    clearTimeout(get()._selfTypingStopTimer)
     const presenceVisibilityHandler = get()._presenceVisibilityHandler
     if (presenceVisibilityHandler && typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', presenceVisibilityHandler)
@@ -3043,27 +3130,70 @@ export const useChatStore = create((set, get) => ({
       realtimeAbort: null,
       realtimeRoomId: null,
       peerTyping: false,
+      peerTypingUser: null,
+      _typingTimer: null,
+      _selfTypingStopTimer: null,
+      _lastTypingSentAt: 0,
       _peerPresenceKnown: false,
       supabaseRoomChannel: null,
       _presenceVisibilityHandler: null
     })
   },
 
+  stopTyping: (roomId) => {
+    clearTimeout(get()._selfTypingStopTimer)
+    const target = roomId || get().activeRoomId
+    const wasActive = Boolean(get()._lastTypingSentAt)
+    set({ _selfTypingStopTimer: null, _lastTypingSentAt: 0 })
+
+    const token = get().chatToken
+    if (!token || !target || !wasActive) return
+    const roomChannel = get().supabaseRoomChannel
+    if (roomChannel && sameId(get().realtimeRoomId, target)) {
+      roomChannel.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: {
+          user_id: get().chatUser?.id,
+          room_id: target,
+          is_typing: false
+        }
+      }).catch(() => {})
+    }
+  },
+
   sendTyping: (roomId) => {
     const token = get().chatToken
     const target = roomId || get().activeRoomId
     if (!token || !target) return
-    const now = Date.now()
-    if (now - (get()._lastTypingSentAt || 0) < 2000) return
-    set({ _lastTypingSentAt: now })
 
-    // Instant Supabase WebSocket broadcast (<10ms)
+    // Keep extending the idle stop timer even while the outbound socket
+    // heartbeat is throttled so continuous typing stays smooth on the peer's UI.
+    clearTimeout(get()._selfTypingStopTimer)
+    const autoStopTimer = setTimeout(() => {
+      if (get()._selfTypingStopTimer === autoStopTimer) {
+        get().stopTyping(target)
+      }
+    }, 2600)
+    set({ _selfTypingStopTimer: autoStopTimer })
+
+    const now = Date.now()
+    if (now - (get()._lastTypingSentAt || 0) < 1500) return
+
+    // Instant Supabase WebSocket broadcast (<10ms); only advance throttle once channel exists
     const roomChannel = get().supabaseRoomChannel
-    if (roomChannel) {
+    if (roomChannel && sameId(get().realtimeRoomId, target)) {
+      set({ _lastTypingSentAt: now })
+      const me = get().chatUser
       roomChannel.send({
         type: 'broadcast',
         event: 'typing',
-        payload: { user_id: get().chatUser?.id, is_typing: true }
+        payload: {
+          user_id: me?.id,
+          room_id: target,
+          user_name: (me?.name || me?.username || '').slice(0, 32),
+          is_typing: true
+        }
       }).catch(() => {})
     }
 
@@ -3464,6 +3594,7 @@ export const useChatStore = create((set, get) => ({
       || existingBubble?._clientId
       || `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
     if (!existingTempId) {
+      get().stopTyping(targetRoomId)
       const optimisticMessage = {
         id: tempId,
         _clientId: clientMessageId,
