@@ -131,16 +131,21 @@ def _bytes_value(raw):
 @app.get("/health")
 @app.get("/api/health")
 def health():
+    db_ok = True
     try:
         conn = get_db()
         try:
             conn.execute("SELECT 1").fetchone()
         finally:
             conn.close()
-        return jsonify({"status": "ok", "service": "jdlx-chat"})
     except Exception as exc:
-        logger.error("Chat health check failed: %s", exc)
-        return jsonify({"status": "error", "service": "jdlx-chat"}), 503
+        logger.warning("Chat health check DB probe warning: %s", exc)
+        db_ok = False
+    return jsonify({
+        "status": "ok" if db_ok else "degraded",
+        "service": "jdlx-chat",
+        "database": "ok" if db_ok else "unreachable"
+    }), 200
 
 
 @app.get("/")

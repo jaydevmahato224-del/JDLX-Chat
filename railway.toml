@@ -6,10 +6,8 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.chat"
 
 [deploy]
-# 60s, not 300s: a DB stall that blocks every gunicorn thread makes /api/health
-# stop answering, and the platform only restarts the container once this
-# timeout expires. Waiting 5 minutes left the whole chat dead for 5 minutes.
+# 120s: give sufficient time for migrations and gunicorn startup to complete cleanly
 healthcheckPath = "/api/health"
-healthcheckTimeout = 60
+healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
