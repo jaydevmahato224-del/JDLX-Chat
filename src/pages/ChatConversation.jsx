@@ -3968,16 +3968,18 @@ export default function ChatConversation() {
   }
 
   const handleRetryMessage = async (failedMsg) => {
-    if (!failedMsg || !activeRoomId) return
+    const targetRoomId = failedMsg?.room_id || activeRoomId
+    if (!failedMsg || !targetRoomId) return
     // Keep the same optimistic bubble (and its _clientId) so the backend
     // deduplicates a send that actually committed before the timeout/500.
     await sendRoomMessage(
-      activeRoomId,
+      targetRoomId,
       failedMsg.message,
       failedMsg.media_url,
       failedMsg.message_type,
       failedMsg.reply_to_id,
-      failedMsg.id
+      failedMsg.id,
+      failedMsg._clientId
     )
   }
 
@@ -4026,6 +4028,12 @@ export default function ChatConversation() {
 
   // Pass the room explicitly for batch uploads so switching conversations
   // mid-upload cannot redirect later files into the new room.
+  // Size-aware upload deadline (min 60s, max 10m, assumes >= ~64 KB/s).
+  const getUploadTimeoutMs = (file) => Math.min(
+    10 * 60 * 1000,
+    Math.max(60 * 1000, Math.ceil(((file && file.size) || 0) / (64 * 1024)) * 1000 + 30000)
+  )
+
   const uploadChatMedia = async (file, kind, customCaption = null, targetRoomId = null) => {
     if (isBlockedConversation) {
       toast.error('Unblock this user to send attachments')
@@ -4048,7 +4056,8 @@ export default function ChatConversation() {
       const res = await apiFetch('/chat/upload', {
         method: 'POST',
         headers: { Authorization: `Bearer ${chatToken}` },
-        body: formData
+        body: formData,
+        timeoutMs: getUploadTimeoutMs(file)
       })
       const json = await res.json()
       if (res.ok && json.success && json.data?.url) {
@@ -4073,8 +4082,8 @@ export default function ChatConversation() {
       }
       toast.error(json.message || 'Upload failed')
       return false
-    } catch {
-      toast.error('Network error during upload')
+    } catch (err) {
+      toast.error(err?.name === 'AbortError' ? 'Upload timed out. Please try again.' : 'Network error during upload')
       return false
     } finally {
       setUploadingImage(false)
@@ -4113,12 +4122,7 @@ export default function ChatConversation() {
 
       // Hard deadline per upload attempt. Without it a stalled connection left
       // the bubble "uploading" forever (the only way out was manual cancel).
-      // Size-aware budget assumes at least ~64 KB/s on a working mobile link.
-      const uploadTimeoutMs = Math.min(
-        10 * 60 * 1000,
-        Math.max(60 * 1000, Math.ceil((file.size || 0) / (64 * 1024)) * 1000 + 30000)
-      )
-      xhr.timeout = uploadTimeoutMs
+      xhr.timeout = getUploadTimeoutMs(file)
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {

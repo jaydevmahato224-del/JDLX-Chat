@@ -2663,6 +2663,7 @@ export const useChatStore = create((set, get) => ({
 
     get().stopRealtime()
     const controller = new AbortController()
+    let roomWsSubscribed = false
     set({
       realtimeAbort: controller,
       realtimeRoomId: roomId,
@@ -2707,8 +2708,14 @@ export const useChatStore = create((set, get) => ({
             // payload and fetch the authoritative message through the API.
             if (!payload || !payload.id) return
             const preFetchMyId = get().chatUser?.id
+            const payloadIdNum = Number(payload.id)
+            const isFromSelf = payload.user_id != null && preFetchMyId && sameId(payload.user_id, preFetchMyId)
+            const alreadyConfirmed = Number.isFinite(payloadIdNum) && payloadIdNum > 0
+              && get().messages.some((m) => m && sameId(m.id, payloadIdNum))
+            // Skip redundant self-echo refetches when sendRoomMessage already placed the confirmed row in state.
+            if (isFromSelf && alreadyConfirmed) return
             const preFetchKnownIds = new Set(get().messages.map((m) => m?.id).filter((id) => id != null))
-            if (payload.user_id == null || !preFetchMyId || !sameId(payload.user_id, preFetchMyId)) {
+            if (!isFromSelf) {
               const typingUser = get().peerTypingUser
               const isGroupConv = Boolean(get().activeConversation?.is_group || get().activeConversation?.room_type === 'group')
               if (!isGroupConv || !typingUser?.id || payload.user_id == null || sameId(payload.user_id, typingUser.id)) {
@@ -2928,6 +2935,7 @@ export const useChatStore = create((set, get) => ({
             }
           })
           .subscribe((status) => {
+            roomWsSubscribed = (status === 'SUBSCRIBED')
             if (status === 'SUBSCRIBED' && myId) {
               realtimePrivateFailures = 0
               if (typeof document === 'undefined' || document.visibilityState === 'visible') {
@@ -3089,8 +3097,9 @@ export const useChatStore = create((set, get) => ({
             }
             get().fetchConversations()
           }
-          // Brief pause before next cycle releases connection pool and worker slots
-          await wait(350)
+          // Brief pause before next cycle releases connection pool and worker slots;
+          // relax cadence cleanly while Supabase WebSocket is actively delivering events.
+          await wait(roomWsSubscribed ? 4000 : 350)
         } catch (err) {
           if (controller.signal.aborted) return
           await wait(2000)
@@ -3552,7 +3561,7 @@ export const useChatStore = create((set, get) => ({
     if (!existingTempId) {
       const now = Date.now()
       for (const [key, at] of inFlightSendKeys) {
-        if (now - at > 60000) inFlightSendKeys.delete(key)
+        if (now - at > 90000) inFlightSendKeys.delete(key)
       }
       if (inFlightSendKeys.has(sendKey)) return { success: true, deduped: true }
       inFlightSendKeys.set(sendKey, now)
@@ -3628,8 +3637,9 @@ export const useChatStore = create((set, get) => ({
       }))
     }
 
+    const SEND_MESSAGE_TIMEOUT_MS = 20000
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 35000)
+    const timeoutId = setTimeout(() => controller.abort(), SEND_MESSAGE_TIMEOUT_MS)
 
     try {
       const activeConv = (
@@ -3786,7 +3796,7 @@ export const useChatStore = create((set, get) => ({
       clearTimeout(timeoutId)
       const isTimeout = err?.name === 'AbortError'
       const failReason = isTimeout
-        ? 'Timed out after 35s'
+        ? `Timed out after ${Math.round(SEND_MESSAGE_TIMEOUT_MS / 1000)}s`
         : (err?.httpStatus ? `HTTP ${err.httpStatus}: ${err.message}` : (err?.message || 'Network error'))
       console.warn('[chat] message send failed', {
         roomId: targetRoomId,
@@ -3808,12 +3818,12 @@ export const useChatStore = create((set, get) => ({
         return { success: true }
       }
 
-      // One automatic retry for a timeout/network failure, reusing the same
-      // idempotency key. A request stalled on one worker/DB stream is often
-      // served instantly by another, and the backend dedupes on the client key
-      // so a message that did commit can never be duplicated.
-      if (!existingTempId && !err?.httpStatus) {
-        console.warn('[chat] retrying message send once after transport failure')
+      // One automatic retry for a timeout, transport failure, or transient gateway/server
+      // error, reusing the same idempotency key so a committed message is never duplicated.
+      const isTransientRetryable = !err?.httpStatus || [408, 429, 500, 502, 503, 504].includes(err.httpStatus)
+      if (!existingTempId && isTransientRetryable) {
+        console.warn('[chat] retrying message send once after transient failure', failReason)
+        if (err?.httpStatus) await wait(300)
         return get().sendRoomMessage(
           targetRoomId, text, mediaUrl, messageType, replyToId, tempId, clientMessageId
         )
@@ -3928,6 +3938,7 @@ export const useChatStore = create((set, get) => ({
     if (get().socialRealtimeAbort) return
 
     const controller = new AbortController()
+    let userWsSubscribed = false
     set({ socialRealtimeAbort: controller })
 
     // Supabase Realtime User Channel for instant background alerts (<50ms)
@@ -4063,6 +4074,7 @@ export const useChatStore = create((set, get) => ({
             get().fetchConversations()
           })
           .subscribe((status) => {
+            userWsSubscribed = (status === 'SUBSCRIBED')
             if (status === 'SUBSCRIBED') {
               realtimePrivateFailures = 0
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -4121,7 +4133,7 @@ export const useChatStore = create((set, get) => ({
               get().fetchRoomMessages(get().activeRoomId)
             }
           }
-          await wait(500)
+          await wait(userWsSubscribed ? 6000 : 500)
         } catch (err) {
           if (controller.signal.aborted) return
           await wait(2000)

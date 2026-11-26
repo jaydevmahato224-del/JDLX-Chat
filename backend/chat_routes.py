@@ -363,6 +363,7 @@ def check_chat_rate_limits(entries, commit=True):
 
     now = int(time.time())
     allowed = True
+    conn = None
     try:
         conn = get_db()
         try:
@@ -384,8 +385,45 @@ def check_chat_rate_limits(entries, commit=True):
         finally:
             conn.close()
     except Exception as e:
+        # Clean up any partial write / poisoned stream on the request-scoped DB
+        # so failing open here never breaks the caller's subsequent write (e.g.
+        # _send_room_message_impl using commit=False).
+        if conn is not None and (
+            not commit
+            or getattr(conn, "_dirty", False)
+            or getattr(conn, "_discarded", False)
+        ):
+            reset_request_db()
         logger.warning("Chat rate limiter unavailable, allowing request: %s", e)
         return True
+
+
+_MEM_RATE_LOCK = threading.Lock()
+_MEM_RATE_BUCKETS = {}
+
+
+def _check_memory_rate_limit(scope, key, max_requests=120, window_seconds=60):
+    """Per-worker in-memory fixed-window throttle for high-frequency read polls.
+
+    Avoids consuming SQLite's single writer lock on every routine poll request
+    while preserving per-user abuse protection and DISABLE_RATE_LIMIT.
+    """
+    if os.environ.get("DISABLE_RATE_LIMIT") == "1":
+        return True
+    now = int(time.time())
+    bucket_key = f"{scope}:{key}"
+    with _MEM_RATE_LOCK:
+        if len(_MEM_RATE_BUCKETS) > 4096:
+            expired = [k for k, (start, _) in _MEM_RATE_BUCKETS.items() if now - start >= window_seconds]
+            for k in expired:
+                _MEM_RATE_BUCKETS.pop(k, None)
+        start, count = _MEM_RATE_BUCKETS.get(bucket_key, (now, 0))
+        if now - start >= window_seconds:
+            start, count = now, 1
+        else:
+            count += 1
+        _MEM_RATE_BUCKETS[bucket_key] = (start, count)
+        return count <= max_requests
 
 
 def check_chat_rate_limit(scope, key, max_requests=25, window_seconds=60):
@@ -3398,14 +3436,9 @@ def send_room_message(room_id):
         if not client_message_id or not is_transient_db_error(exc):
             raise
         logger.warning("Retrying message send after transient DB error: %s", exc)
-        # The request-scoped wrapper may hold the dead/dirty stream. Hard-close
-        # it and drop the cache so the retry opens a brand-new connection.
-        try:
-            stale = g.pop('_jdlx_request_db', None)
-            if stale is not None:
-                stale._hard_close()
-        except Exception:
-            pass
+        # Drop and close the stale/poisoned request-scoped DB wrapper so the
+        # idempotent retry opens a fresh connection.
+        reset_request_db()
         g._jdlx_send_retried = True
         return _send_room_message_impl(room_id)
 
@@ -3539,6 +3572,9 @@ def _send_room_message_impl(room_id):
             # below, saving one Turso round-trip on every send.
             if not check_chat_rate_limits(budgets, commit=False):
                 return error_response("You are sending messages too fast. Please slow down.", 429)
+            # Re-bind conn/cursor in case the limiter had to reset a dead stream.
+            conn = get_db()
+            cursor = conn.cursor()
 
         is_encrypted = message_text.startswith(('enc:v1:', 'enc:v2:'))
         if is_encrypted:
@@ -3732,6 +3768,47 @@ def _send_room_message_impl(room_id):
 # FRIEND REQUESTS & SOCIAL COMMUNITY ENDPOINTS
 # -----------------------------------------------------------------------------
 
+def _chat_social_revision(cursor, my_id):
+    """Lightweight fingerprint check (2 queries) used between long-poll sleeps."""
+    cursor.execute(
+        """SELECT id, status, updated_at FROM official_chat_friend_requests
+           WHERE sender_id = ? OR receiver_id = ?""",
+        (my_id, my_id)
+    )
+    signature = "|".join(
+        f"{r['id']}:{r['status']}:{r['updated_at']}" for r in cursor.fetchall()
+    )
+
+    # Realtime inbox awareness: track newest incoming message across user's rooms
+    # so messages trigger instant delivery even when user is browsing the conversation list.
+    # Direct rooms are owned through user_id/user_two_id; group rooms through
+    # official_chat_group_members. Without the group arm, a group message never
+    # bumped this revision, so the inbox long-poll stayed asleep for groups.
+    cursor.execute(
+        """SELECT MAX(m.id) AS max_id, COUNT(m.id) AS unread
+           FROM official_chat_messages m
+           JOIN official_chat_rooms r ON m.room_id = r.id
+           WHERE (
+                   (COALESCE(r.room_type, 'direct') != 'group' AND (r.user_id = ? OR r.user_two_id = ?))
+                   OR (r.room_type = 'group' AND EXISTS (
+                         SELECT 1 FROM official_chat_group_members gm
+                         WHERE gm.room_id = r.id AND gm.user_id = ?
+                       ))
+                 )
+             AND (m.user_id != ? OR m.sender_type != 'user') AND m.is_read = 0""",
+        (my_id, my_id, my_id, my_id)
+    )
+    msg_state = cursor.fetchone()
+    max_msg_id = (msg_state['max_id'] if msg_state else 0) or 0
+    unread_msgs = (msg_state['unread'] if msg_state else 0) or 0
+    signature += f"|msg:{max_msg_id}:{unread_msgs}"
+    return (
+        max_msg_id,
+        unread_msgs,
+        hashlib.sha1(signature.encode()).hexdigest()[:16],
+    )
+
+
 def _chat_social_state(cursor, my_id):
     """Snapshot of friends + friend requests, with a revision fingerprint.
 
@@ -3770,38 +3847,7 @@ def _chat_social_state(cursor, my_id):
     )
     outgoing = [dict(r) for r in cursor.fetchall()]
 
-    cursor.execute(
-        """SELECT id, status, updated_at FROM official_chat_friend_requests
-           WHERE sender_id = ? OR receiver_id = ?""",
-        (my_id, my_id)
-    )
-    signature = "|".join(
-        f"{r['id']}:{r['status']}:{r['updated_at']}" for r in cursor.fetchall()
-    )
-
-    # Realtime inbox awareness: track newest incoming message across user's rooms
-    # so messages trigger instant delivery even when user is browsing the conversation list.
-    # Direct rooms are owned through user_id/user_two_id; group rooms through
-    # official_chat_group_members. Without the group arm, a group message never
-    # bumped this revision, so the inbox long-poll stayed asleep for groups.
-    cursor.execute(
-        """SELECT MAX(m.id) AS max_id, COUNT(m.id) AS unread
-           FROM official_chat_messages m
-           JOIN official_chat_rooms r ON m.room_id = r.id
-           WHERE (
-                   (COALESCE(r.room_type, 'direct') != 'group' AND (r.user_id = ? OR r.user_two_id = ?))
-                   OR (r.room_type = 'group' AND EXISTS (
-                         SELECT 1 FROM official_chat_group_members gm
-                         WHERE gm.room_id = r.id AND gm.user_id = ?
-                       ))
-                 )
-             AND (m.user_id != ? OR m.sender_type != 'user') AND m.is_read = 0""",
-        (my_id, my_id, my_id, my_id)
-    )
-    msg_state = cursor.fetchone()
-    max_msg_id = (msg_state['max_id'] if msg_state else 0) or 0
-    unread_msgs = (msg_state['unread'] if msg_state else 0) or 0
-    signature += f"|msg:{max_msg_id}:{unread_msgs}"
+    max_msg_id, unread_msgs, revision = _chat_social_revision(cursor, my_id)
 
     return {
         'friends': friends,
@@ -3810,7 +3856,7 @@ def _chat_social_state(cursor, my_id):
         'pending_count': len(incoming),
         'unread_messages': unread_msgs,
         'latest_message_id': max_msg_id,
-        'revision': hashlib.sha1(signature.encode()).hexdigest()[:16],
+        'revision': revision,
     }
 
 
@@ -3825,7 +3871,7 @@ def chat_social_events():
     learned about a request on the next 30-second list refresh.
     """
     my_id = request.chat_user['user_id']
-    if not check_chat_rate_limit("social_events", f"user_{my_id}", max_requests=120, window_seconds=60):
+    if not _check_memory_rate_limit("social_events", f"user_{my_id}", max_requests=120, window_seconds=60):
         return error_response("Too many realtime checks. Please slow down.", 429)
 
     since = (request.args.get('since') or '').strip()
@@ -3838,14 +3884,24 @@ def chat_social_events():
     conn = get_db()
     try:
         cursor = conn.cursor()
+        initial_state = None
         while True:
-            state = _chat_social_state(cursor, my_id)
-            if not since or state['revision'] != since:
-                state['server_time'] = int(time.time())
-                return success_response(state, "Social state retrieved")
+            if initial_state is None:
+                initial_state = _chat_social_state(cursor, my_id)
+                revision = initial_state['revision']
+                if not since or revision != since:
+                    initial_state['server_time'] = int(time.time())
+                    return success_response(initial_state, "Social state retrieved")
+            else:
+                _, _, revision = _chat_social_revision(cursor, my_id)
+                if revision != since:
+                    state = _chat_social_state(cursor, my_id)
+                    state['server_time'] = int(time.time())
+                    return success_response(state, "Social state retrieved")
+
             if time.time() >= deadline:
-                state['server_time'] = int(time.time())
-                return success_response(state, "No social changes")
+                initial_state['server_time'] = int(time.time())
+                return success_response(initial_state, "No social changes")
             # Same as the room long-poll: never sleep while holding a pooled
             # connection, or a handful of idle clients starve every slot.
             release = getattr(conn, 'release', None)

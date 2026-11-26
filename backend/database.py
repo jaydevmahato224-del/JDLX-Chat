@@ -1,12 +1,16 @@
+import base64
 import datetime
 import json
 import logging
+import math
 import queue
 import socket
 import sqlite3
 import threading
 import os
 import time
+import requests
+from requests.adapters import HTTPAdapter
 from dotenv import load_dotenv
 
 # Prefer IPv4 over broken/unreachable IPv6/NAT64 routes.
@@ -123,6 +127,14 @@ _TRANSIENT_CONNECTION_MARKERS = (
     "recv error",
     "io error",
     "timed out",
+    "timeout",
+    "baton",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "remote end closed",
+    "protocolerror",
+    "chunkedencodingerror",
     "database is locked",
     "database busy",
     "databasebusy",
@@ -173,6 +185,428 @@ def _is_transient_connection_error(error):
     if any(marker in text for marker in _NON_TRANSIENT_ERROR_MARKERS):
         return False
     return any(marker in text for marker in _TRANSIENT_CONNECTION_MARKERS)
+
+
+# ------------------------------------------------------------------------------
+# Pure-Python Turso Hrana v2 HTTP client (requests.Session + keep-alive TLS).
+#
+# Replaces libsql_experimental for remote Turso connections. libsql_experimental
+# holds the Python GIL across network I/O and has no socket timeout, so a slow
+# or stalled Turso response froze EVERY request thread (even GET /health) in the
+# gunicorn worker process. requests/urllib3 releases the GIL on every socket
+# operation and enforces explicit (connect, read) timeouts.
+# ------------------------------------------------------------------------------
+_TURSO_CONNECT_TIMEOUT = float(os.environ.get("TURSO_CONNECT_TIMEOUT_S", "5"))
+_TURSO_READ_TIMEOUT = float(os.environ.get("TURSO_READ_TIMEOUT_S", "12"))
+_TURSO_CLOSE_TIMEOUT = (2.0, 3.0)
+_TURSO_SESSION_LOCAL = threading.local()
+_READ_SQL_KEYWORDS = ("SELECT", "PRAGMA", "EXPLAIN", "VALUES", "VACUUM")
+_STREAM_GONE_MARKERS = (
+    "stream not found",
+    "stream expired",
+    "stream has been closed",
+    "baton",
+    "inactive stream",
+    "inactivestreamid",
+    "was rolled back",
+    "idle for too long",
+)
+
+
+def _get_turso_http_session():
+    """Return a thread-local keep-alive requests.Session for Turso HTTP."""
+    session = getattr(_TURSO_SESSION_LOCAL, "session", None)
+    if session is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _TURSO_SESSION_LOCAL.session = session
+    return session
+
+
+def _normalize_turso_http_url(url):
+    """Convert libsql:// or ws(s):// Turso URLs to HTTP(S) base URLs."""
+    raw = (url or "").strip().rstrip("/")
+    if raw.startswith("libsql://"):
+        raw = "https://" + raw[len("libsql://"):]
+    elif raw.startswith("wss://"):
+        raw = "https://" + raw[len("wss://"):]
+    elif raw.startswith("ws://"):
+        raw = "http://" + raw[len("ws://"):]
+    elif raw and "://" not in raw:
+        raw = "https://" + raw
+    return raw
+
+
+def _leading_sql_keyword(sql):
+    """Return the first uppercase SQL keyword after skipping whitespace/comments."""
+    s = (sql or "").lstrip()
+    while s:
+        if s.startswith("--"):
+            nl = s.find("\n")
+            s = "" if nl == -1 else s[nl + 1:].lstrip()
+        elif s.startswith("/*"):
+            end = s.find("*/")
+            s = "" if end == -1 else s[end + 2:].lstrip()
+        else:
+            break
+    if not s:
+        return ""
+    return s.split(None, 1)[0].rstrip(";(").upper()
+
+
+def _encode_hrana_arg(val):
+    """Encode a Python DB-API parameter as a Hrana v2 JSON Value."""
+    if val is None:
+        return {"type": "null"}
+    if isinstance(val, bool):
+        return {"type": "integer", "value": "1" if val else "0"}
+    if isinstance(val, int):
+        return {"type": "integer", "value": str(val)}
+    if isinstance(val, float):
+        if math.isnan(val) or math.isinf(val):
+            return {"type": "null"}
+        return {"type": "float", "value": val}
+    if isinstance(val, (bytes, bytearray, memoryview)):
+        return {"type": "blob", "base64": base64.b64encode(bytes(val)).decode("ascii")}
+    if isinstance(val, (datetime.datetime, datetime.date)):
+        text = val.isoformat(" ") if isinstance(val, datetime.datetime) else val.isoformat()
+        return {"type": "text", "value": text}
+    return {"type": "text", "value": str(val)}
+
+
+def _decode_hrana_value(cell):
+    """Decode a Hrana v2 JSON Value back to native Python types."""
+    if not cell or not isinstance(cell, dict):
+        return None
+    vtype = cell.get("type")
+    if vtype == "null" or vtype is None:
+        return None
+    if vtype == "integer":
+        return int(cell["value"])
+    if vtype == "float":
+        return float(cell["value"])
+    if vtype == "text":
+        return cell.get("value", "")
+    if vtype == "blob":
+        return base64.b64decode(cell.get("base64", ""))
+    return cell.get("value")
+
+
+def _raise_hrana_error(err_obj):
+    """Raise sqlite3.IntegrityError or sqlite3.OperationalError for a Hrana error."""
+    err = err_obj or {}
+    code = str(err.get("code") or "").strip()
+    msg = str(err.get("message") or err or "Hrana statement error").strip()
+    full = f"Hrana {code}: {msg}" if code else f"Hrana: {msg}"
+    if "constraint" in full.lower():
+        raise sqlite3.IntegrityError(full)
+    raise sqlite3.OperationalError(full)
+
+
+class TursoHttpCursor:
+    """DB-API 2.0 cursor backed by Turso's Hrana /v2/pipeline HTTP endpoint."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.description = None
+        self.rowcount = -1
+        self.lastrowid = None
+        self.arraysize = 1
+        self._rows = []
+        self._row_idx = 0
+
+    def _reset_rows(self):
+        self.description = None
+        self.rowcount = -1
+        self._rows = []
+        self._row_idx = 0
+
+    def execute(self, sql, parameters=()):
+        if isinstance(parameters, list):
+            parameters = tuple(parameters)
+        self._conn._execute_stmt(sql, parameters, self)
+        return self
+
+    def executemany(self, sql, seq_of_parameters):
+        params_list = [tuple(p) if isinstance(p, list) else p for p in seq_of_parameters]
+        self._conn._executemany_stmt(sql, params_list, self)
+        return self
+
+    def fetchone(self):
+        if self._row_idx < len(self._rows):
+            row = self._rows[self._row_idx]
+            self._row_idx += 1
+            return row
+        return None
+
+    def fetchmany(self, size=None):
+        n = self.arraysize if size is None else size
+        if n <= 0:
+            return []
+        end = self._row_idx + n
+        rows = self._rows[self._row_idx:end]
+        self._row_idx = min(end, len(self._rows))
+        return list(rows)
+
+    def fetchall(self):
+        rows = self._rows[self._row_idx:]
+        self._row_idx = len(self._rows)
+        return list(rows)
+
+    def close(self):
+        self._rows = []
+        self._row_idx = 0
+
+    def __iter__(self):
+        while True:
+            row = self.fetchone()
+            if row is None:
+                break
+            yield row
+
+
+class TursoHttpConnection:
+    """GIL-free remote DB connection speaking Turso Hrana HTTP /v2/pipeline."""
+
+    def __init__(self, url, auth_token=None, timeout=None):
+        self._initial_base_url = _normalize_turso_http_url(url)
+        self._base_url = self._initial_base_url
+        self._auth_token = auth_token or ""
+        self._timeout = timeout or (_TURSO_CONNECT_TIMEOUT, _TURSO_READ_TIMEOUT)
+        self._baton = None
+        self._in_tx = False
+        self._closed = False
+        self.row_factory = None
+
+    def _invalidate_stream(self):
+        self._baton = None
+        self._in_tx = False
+        self._base_url = self._initial_base_url
+
+    def _post_pipeline(self, requests_list, timeout=None):
+        endpoint = f"{self._base_url}/v2/pipeline"
+        payload = {"baton": self._baton, "requests": requests_list}
+        headers = {
+            "Authorization": f"Bearer {self._auth_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        try:
+            resp = _get_turso_http_session().post(
+                endpoint,
+                json=payload,
+                headers=headers,
+                timeout=timeout or self._timeout,
+            )
+        except requests.exceptions.Timeout as exc:
+            raise TimeoutError(f"Turso HTTP request timed out: {exc}") from exc
+        except requests.exceptions.RequestException as exc:
+            raise ConnectionError(f"Turso HTTP error: {exc}") from exc
+
+        if resp.status_code in (401, 403):
+            raise RuntimeError(
+                f"Turso HTTP status={resp.status_code}: Unauthorized {resp.text[:250]}"
+            )
+        if resp.status_code == 404:
+            self._invalidate_stream()
+            raise ConnectionError(
+                f"Turso HTTP status=404: stream not found ({resp.text[:200]})"
+            )
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise ConnectionError(
+                f"Turso HTTP status={resp.status_code}: {resp.text[:250]}"
+            )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"Turso HTTP status={resp.status_code}: {resp.text[:250]}"
+            )
+
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise ConnectionError(f"Turso HTTP returned invalid JSON: {exc}") from exc
+
+        next_base = data.get("base_url")
+        if next_base:
+            self._base_url = _normalize_turso_http_url(next_base)
+        next_baton = data.get("baton")
+        self._baton = next_baton
+        if next_baton is None:
+            self._base_url = self._initial_base_url
+            self._in_tx = False
+        return data.get("results") or []
+
+    def _pipeline(self, requests_list, timeout=None):
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        return self._post_pipeline(requests_list, timeout=timeout)
+
+    def _handle_item_error(self, item):
+        err_obj = item.get("error") or {}
+        text = f"{err_obj.get('code') or ''} {err_obj.get('message') or ''}".lower()
+        if any(m in text for m in _STREAM_GONE_MARKERS):
+            self._invalidate_stream()
+        _raise_hrana_error(err_obj)
+
+    def _apply_exec_result(self, cursor, item):
+        if item.get("type") == "error":
+            self._handle_item_error(item)
+        exec_res = (item.get("response") or {}).get("result") or {}
+        cols = exec_res.get("cols") or []
+        raw_rows = exec_res.get("rows") or []
+        cursor.description = (
+            tuple((c.get("name", ""), None, None, None, None, None, None) for c in cols)
+            if cols else None
+        )
+        cursor._rows = [
+            tuple(_decode_hrana_value(cell) for cell in row) for row in raw_rows
+        ]
+        cursor._row_idx = 0
+        affected = exec_res.get("affected_row_count")
+        cursor.rowcount = -1 if cols else (int(affected) if affected is not None else -1)
+        rowid = exec_res.get("last_insert_rowid")
+        if rowid is not None:
+            cursor.lastrowid = int(rowid)
+
+    def _execute_stmt(self, sql, parameters, cursor):
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        kw = _leading_sql_keyword(sql)
+        if kw == "BEGIN":
+            cursor._reset_rows()
+            if self._in_tx:
+                return cursor
+            results = self._pipeline([{"type": "execute", "stmt": {"sql": sql}}])
+            if results and results[0].get("type") == "error":
+                self._handle_item_error(results[0])
+            self._in_tx = True
+            return cursor
+        if kw in ("COMMIT", "END"):
+            self.commit()
+            cursor._reset_rows()
+            return cursor
+        if kw == "ROLLBACK" and "TO " not in (sql or "").upper():
+            self.rollback()
+            cursor._reset_rows()
+            return cursor
+
+        stmt = {"sql": sql}
+        if parameters:
+            stmt["args"] = [_encode_hrana_arg(p) for p in parameters]
+
+        needs_tx = (kw not in _READ_SQL_KEYWORDS) and (kw != "ROLLBACK")
+        if needs_tx and not self._in_tx:
+            results = self._pipeline([
+                {"type": "execute", "stmt": {"sql": "BEGIN"}},
+                {"type": "execute", "stmt": stmt},
+            ])
+            if len(results) < 2:
+                if results and results[0].get("type") == "error":
+                    self._handle_item_error(results[0])
+                raise ConnectionError("Turso returned unexpected pipeline response")
+            if results[0].get("type") == "error":
+                self._handle_item_error(results[0])
+            self._in_tx = True
+            self._apply_exec_result(cursor, results[1])
+            return cursor
+
+        results = self._pipeline([{"type": "execute", "stmt": stmt}])
+        if not results:
+            raise ConnectionError("Turso returned unexpected empty response")
+        self._apply_exec_result(cursor, results[0])
+        return cursor
+
+    def _executemany_stmt(self, sql, params_list, cursor):
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        cursor._reset_rows()
+        if not params_list:
+            cursor.rowcount = 0
+            return cursor
+
+        total_affected = 0
+        chunk_size = 250
+        for start in range(0, len(params_list), chunk_size):
+            chunk = params_list[start:start + chunk_size]
+            reqs = []
+            added_begin = False
+            if not self._in_tx:
+                reqs.append({"type": "execute", "stmt": {"sql": "BEGIN"}})
+                added_begin = True
+            for params in chunk:
+                stmt = {"sql": sql}
+                if params:
+                    stmt["args"] = [_encode_hrana_arg(p) for p in params]
+                reqs.append({"type": "execute", "stmt": stmt})
+
+            results = self._pipeline(reqs)
+            offset = 0
+            if added_begin:
+                if not results:
+                    raise ConnectionError("Turso returned unexpected empty response")
+                if results[0].get("type") == "error":
+                    self._handle_item_error(results[0])
+                self._in_tx = True
+                offset = 1
+
+            for item in results[offset:]:
+                if item.get("type") == "error":
+                    self._handle_item_error(item)
+                exec_res = (item.get("response") or {}).get("result") or {}
+                affected = exec_res.get("affected_row_count")
+                if affected is not None:
+                    total_affected += int(affected)
+        cursor.rowcount = total_affected
+        return cursor
+
+    def cursor(self):
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        return TursoHttpCursor(self)
+
+    def execute(self, sql, parameters=()):
+        return self.cursor().execute(sql, parameters)
+
+    def commit(self):
+        if self._closed:
+            raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+        if not self._in_tx:
+            return
+        try:
+            results = self._pipeline([{"type": "execute", "stmt": {"sql": "COMMIT"}}])
+            if results and results[0].get("type") == "error":
+                self._handle_item_error(results[0])
+        finally:
+            self._in_tx = False
+
+    def rollback(self):
+        if self._closed:
+            return
+        if not self._in_tx:
+            return
+        try:
+            results = self._pipeline([{"type": "execute", "stmt": {"sql": "ROLLBACK"}}])
+            if results and results[0].get("type") == "error":
+                self._handle_item_error(results[0])
+        finally:
+            self._in_tx = False
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._baton:
+            reqs = []
+            if self._in_tx:
+                reqs.append({"type": "execute", "stmt": {"sql": "ROLLBACK"}})
+            reqs.append({"type": "close"})
+            try:
+                self._post_pipeline(reqs, timeout=_TURSO_CLOSE_TIMEOUT)
+            except Exception:
+                pass
+        self._invalidate_stream()
 
 
 class LibsqlCursorWrapper:
@@ -266,7 +700,7 @@ class LibsqlCursorWrapper:
             _raise_turso_config_error(e)
     def execute(self, sql, parameters=()):
         if isinstance(parameters, list): parameters = tuple(parameters)
-        is_read = sql.lstrip().upper().startswith(self._READ_ONLY_PREFIXES)
+        is_read = _leading_sql_keyword(sql) in self._READ_ONLY_PREFIXES
         self._run('execute', sql, parameters)
         if self._conn is not None and not is_read:
             self._conn._dirty = True
@@ -356,7 +790,11 @@ class LibsqlConnectionWrapper:
         self._dirty = False
         self._needs_quiesce = False
     def rollback(self):
-        self._conn.rollback()
+        try:
+            self._conn.rollback()
+        except Exception:
+            self._discarded = True
+            raise
         self._dirty = False
         self._needs_quiesce = False
     def close(self):
@@ -406,7 +844,7 @@ _POOL_IDLE_KEEP = int(os.environ.get("DB_POOL_IDLE_KEEP", "24"))
 # replaced. Short windows used to be painful because every request then opened
 # its own connection; the pool warmer keeps fresh connections ready, so
 # replacing an idle stream is cheap now.
-_POOL_MAX_IDLE_SECONDS = float(os.environ.get("DB_POOL_MAX_IDLE_SECONDS", "60"))
+_POOL_MAX_IDLE_SECONDS = float(os.environ.get("DB_POOL_MAX_IDLE_SECONDS", "25"))
 # Warm connections kept ready by the background warmer. A request that finds
 # the pool empty has to build a whole connection (DNS + TLS + Hrana) with no
 # timeout of its own, which is how a send could spend 43 of 44 seconds before
@@ -583,15 +1021,23 @@ def _destroy_raw_connection_async(conn):
 def _create_turso_connection():
     max_retries = 3
     for attempt in range(max_retries):
+        raw_conn = None
         try:
-            raw_conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+            raw_conn = TursoHttpConnection(TURSO_URL, auth_token=TURSO_TOKEN)
+            # Enable foreign key constraints once per stream (also verifies URL/token
+            # and acquires a server baton before entering the pool).
+            raw_conn.execute("PRAGMA foreign_keys = ON")
             conn = LibsqlConnectionWrapper(raw_conn)
             conn.row_factory = LibsqlRow
-            # Enable foreign key constraints once per connection (was previously
-            # re-issued on every request, costing an extra network round-trip).
-            raw_conn.execute("PRAGMA foreign_keys = ON")
             return conn
         except Exception as e:
+            if raw_conn is not None:
+                try:
+                    raw_conn.close()
+                except Exception:
+                    pass
+            if _is_turso_auth_error(e):
+                _raise_turso_config_error(e)
             if attempt < max_retries - 1:
                 time.sleep(0.4 * (attempt + 1))
                 continue
@@ -643,14 +1089,7 @@ def _release_connection(conn):
     if overflow:
         _destroy_raw_connection_async(conn)
 
-if not FORCE_LOCAL_DB and TURSO_URL and TURSO_TOKEN:
-    try:
-        import libsql_experimental as libsql
-        USE_TURSO = True
-    except ImportError:
-        USE_TURSO = False
-else:
-    USE_TURSO = False
+USE_TURSO = bool(not FORCE_LOCAL_DB and TURSO_URL and TURSO_TOKEN)
 
 def _open_connection():
     """Returns a DB connection.
