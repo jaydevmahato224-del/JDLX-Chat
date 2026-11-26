@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useChatStore, CALL_RING_TIMEOUT_MS } from '../store/useChatStore'
 import toast from 'react-hot-toast'
 import { startIncomingRingtone, stopIncomingRingtone, unlockSounds } from '../utils/sounds'
+import { backdropMotionClass, modalMotionClass, useAnimatedPresence } from '../hooks/useAnimatedPresence'
 
 export default function IncomingCallModal() {
   const {
@@ -83,29 +84,36 @@ export default function IncomingCallModal() {
     return () => stopIncomingRingtone()
   }, [activeCall?.state, activeCall?.callerId, activeCall?.roomId, chatUser?.id])
 
-  if (!activeCall || activeCall.state !== 'ringing') return null
-  // The caller's own outgoing call also sits in 'ringing' state; they get the
-  // CallScreen ("Calling…") instead of an incoming-call prompt for themselves.
-  if (activeCall.callerId === chatUser?.id) return null
+  const isIncomingVisible = Boolean(
+    activeCall && activeCall.state === 'ringing' && activeCall.callerId !== chatUser?.id
+  )
+  const presence = useAnimatedPresence(
+    isIncomingVisible
+      ? {
+          peerName:
+            activeCall.peerName ||
+            (String(activeConversation?.id) === String(activeCall.roomId)
+              ? activeConversation?.other_user?.name || activeConversation?.other_user?.username
+              : null) ||
+            'Incoming Call'
+        }
+      : null,
+    190
+  )
 
-  // activeConversation may be a different chat (or absent) now that calls are
-  // detected globally; the ringing call carries the caller's name.
-  const displayName =
-    activeCall.peerName ||
-    (String(activeConversation?.id) === String(activeCall.roomId)
-      ? activeConversation?.other_user?.name || activeConversation?.other_user?.username
-      : null) ||
-    'Incoming Call'
+  if (!presence.mounted) return null
+
+  const displayName = presence.data?.peerName || 'Incoming Call'
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] animate-in fade-in duration-200"
+      className={`fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] ${backdropMotionClass(presence.isClosing)}`}
       role="dialog"
       aria-modal="true"
       aria-label="Incoming call"
     >
       <div
-        className="w-full max-w-md max-h-[94dvh] rounded-3xl sm:rounded-[32px] border border-white/10 bg-[#090a0c] shadow-2xl overflow-hidden flex flex-col"
+        className={`w-full max-w-md max-h-[94dvh] rounded-3xl sm:rounded-[32px] border border-white/10 bg-[#090a0c] shadow-2xl overflow-hidden flex flex-col ${modalMotionClass(presence.isClosing)}`}
       >
         {/* Header */}
         <div className="flex items-center justify-between gap-3 px-5 sm:px-6 py-4 sm:py-5 border-b border-white/5 shrink-0">

@@ -1652,8 +1652,40 @@ button,
   will-change: transform, opacity;
 }
 
+@keyframes viewerSlideDownExit {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+}
+
+.animate-viewer-header-exit {
+  animation: viewerSlideDownExit 0.18s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: transform, opacity;
+}
+
 .animate-viewer-footer {
   animation: viewerSlideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes viewerSlideUpExit {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+.animate-viewer-footer-exit {
+  animation: viewerSlideUpExit 0.18s cubic-bezier(0.32, 0.72, 0, 1) forwards;
   will-change: transform, opacity;
 }
 
@@ -1825,45 +1857,128 @@ html, body {
    LUXURY CHAT ANIMATION SYSTEM (Telegram / iOS Caliber Mobile & Desktop Physics)
    ============================================================================== */
 
-/* 1. Mobile Bottom Sheet Spring-Up */
+/* 1. Mobile Bottom Sheet Spring-Up & Slide-Down Exit */
 @keyframes sheetSpringUp {
   0% {
     opacity: 0;
-    transform: translateY(100%);
+    transform: translate3d(0, 100%, 0);
   }
   70% {
     opacity: 1;
-    transform: translateY(-4px);
+    transform: translate3d(0, -4px, 0);
   }
   100% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
-.animate-sheet-spring-up {
-  animation: sheetSpringUp 0.34s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+@keyframes sheetSlideDown {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 100%, 0);
+  }
+}
+
+@utility animate-sheet-spring-up {
+  animation: sheetSpringUp 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
   will-change: transform, opacity;
 }
 
-/* 2. Desktop Side Drawer Slide-Right */
+@utility animate-sheet-exit-down {
+  animation: sheetSlideDown 0.2s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 2. Desktop Side Drawer Slide-Right & Exit */
 @keyframes drawerSlideRight {
   0% {
     opacity: 0;
-    transform: translateX(100%);
+    transform: translate3d(100%, 0, 0);
   }
   100% {
     opacity: 1;
-    transform: translateX(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
-.animate-drawer-spring-right {
-  animation: drawerSlideRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+@keyframes drawerSlideRightExit {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+@utility animate-drawer-spring-right {
+  animation: drawerSlideRight 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
   will-change: transform, opacity;
 }
 
-/* 3. Popover / Dropdown Menu Spring Scale */
+@utility animate-drawer-exit-right {
+  animation: drawerSlideRightExit 0.2s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 2b. Backdrop Fade Enter & Exit + Centered Modal Enter & Exit */
+@keyframes backdropFadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes backdropFadeOut {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes modalZoomIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.94) translate3d(0, 10px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+  }
+}
+
+@keyframes modalZoomOut {
+  0% {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.94) translate3d(0, 8px, 0);
+  }
+}
+
+@utility animate-backdrop-enter {
+  animation: backdropFadeIn 0.2s ease-out both;
+}
+
+@utility animate-backdrop-exit {
+  animation: backdropFadeOut 0.19s ease-in forwards;
+}
+
+@utility animate-modal-enter {
+  animation: modalZoomIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+@utility animate-modal-exit {
+  animation: modalZoomOut 0.18s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 3. Popover / Dropdown Menu Spring Scale & Exit */
 @keyframes popoverSpringScale {
   0% {
     opacity: 0;
@@ -1878,10 +1993,40 @@ html, body {
   }
 }
 
-.animate-popover-spring {
-  animation: popoverSpringScale 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+@keyframes popoverExitScale {
+  0% {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.92) translate3d(0, -4px, 0);
+  }
+}
+
+@utility animate-popover-spring {
+  animation: popoverSpringScale 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
   will-change: transform, opacity;
-  transform-origin: top right;
+}
+
+@utility animate-popover-exit {
+  animation: popoverExitScale 0.15s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* Mobile Conversation Page Slide-In / Slide-Out (native push/pop motion) */
+@media (max-width: 767px) {
+  .mobile-chat-pane {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    transform: translate3d(var(--mobile-chat-x, 0%), 0, 0);
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+  .mobile-chat-pane.mobile-chat-dragging {
+    transition: none;
+  }
 }
 
 /* 4. Fluid Sent & Received Message Bubble Entrances (tail-anchored spring physics) */

@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { ArrowDownLeft, ArrowUpRight, Loader2, Phone, PhoneMissed, RefreshCw, Video, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
+import { backdropMotionClass, sheetModalMotionClass, useAnimatedPresence } from '../hooks/useAnimatedPresence'
 
 function formatDuration(seconds) {
   const total = Math.max(0, Math.round(Number(seconds) || 0))
@@ -70,7 +71,9 @@ export default function CallHistorySheet() {
     return () => window.removeEventListener('keydown', onKey)
   }, [callHistoryOpen, closeCallHistory])
 
-  if (!callHistoryOpen) return null
+  const presence = useAnimatedPresence(callHistoryOpen, 200)
+
+  if (!presence.mounted) return null
 
   const openChat = (roomId) => {
     const conv = (conversations || []).find((c) => String(c.id) === String(roomId))
@@ -80,12 +83,12 @@ export default function CallHistorySheet() {
 
   return (
     <div
-      className="fixed inset-0 z-[90] flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center"
+      className={`fixed inset-0 z-[90] flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center ${backdropMotionClass(presence.isClosing)}`}
       onClick={closeCallHistory}
       role="presentation"
     >
       <div
-        className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-[#26262c] bg-[#111114] sm:rounded-3xl"
+        className={`flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-[#26262c] bg-[#111114] sm:rounded-3xl ${sheetModalMotionClass(presence.isClosing, 'sm')}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Call history"

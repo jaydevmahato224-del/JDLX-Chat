@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
 import { playRemoteCallAudio } from '../utils/callAudio'
 import { playSound, startOutgoingRingback, stopOutgoingRingback } from '../utils/sounds'
+import { backdropMotionClass, modalMotionClass, useAnimatedPresence } from '../hooks/useAnimatedPresence'
 
 export default function CallScreen() {
   const {
@@ -121,17 +122,11 @@ export default function CallScreen() {
     }
   }, [activeCall])
 
-  if (!activeCall) return null
+  const isCallerRinging = Boolean(activeCall && activeCall.state === 'ringing' && activeCall.callerId === chatUser?.id)
+  const isConnecting = Boolean(activeCall && activeCall.state === 'active' && callConnectionState !== 'connected')
+  const showCallScreen = Boolean(activeCall && (activeCall.state === 'active' || isCallerRinging))
 
-  const isCallerRinging = activeCall.state === 'ringing' && activeCall.callerId === chatUser?.id
-  // Answered (or answered by us) but the media path is not up yet: ICE checks
-  // and DTLS are still running. Without this the screen showed a running timer
-  // and "call in progress" while the two peers were still negotiating, which
-  // read as a silent, broken call.
-  const isConnecting = activeCall.state === 'active' && callConnectionState !== 'connected'
-  if (activeCall.state !== 'active' && !isCallerRinging) return null
-
-  const peerName =
+  const currentPeerName =
     activeCall?.peerName ||
     (String(activeConversation?.id) === String(activeCall?.roomId)
       ? activeConversation?.contact_name || activeConversation?.other_user?.name
@@ -140,6 +135,28 @@ export default function CallScreen() {
     callConversation?.other_user?.name ||
     activeConversation?.other_user?.name ||
     'Call'
+
+  const callPresence = useAnimatedPresence(
+    showCallScreen
+      ? {
+          isVideo: Boolean(isVideo),
+          isCallerRinging,
+          isConnecting,
+          peerName: currentPeerName,
+          callTimerSeconds
+        }
+      : null,
+    180
+  )
+
+  if (!callPresence.mounted) return null
+
+  const snapshot = callPresence.data || {}
+  const viewIsVideo = showCallScreen ? isVideo : Boolean(snapshot.isVideo)
+  const viewIsCallerRinging = showCallScreen ? isCallerRinging : Boolean(snapshot.isCallerRinging)
+  const viewIsConnecting = showCallScreen ? isConnecting : Boolean(snapshot.isConnecting)
+  const peerName = showCallScreen ? currentPeerName : (snapshot.peerName || 'Call')
+  const displayTimerSeconds = showCallScreen ? callTimerSeconds : (snapshot.callTimerSeconds || 0)
 
   const formatTime = (s) => {
     const m = Math.floor(s / 60)
@@ -151,15 +168,15 @@ export default function CallScreen() {
   // the remote feed fills the screen, controls float on top and respect the
   // safe areas. The old 190px square inside a card was far too small for a
   // phone camera feed. Voice calls keep the compact card below.
-  if (isVideo) {
+  if (viewIsVideo) {
     return (
       <div
-        className="fixed inset-0 z-[60] bg-black"
+        className={`fixed inset-0 z-[60] bg-black ${backdropMotionClass(callPresence.isClosing)}`}
         role="dialog"
         aria-modal="true"
         aria-label="Active video call"
       >
-        {callRemoteStream ? (
+        {showCallScreen && callRemoteStream ? (
           <video
             ref={remoteVideoRef}
             autoPlay
@@ -191,8 +208,8 @@ export default function CallScreen() {
             <div className="min-w-0">
               <p className="truncate text-[17px] font-semibold text-white">{peerName}</p>
               <p className="mt-0.5 flex items-center gap-2 text-xs font-medium text-white/70">
-                <span className={`h-2 w-2 rounded-full animate-pulse ${isConnecting ? 'bg-amber-400' : 'bg-emerald-500'}`} />
-                {isCallerRinging ? 'Ringing…' : isConnecting ? 'Connecting…' : formatTime(callTimerSeconds)}
+                <span className={`h-2 w-2 rounded-full animate-pulse ${viewIsConnecting ? 'bg-amber-400' : 'bg-emerald-500'}`} />
+                {viewIsCallerRinging ? 'Ringing…' : viewIsConnecting ? 'Connecting…' : formatTime(displayTimerSeconds)}
               </p>
             </div>
             <button
@@ -207,7 +224,7 @@ export default function CallScreen() {
         </div>
 
         {/* Local camera preview (PiP) */}
-        {callLocalStream && (
+        {showCallScreen && callLocalStream && (
           <div className="absolute right-4 bottom-[calc(env(safe-area-inset-bottom,0px)_+_8.5rem)] aspect-[3/4] w-24 overflow-hidden rounded-2xl border border-white/25 bg-black shadow-2xl sm:w-32">
             <video
               ref={localVideoRef}
@@ -262,26 +279,26 @@ export default function CallScreen() {
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] animate-in fade-in duration-200"
+      className={`fixed inset-0 z-[60] flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] ${backdropMotionClass(callPresence.isClosing)}`}
       role="dialog"
       aria-modal="true"
       aria-label="Active call"
     >
       <div
-        className="w-full max-w-md max-h-[94dvh] rounded-3xl sm:rounded-[32px] border border-white/10 bg-[#090a0c] shadow-2xl overflow-hidden flex flex-col"
+        className={`w-full max-w-md max-h-[94dvh] rounded-3xl sm:rounded-[32px] border border-white/10 bg-[#090a0c] shadow-2xl overflow-hidden flex flex-col ${modalMotionClass(callPresence.isClosing)}`}
       >
         {/* Header */}
         <div className="flex items-center justify-between gap-3 px-5 sm:px-6 py-4 sm:py-5 border-b border-white/5 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="h-10 w-10 shrink-0 rounded-2xl border border-white/10 flex items-center justify-center bg-white/5">
-              {isVideo ? <Video className="h-5 w-5 text-[#facc15]" /> : <Phone className="h-5 w-5 text-[#facc15]" />}
+              {viewIsVideo ? <Video className="h-5 w-5 text-[#facc15]" /> : <Phone className="h-5 w-5 text-[#facc15]" />}
             </div>
             <div className="min-w-0">
               <p className="text-xs font-medium text-zinc-400 uppercase tracking-wider truncate">
-                {isCallerRinging ? 'Calling…' : isVideo ? 'Video Call' : 'Voice Call'} · {peerName}
+                {viewIsCallerRinging ? 'Calling…' : viewIsVideo ? 'Video Call' : 'Voice Call'} · {peerName}
               </p>
               <p className="text-[17px] sm:text-[20px] font-semibold text-white">
-                {isCallerRinging ? 'Ringing…' : isConnecting ? 'Connecting…' : formatTime(callTimerSeconds)}
+                {viewIsCallerRinging ? 'Ringing…' : viewIsConnecting ? 'Connecting…' : formatTime(displayTimerSeconds)}
               </p>
             </div>
           </div>

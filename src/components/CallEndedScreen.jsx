@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Phone, Video, X, PhoneOff } from 'lucide-react'
 import { useChatStore } from '../store/useChatStore'
+import { backdropMotionClass, modalMotionClass, useAnimatedPresence } from '../hooks/useAnimatedPresence'
 
 // Copy for the moment right after a call drops. 'completed' wins whenever the
 // call had actually connected, whatever the caller/callee intent was.
@@ -44,9 +45,12 @@ export default function CallEndedScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callEndedInfo, activeCall])
 
-  if (!callEndedInfo) return null
+  const presence = useAnimatedPresence(callEndedInfo, 180)
 
-  const info = callEndedInfo
+  if (!presence.mounted) return null
+
+  const info = callEndedInfo || presence.data
+  if (!info) return null
   const completed = info.outcome === 'completed'
   const isVideo = info.callType === 'video'
   const initial = (info.peerName || '?').trim().charAt(0).toUpperCase()
@@ -58,8 +62,8 @@ export default function CallEndedScreen() {
   }
 
   return (
-    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-[#0b0b0d] px-6">
-      <div className="w-full max-w-sm text-center">
+    <div className={`fixed inset-0 z-[95] flex items-center justify-center bg-[#0b0b0d] px-6 ${backdropMotionClass(presence.isClosing)}`}>
+      <div className={`w-full max-w-sm text-center ${modalMotionClass(presence.isClosing)}`}>
         <div className="mx-auto mb-5 flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-[#1b1b20] ring-2 ring-[#2a2a31]">
           {info.peerAvatar ? (
             <img src={info.peerAvatar} alt="" className="h-full w-full object-cover" />

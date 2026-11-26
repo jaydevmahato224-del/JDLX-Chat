@@ -90,6 +90,14 @@ import { sameId } from '../utils/ids'
 import { triggerHaptic } from '../utils/haptics'
 import { copyTextToClipboard } from '../utils/clipboard'
 import { useDialogA11y } from '../hooks/useDialogA11y'
+import {
+  backdropMotionClass,
+  drawerMotionClass,
+  modalMotionClass,
+  popoverMotionClass,
+  sheetModalMotionClass,
+  useAnimatedPresence
+} from '../hooks/useAnimatedPresence'
 import { 
   useScreenProtection, 
   useScreenProtectionState,
@@ -3034,6 +3042,70 @@ export default function ChatConversation() {
   const [showAttachmentTray, setShowAttachmentTray] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
 
+  // Symmetric exit-animation presence trackers (keeps overlays mounted cleanly
+  // through CSS exit keyframes without delaying state cleanup or business logic).
+  const mobileChatPresence = useAnimatedPresence(mobileView === 'chat', 240)
+  const [mobileChatSlideIn, setMobileChatSlideIn] = useState(false)
+  useEffect(() => {
+    if (mobileView !== 'chat') {
+      setMobileChatSlideIn(false)
+      return undefined
+    }
+    let raf2 = null
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setMobileChatSlideIn(true))
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      if (raf2 != null) cancelAnimationFrame(raf2)
+    }
+  }, [mobileView])
+
+  const friendsMenuPresence = useAnimatedPresence(showFriendsMenu, 160)
+  const attachmentTrayPresence = useAnimatedPresence(showAttachmentTray && !isBlockedConversation, 160)
+  const emojiPickerPresence = useAnimatedPresence(showEmojiPicker, 160)
+  const actionMenuPresence = useAnimatedPresence(
+    actionMessage ? { msg: actionMessage, anchor: actionMessageAnchor } : null,
+    160
+  )
+  const addFriendModalPresence = useAnimatedPresence(showAddFriendModal, 210)
+  const profileDrawerPresence = useAnimatedPresence(showProfileDrawer, 210)
+  const notificationsDrawerPresence = useAnimatedPresence(showNotificationsDrawer, 210)
+  const reportModalPresence = useAnimatedPresence(showReportModal, 210)
+  const imageSendPresence = useAnimatedPresence(imageSendModal?.items?.length ? imageSendModal : null, 210)
+  const contactInfoPresence = useAnimatedPresence(
+    showContactInfoModal && activeConversation ? activeConversation : null,
+    220
+  )
+  const addGroupMembersPresence = useAnimatedPresence(
+    showAddGroupMembers && activeConversation?.is_group ? activeConversation : null,
+    210
+  )
+  const createGroupPresence = useAnimatedPresence(showCreateGroupModal, 210)
+  const safetyModalPresence = useAnimatedPresence(
+    showSafetyVerificationModal && activeConversation ? activeConversation : null,
+    210
+  )
+  const disappearingModalPresence = useAnimatedPresence(
+    showDisappearingModal && (disappearingModalContact || activeConversation)
+      ? (disappearingModalContact || activeConversation)
+      : null,
+    210
+  )
+  const friendQuickPresence = useAnimatedPresence(friendQuickActionsTarget, 210)
+  const muteModalPresence = useAnimatedPresence(
+    showMuteModal && activeConversation ? activeConversation : null,
+    210
+  )
+  const wallpaperModalPresence = useAnimatedPresence(
+    showWallpaperModal && activeConversation ? activeConversation : null,
+    210
+  )
+  const starredModalPresence = useAnimatedPresence(showStarredModal, 210)
+  const dragOverlayPresence = useAnimatedPresence(Boolean(isDraggingOver && activeConversation), 160)
+  const pwaInstallPresence = useAnimatedPresence(showPwaInstallModal, 210)
+  const confirmDialogPresence = useAnimatedPresence(confirmDialog, 180)
+
   // Popovers are dismissible with Escape, matching the modal sheets.
   useEffect(() => {
     if (!showAttachmentTray && !showEmojiPicker) return undefined
@@ -4286,14 +4358,22 @@ export default function ChatConversation() {
   }
 
   const handleCloseImageSendModal = useCallback(() => {
+    const urlsToRevoke = []
     setImageSendModal((prev) => {
       if (prev?.items) {
         prev.items.forEach((item) => {
-          try { URL.revokeObjectURL(item.url) } catch {}
+          if (item?.url) urlsToRevoke.push(item.url)
         })
       }
       return null
     })
+    if (urlsToRevoke.length > 0) {
+      setTimeout(() => {
+        urlsToRevoke.forEach((url) => {
+          try { URL.revokeObjectURL(url) } catch {}
+        })
+      }, 260)
+    }
     if (fileInputRef.current) fileInputRef.current.value = ''
     if (addMoreImagesInputRef.current) addMoreImagesInputRef.current.value = ''
   }, [])
@@ -5732,8 +5812,8 @@ export default function ChatConversation() {
       }`}
     >
       {/* ── TOP APPLICATION HEADER ── */}
-      <header className={`ios-safe-header z-30 min-h-[58px] sm:min-h-[64px] shrink-0 items-center justify-between border-b px-2.5 sm:px-5 transition-colors select-none ${
-        mobileView === 'chat' ? 'hidden md:flex' : 'flex'
+      <header className={`ios-safe-header z-30 flex min-h-[58px] sm:min-h-[64px] shrink-0 items-center justify-between border-b px-2.5 sm:px-5 transition-[color,background-color,border-color,transform,opacity] duration-200 select-none ${
+        mobileView === 'chat' ? 'max-md:-translate-x-4 max-md:opacity-90 max-md:pointer-events-none' : 'max-md:translate-x-0 max-md:opacity-100'
       } ${
         isLight 
           ? 'border-[#e4e7ec] bg-white text-slate-900' 
@@ -5896,9 +5976,9 @@ export default function ChatConversation() {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* LEFT PANE: CONVERSATIONS & CHATS LIST (WhatsApp Sidebar)     */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <aside className={`flex w-full shrink-0 flex-col border-r transition-all duration-200 md:w-80 lg:w-96 ${
+        <aside className={`flex w-full shrink-0 flex-col border-r transition-[color,background-color,border-color,transform,opacity] duration-200 md:w-80 lg:w-96 ${
           isLight ? 'border-[#e4e7ec] bg-white' : 'border-white/[0.07] bg-[#0f1114]'
-        } ${mobileView === 'chat' ? 'hidden md:flex' : 'flex'}`}>
+        } ${mobileView === 'chat' ? 'max-md:-translate-x-4 max-md:opacity-90 max-md:pointer-events-none' : 'max-md:translate-x-0 max-md:opacity-100'}`}>
           {/* Search Contacts / Filter Bar */}
           <div className={`border-b p-3 ${isLight ? 'border-[#e4e7ec] bg-white' : 'border-white/[0.07] bg-[#0f1114]'}`}>
             <div className="relative flex items-center">
@@ -6137,10 +6217,10 @@ export default function ChatConversation() {
                     </button>
 
                     {/* Dropdown Menu */}
-                    {showFriendsMenu && (
+                    {friendsMenuPresence.mounted && (
                       <div 
                         onClick={(e) => e.stopPropagation()}
-                        className={`absolute right-0 top-full mt-1.5 w-60 rounded-2xl border shadow-2xl p-1.5 z-40 animate-popover-spring origin-top-right ${
+                        className={`absolute right-0 top-full mt-1.5 w-60 rounded-2xl border shadow-2xl p-1.5 z-40 origin-top-right ${popoverMotionClass(friendsMenuPresence.isClosing)} ${
                           isLight 
                             ? 'bg-white/95 backdrop-blur-md border-slate-200 text-slate-900 shadow-slate-300/60' 
                             : 'bg-[#151518]/95 backdrop-blur-md border-[#2b2b32] text-white shadow-black/90'
@@ -6787,13 +6867,29 @@ export default function ChatConversation() {
         {/* RIGHT PANE: ACTIVE CHAT CONVERSATION VIEW                     */}
         {/* ══════════════════════════════════════════════════════════════ */}
         <main 
-          style={{ touchAction: 'pan-y', overscrollBehaviorX: 'none' }}
+          style={{
+            touchAction: 'pan-y',
+            overscrollBehaviorX: 'none',
+            '--mobile-chat-x': mobileChatPresence.isClosing
+              ? '100%'
+              : edgeSwipeOffset > 0
+                ? `${edgeSwipeOffset}px`
+                : mobileChatSlideIn
+                  ? '0%'
+                  : '100%'
+          }}
           onTouchStart={handleEdgeTouchStart}
           onTouchMove={handleEdgeTouchMove}
           onTouchEnd={handleEdgeTouchEnd}
           onTouchCancel={handleEdgeTouchEnd}
-          className={`relative flex-1 flex flex-col overflow-hidden transition-colors jdlx-privacy-sensitive ${
-            mobileView === 'list' ? 'hidden md:flex' : 'flex'
+          className={`relative flex-1 flex-col overflow-hidden transition-colors jdlx-privacy-sensitive ${
+            isLight ? 'bg-[#f6f7f9]' : 'bg-[#090a0c]'
+          } ${
+            mobileChatPresence.mounted
+              ? `flex mobile-chat-pane max-md:shadow-[-12px_0_32px_rgba(0,0,0,0.45)] ${
+                  edgeSwipeOffset > 0 ? 'mobile-chat-dragging' : ''
+                } ${mobileChatPresence.isClosing ? 'max-md:pointer-events-none' : ''}`
+              : 'hidden md:flex'
           }`}
         >
           {/* Floating Edge Swipe-to-Back Visual Pill (iOS / Android Native standard) */}
@@ -8132,13 +8228,13 @@ export default function ChatConversation() {
                   </button>
                 )}
                 {/* ── ATTACHMENT TRAY POPOVER (WhatsApp / Telegram 4-Tile Luxury Drawer) ── */}
-                {showAttachmentTray && !isBlockedConversation && (
+                {attachmentTrayPresence.mounted && (
                   <>
                     <div
-                      className="fixed inset-0 z-30"
+                      className={`fixed inset-0 z-30 ${attachmentTrayPresence.isClosing ? 'pointer-events-none' : ''}`}
                       onClick={() => setShowAttachmentTray(false)}
                     />
-                    <div className={`absolute bottom-full left-2 sm:left-4 mb-3 p-3 sm:p-3.5 rounded-3xl border shadow-2xl z-40 grid grid-cols-3 gap-3 sm:gap-5 animate-popover-spring origin-bottom-left backdrop-blur-2xl ${
+                    <div className={`absolute bottom-full left-2 sm:left-4 mb-3 p-3 sm:p-3.5 rounded-3xl border shadow-2xl z-40 grid grid-cols-3 gap-3 sm:gap-5 origin-bottom-left backdrop-blur-2xl ${popoverMotionClass(attachmentTrayPresence.isClosing)} ${
                       isLight
                         ? 'bg-white/95 border-slate-200 shadow-slate-300/70'
                         : 'bg-[#18181b]/95 border-white/10 shadow-black/80'
@@ -8213,13 +8309,13 @@ export default function ChatConversation() {
                 )}
 
                 {/* ── EMOJI PICKER DRAWER / POPOVER ── */}
-                {showEmojiPicker && (
+                {emojiPickerPresence.mounted && (
                   <>
                     <div
-                      className="fixed inset-0 z-30"
+                      className={`fixed inset-0 z-30 ${emojiPickerPresence.isClosing ? 'pointer-events-none' : ''}`}
                       onClick={() => setShowEmojiPicker(false)}
                     />
-                    <div className={`absolute bottom-full left-2 sm:left-14 mb-3 w-[320px] sm:w-[360px] max-w-[calc(100vw-1rem)] p-3 rounded-3xl border shadow-2xl z-40 animate-popover-spring origin-bottom-left backdrop-blur-2xl ${
+                    <div className={`absolute bottom-full left-2 sm:left-14 mb-3 w-[320px] sm:w-[360px] max-w-[calc(100vw-1rem)] p-3 rounded-3xl border shadow-2xl z-40 origin-bottom-left backdrop-blur-2xl ${popoverMotionClass(emojiPickerPresence.isClosing)} ${
                       isLight
                         ? 'bg-white/95 border-slate-200 shadow-slate-300/70'
                         : 'bg-[#18181b]/95 border-white/10 shadow-black/80'
@@ -8802,14 +8898,14 @@ export default function ChatConversation() {
       </div>
 
       {/* ── ADD FRIEND & GLOBAL SEARCH MODAL (WhatsApp User Discovery) ── */}
-      {showAddFriendModal && (
+      {addFriendModalPresence.mounted && (
         <div 
           onClick={() => {
             setShowAddFriendModal(false)
             setGlobalSearchQuery('')
             setGlobalSearchResults([])
           }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 ${backdropMotionClass(addFriendModalPresence.isClosing)}`}
         >
           <div 
             onClick={(e) => e.stopPropagation()}
@@ -8818,7 +8914,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Add friend"
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88dvh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 ${
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b p-5 sm:p-6 shadow-2xl flex flex-col space-y-4 max-h-[88dvh] overflow-hidden pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${sheetModalMotionClass(addFriendModalPresence.isClosing, 'sm')} ${
               isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-[#f4f4f5]'
             }`}
           >
@@ -9270,10 +9366,10 @@ export default function ChatConversation() {
       )}
 
       {/* ── LUXURY EDITABLE PROFILE & COMPREHENSIVE SETTINGS HUB ── */}
-      {showProfileDrawer && (
+      {profileDrawerPresence.mounted && (
         <div 
           onClick={() => setShowProfileDrawer(false)}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-md p-0 sm:p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-md p-0 sm:p-4 ${backdropMotionClass(profileDrawerPresence.isClosing)}`}
         >
           <div 
             onClick={(e) => e.stopPropagation()}
@@ -9282,7 +9378,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="My profile"
             tabIndex={-1}
-            className={`w-full max-w-lg rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90dvh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 jdlx-privacy-sensitive ${
+            className={`w-full max-w-lg rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90dvh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${sheetModalMotionClass(profileDrawerPresence.isClosing, 'sm')} jdlx-privacy-sensitive ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
@@ -10486,10 +10582,10 @@ export default function ChatConversation() {
       )}
 
       {/* ── NOTIFICATIONS DRAWER ── */}
-      {showNotificationsDrawer && (
+      {notificationsDrawerPresence.mounted && (
         <div 
           onClick={() => setShowNotificationsDrawer(false)}
-          className="fixed inset-0 z-50 flex items-end sm:items-stretch sm:justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+          className={`fixed inset-0 z-50 flex items-end sm:items-stretch sm:justify-end bg-black/60 backdrop-blur-sm ${backdropMotionClass(notificationsDrawerPresence.isClosing)}`}
         >
           <div 
             onClick={(e) => e.stopPropagation()}
@@ -10498,7 +10594,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Notifications"
             tabIndex={-1}
-            className={`w-full sm:max-w-sm max-h-[85dvh] sm:max-h-full rounded-t-2xl sm:rounded-none border-t sm:border-t-0 sm:border-l flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-drawer-spring-right transition-colors pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full sm:max-w-sm max-h-[85dvh] sm:max-h-full rounded-t-2xl sm:rounded-none border-t sm:border-t-0 sm:border-l flex flex-col shadow-2xl ${drawerMotionClass(notificationsDrawerPresence.isClosing, 'sm')} transition-colors pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
@@ -10689,7 +10785,8 @@ export default function ChatConversation() {
       )}
 
       {/* ── FLOATING MESSAGE ACTIONS POPUP (WhatsApp Style Floating Popover) ── */}
-      {actionMessage && (() => {
+      {actionMenuPresence.mounted && ((actionMessage, actionMessageAnchor) => {
+        if (!actionMessage) return null
         const isUser = sameId(actionMessage.user_id, chatUser?.id) || (actionMessage.sender_type === 'user' && actionMessage.username === chatUser?.username)
         const vw = typeof window !== 'undefined' ? window.innerWidth : 380
         const vh = typeof window !== 'undefined' ? window.innerHeight : 700
@@ -10736,7 +10833,7 @@ export default function ChatConversation() {
         return (
           <div
             onClick={handleCloseActionMenu}
-            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2.5px] animate-in fade-in duration-150 select-none overflow-hidden touch-none"
+            className={`fixed inset-0 z-50 bg-black/60 backdrop-blur-[2.5px] select-none overflow-hidden touch-none ${backdropMotionClass(actionMenuPresence.isClosing)}`}
           >
             {/* 1. Floating Quick Emoji Pill */}
             <div
@@ -10749,7 +10846,7 @@ export default function ChatConversation() {
                 ),
                 ...emojiHorizontalStyle,
               }}
-              className={`z-50 p-1 sm:p-1.5 rounded-full border shadow-2xl backdrop-blur-2xl flex items-center gap-0.5 sm:gap-1 animate-popover-spring origin-center ${
+              className={`z-50 p-1 sm:p-1.5 rounded-full border shadow-2xl backdrop-blur-2xl flex items-center gap-0.5 sm:gap-1 ${popoverMotionClass(actionMenuPresence.isClosing)} origin-center ${
                 isLight 
                   ? 'bg-white/95 border-slate-200/90 shadow-slate-400/30 text-slate-800' 
                   : 'bg-[#1e1e24]/95 border-[#32323a] shadow-black/90 text-white'
@@ -10785,7 +10882,7 @@ export default function ChatConversation() {
                 ),
                 ...horizontalStyle,
               }}
-              className={`z-50 w-52 sm:w-56 max-h-[calc(100vh-140px)] overflow-y-auto p-1.5 rounded-2xl border shadow-2xl backdrop-blur-2xl transition-all animate-popover-spring space-y-0.5 custom-scrollbar ${
+              className={`z-50 w-52 sm:w-56 max-h-[calc(100vh-140px)] overflow-y-auto p-1.5 rounded-2xl border shadow-2xl backdrop-blur-2xl transition-all ${popoverMotionClass(actionMenuPresence.isClosing)} space-y-0.5 custom-scrollbar ${
                 isLight 
                   ? 'bg-white/95 border-slate-200/90 text-slate-800 shadow-slate-400/40' 
                   : 'bg-[#18181d]/95 border-[#2c2c34] text-white shadow-black/90'
@@ -10936,13 +11033,13 @@ export default function ChatConversation() {
             </div>
           </div>
         )
-      })()}
+      })(actionMenuPresence.data?.msg || actionMessage, actionMenuPresence.data?.anchor || actionMessageAnchor)}
 
       {/* ── REPORT USER MODAL ── */}
-      {showReportModal && (
+      {reportModalPresence.mounted && (
         <div
           onClick={() => setShowReportModal(false)}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-sm animate-in fade-in duration-200"
+          className={`fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-sm ${backdropMotionClass(reportModalPresence.isClosing)}`}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -10951,7 +11048,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Report user"
             tabIndex={-1}
-            className={`w-full max-w-sm rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b p-5 sm:p-6 space-y-4 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
+            className={`w-full max-w-sm rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b p-5 sm:p-6 space-y-4 ${sheetModalMotionClass(reportModalPresence.isClosing, 'sm')} pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
               isLight ? 'bg-white border-slate-200' : 'bg-[#121214] border-white/[0.07]'
             }`}
           >
@@ -11019,11 +11116,14 @@ export default function ChatConversation() {
       )}
 
       {/* ── PRE-SEND IMAGE PREVIEW & CAPTION MODAL (WhatsApp / Telegram Standard) ── */}
-      {imageSendModal && imageSendModal.items && imageSendModal.items.length > 0 && (() => {
+      {imageSendPresence.mounted && ((imageSendModal) => {
+        if (!imageSendModal?.items?.length) return null
         const activeItem = imageSendModal.items[imageSendModal.activeIndex] || imageSendModal.items[0]
         return (
           <div
-            className="fixed inset-0 z-[60] bg-black/95 flex flex-col justify-between text-white backdrop-blur-2xl select-none animate-viewer-backdrop overflow-hidden"
+            className={`fixed inset-0 z-[60] bg-black/95 flex flex-col justify-between text-white backdrop-blur-2xl select-none overflow-hidden ${
+              imageSendPresence.isClosing ? 'animate-viewer-backdrop-exit pointer-events-none' : 'animate-viewer-backdrop'
+            }`}
             role="dialog"
             aria-modal="true"
             aria-label="Media preview and caption"
@@ -11031,7 +11131,9 @@ export default function ChatConversation() {
             tabIndex={-1}
           >
             {/* Top Toolbar */}
-            <div className="w-full flex items-center justify-between px-3 sm:px-6 py-3 border-b border-white/10 bg-black/40 backdrop-blur-md z-10 animate-viewer-header">
+            <div className={`w-full flex items-center justify-between px-3 sm:px-6 py-3 border-b border-white/10 bg-black/40 backdrop-blur-md z-10 ${
+              imageSendPresence.isClosing ? 'animate-viewer-header-exit' : 'animate-viewer-header'
+            }`}>
               <button
                 type="button"
                 onClick={handleCloseImageSendModal}
@@ -11103,12 +11205,16 @@ export default function ChatConversation() {
                   transform: `rotate(${activeItem.rotation}deg)`,
                   transition: 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
                 }}
-                className="max-h-[55vh] sm:max-h-[62vh] max-w-[92vw] sm:max-w-[80vw] object-contain rounded-2xl shadow-2xl drop-shadow-2xl animate-viewer-image"
+                className={`max-h-[55vh] sm:max-h-[62vh] max-w-[92vw] sm:max-w-[80vw] object-contain rounded-2xl shadow-2xl drop-shadow-2xl ${
+                  imageSendPresence.isClosing ? 'animate-viewer-image-exit' : 'animate-viewer-image'
+                }`}
               />
             </div>
 
             {/* Bottom Controls Area */}
-            <div className="w-full bg-gradient-to-t from-black via-black/80 to-transparent pt-3 pb-3 sm:pb-6 z-10 flex flex-col gap-2.5">
+            <div className={`w-full bg-gradient-to-t from-black via-black/80 to-transparent pt-3 pb-3 sm:pb-6 z-10 flex flex-col gap-2.5 ${
+              imageSendPresence.isClosing ? 'animate-viewer-footer-exit' : 'animate-viewer-footer'
+            }`}>
               {/* Thumbnail Strip (if multiple photos, or add more) */}
               <div className="flex items-center justify-center gap-2 px-4 overflow-x-auto max-w-xl mx-auto scrollbar-none py-1">
                 {imageSendModal.items.map((item, idx) => (
@@ -11225,7 +11331,7 @@ export default function ChatConversation() {
             </div>
           </div>
         )
-      })()}
+      })(imageSendModal?.items?.length ? imageSendModal : imageSendPresence.data)}
 
       {/* ── IMAGE FULL PREVIEW LIGHTBOX (MINIMALISTIC, LUXURY, SMOOTH ANIMATION) ── */}
       {selectedPreviewImage && (() => {
@@ -11255,7 +11361,9 @@ export default function ChatConversation() {
             {/* Top Minimalist Header Bar */}
             <div
               onClick={(e) => e.stopPropagation()}
-              className="w-full px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-30 bg-gradient-to-b from-black/85 via-black/40 to-transparent animate-viewer-header"
+              className={`w-full px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-30 bg-gradient-to-b from-black/85 via-black/40 to-transparent ${
+                isClosingPreview ? 'animate-viewer-header-exit' : 'animate-viewer-header'
+              }`}
             >
               {/* Left: Photo Info & Counter */}
               <div className="flex items-center gap-3 min-w-0">
@@ -11579,7 +11687,9 @@ export default function ChatConversation() {
           {previewImages[previewIndex]?.caption && (
             <div
               onClick={(e) => e.stopPropagation()}
-              className="max-w-xl mx-auto px-4 py-2 my-1 rounded-2xl bg-black/75 border border-white/10 backdrop-blur-md text-white text-xs sm:text-sm text-center shadow-xl select-text z-20 animate-viewer-footer"
+              className={`max-w-xl mx-auto px-4 py-2 my-1 rounded-2xl bg-black/75 border border-white/10 backdrop-blur-md text-white text-xs sm:text-sm text-center shadow-xl select-text z-20 ${
+                isClosingPreview ? 'animate-viewer-footer-exit' : 'animate-viewer-footer'
+              }`}
             >
               {previewImages[previewIndex].caption}
             </div>
@@ -11589,7 +11699,9 @@ export default function ChatConversation() {
           {previewImages.length > 1 && (
             <div
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-xl mx-auto flex items-center justify-center gap-2 px-3 py-2 overflow-x-auto scrollbar-none z-20 my-1 animate-viewer-footer"
+              className={`w-full max-w-xl mx-auto flex items-center justify-center gap-2 px-3 py-2 overflow-x-auto scrollbar-none z-20 my-1 ${
+                isClosingPreview ? 'animate-viewer-footer-exit' : 'animate-viewer-footer'
+              }`}
             >
               {previewImages.map((pImg, pIdx) => (
                 <div
@@ -11612,7 +11724,9 @@ export default function ChatConversation() {
           )}
 
           {/* Bottom Hint */}
-          <div className="text-[11px] text-zinc-400 select-none pb-1 font-medium text-center animate-viewer-footer">
+          <div className={`text-[11px] text-zinc-400 select-none pb-1 font-medium text-center ${
+            isClosingPreview ? 'animate-viewer-footer-exit' : 'animate-viewer-footer'
+          }`}>
             {isAvatarPreview 
               ? '🔒 Profile Photo Protected: Screenshots & downloads are disabled • Esc to close'
               : `${previewImages.length > 1 ? 'Use ← / → arrows or swipe to browse • ' : ''}Double-click to zoom • F for fullscreen • D to download • C to copy • Esc to close`}
@@ -11621,10 +11735,10 @@ export default function ChatConversation() {
       )})()}
 
       {/* ── GROUP INFO SHEET (members, rename, add/remove, leave) ── */}
-      {showContactInfoModal && activeConversation?.is_group && (
+      {contactInfoPresence.mounted && (activeConversation || contactInfoPresence.data)?.is_group && ((activeConversation) => (
         <div
           onClick={() => setShowContactInfoModal(false)}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs animate-in fade-in duration-200 md:items-center md:bg-black/50 md:p-4"
+          className={`fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs ${backdropMotionClass(contactInfoPresence.isClosing)} md:items-center md:bg-black/50 md:p-4`}
         >
           <div
             role="dialog"
@@ -11633,7 +11747,7 @@ export default function ChatConversation() {
             onClick={(e) => e.stopPropagation()}
             ref={contactDialogRef}
             tabIndex={-1}
-            className={`flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-[28px] border-t shadow-2xl animate-sheet-spring-up md:rounded-2xl md:border ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
+            className={`flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-[28px] border-t shadow-2xl ${sheetModalMotionClass(contactInfoPresence.isClosing, 'md')} md:rounded-2xl md:border ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
           >
             <div className={`flex shrink-0 items-center justify-between border-b px-4 py-3 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
               <div className="flex items-center gap-2">
@@ -11851,13 +11965,13 @@ export default function ChatConversation() {
             </div>
           </div>
         </div>
-      )}
+      ))(activeConversation || contactInfoPresence.data)}
 
       {/* ── ADD GROUP MEMBERS SHEET ── */}
-      {showAddGroupMembers && activeConversation?.is_group && (
+      {addGroupMembersPresence.mounted && (activeConversation || addGroupMembersPresence.data)?.is_group && (
         <div
           onClick={() => setShowAddGroupMembers(false)}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs animate-in fade-in duration-200 md:items-center md:bg-black/50 md:p-4"
+          className={`fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs ${backdropMotionClass(addGroupMembersPresence.isClosing)} md:items-center md:bg-black/50 md:p-4`}
         >
           <div
             role="dialog"
@@ -11866,7 +11980,7 @@ export default function ChatConversation() {
             onClick={(e) => e.stopPropagation()}
             ref={addGroupMembersDialogRef}
             tabIndex={-1}
-            className={`flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border p-4 shadow-2xl animate-sheet-spring-up md:rounded-2xl ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
+            className={`flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border p-4 shadow-2xl ${sheetModalMotionClass(addGroupMembersPresence.isClosing, 'md')} md:rounded-2xl ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
           >
             <div className={`mb-3 flex items-center justify-between border-b pb-2 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
               <h3 className="flex items-center gap-2 text-sm font-bold"><UserPlus className="h-4 w-4 text-amber-500" /> Add members</h3>
@@ -11919,10 +12033,10 @@ export default function ChatConversation() {
       )}
 
       {/* ── CREATE GROUP SHEET ── */}
-      {showCreateGroupModal && (
+      {createGroupPresence.mounted && (
         <div
           onClick={() => setShowCreateGroupModal(false)}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs animate-in fade-in duration-200 md:items-center md:bg-black/50 md:p-4"
+          className={`fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-xs ${backdropMotionClass(createGroupPresence.isClosing)} md:items-center md:bg-black/50 md:p-4`}
         >
           <div
             role="dialog"
@@ -11931,7 +12045,7 @@ export default function ChatConversation() {
             onClick={(e) => e.stopPropagation()}
             ref={createGroupDialogRef}
             tabIndex={-1}
-            className={`flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border p-4 shadow-2xl animate-sheet-spring-up md:rounded-2xl ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
+            className={`flex max-h-[88dvh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border p-4 shadow-2xl ${sheetModalMotionClass(createGroupPresence.isClosing, 'md')} md:rounded-2xl ${isLight ? 'border-slate-200 bg-white text-slate-900' : 'border-white/[0.07] bg-[#0f1114] text-white'}`}
           >
             <div className={`mb-3 flex items-center justify-between border-b pb-2 ${isLight ? 'border-slate-200' : 'border-white/[0.07]'}`}>
               <h3 className="flex items-center gap-2 text-sm font-bold"><Users className="h-4 w-4 text-amber-500" /> New group</h3>
@@ -11995,10 +12109,10 @@ export default function ChatConversation() {
       )}
 
       {/* ── CONTACT PROFILE & SECURITY MODAL (Telegram / WhatsApp Luxury Standard) ── */}
-      {showContactInfoModal && activeConversation && !activeConversation?.is_group && (
+      {contactInfoPresence.mounted && (activeConversation || contactInfoPresence.data) && !(activeConversation || contactInfoPresence.data)?.is_group && ((activeConversation) => (
         <div
           onClick={() => setShowContactInfoModal(false)}
-          className="fixed inset-0 bg-black/70 md:bg-black/40 backdrop-blur-xs z-50 flex items-end md:items-stretch justify-center md:justify-end p-0 animate-in fade-in duration-200"
+          className={`fixed inset-0 bg-black/70 md:bg-black/40 backdrop-blur-xs z-50 flex items-end md:items-stretch justify-center md:justify-end p-0 ${backdropMotionClass(contactInfoPresence.isClosing)}`}
         >
           <div
             role="dialog"
@@ -12007,7 +12121,7 @@ export default function ChatConversation() {
             onClick={(e) => e.stopPropagation()}
             ref={contactDialogRef}
             tabIndex={-1}
-            className={`w-full max-w-md md:max-w-[420px] lg:max-w-[450px] md:h-full max-h-[92dvh] md:max-h-full rounded-t-[36px] md:rounded-none md:rounded-l-3xl border-t md:border-t-0 md:border-l shadow-2xl overflow-hidden animate-sheet-spring-up md:animate-drawer-spring-right flex flex-col jdlx-privacy-sensitive ${
+            className={`w-full max-w-md md:max-w-[420px] lg:max-w-[450px] md:h-full max-h-[92dvh] md:max-h-full rounded-t-[36px] md:rounded-none md:rounded-l-3xl border-t md:border-t-0 md:border-l shadow-2xl overflow-hidden ${drawerMotionClass(contactInfoPresence.isClosing, 'md')} flex flex-col jdlx-privacy-sensitive ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-400/30' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
@@ -13435,13 +13549,13 @@ export default function ChatConversation() {
             </div>
           </div>
         </div>
-      )}
+      ))(activeConversation || contactInfoPresence.data)}
 
       {/* ── INTERACTIVE E2EE SAFETY CODE & QR VERIFICATION MODAL (Item 2.3) ── */}
-      {showSafetyVerificationModal && activeConversation && (
+      {safetyModalPresence.mounted && (activeConversation || safetyModalPresence.data) && ((activeConversation) => (
         <div
           onClick={() => setShowSafetyVerificationModal(false)}
-          className="fixed inset-0 bg-black/85 backdrop-blur-xl z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 bg-black/85 backdrop-blur-xl z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 ${backdropMotionClass(safetyModalPresence.isClosing)}`}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -13450,7 +13564,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Safety number verification"
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden ${sheetModalMotionClass(safetyModalPresence.isClosing, 'sm')} max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
@@ -13594,17 +13708,17 @@ export default function ChatConversation() {
             </div>
           </div>
         </div>
-      )}
+      ))(activeConversation || safetyModalPresence.data)}
 
       {/* ── DISAPPEARING MESSAGES SELECTOR MODAL (Telegram / WhatsApp Standard) ── */}
-      {showDisappearingModal && (disappearingModalContact || activeConversation) && (() => {
-        const targetContact = disappearingModalContact || activeConversation
+      {disappearingModalPresence.mounted && (disappearingModalContact || activeConversation || disappearingModalPresence.data) && (() => {
+        const targetContact = disappearingModalContact || activeConversation || disappearingModalPresence.data
         const currentMode = getDisappearingMode(targetContact)
 
         return (
           <div
             onClick={() => setShowDisappearingModal(false)}
-            className="fixed inset-0 bg-black/85 backdrop-blur-xl z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+            className={`fixed inset-0 bg-black/85 backdrop-blur-xl z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 ${backdropMotionClass(disappearingModalPresence.isClosing)}`}
           >
             <div
               onClick={(e) => e.stopPropagation()}
@@ -13613,7 +13727,7 @@ export default function ChatConversation() {
               aria-modal="true"
               aria-label="Disappearing messages"
               tabIndex={-1}
-              className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+              className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden ${sheetModalMotionClass(disappearingModalPresence.isClosing, 'sm')} max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
                 isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
               }`}
             >
@@ -13720,10 +13834,12 @@ export default function ChatConversation() {
       })()}
 
       {/* ── FRIEND QUICK ACTIONS & SETTINGS SHEET (Mobile Tap & Hold / Desktop 3-Dot) ── */}
-      {friendQuickActionsTarget && (
+      {friendQuickPresence.mounted && ((friendQuickActionsTarget) => {
+        if (!friendQuickActionsTarget) return null
+        return (
         <div
           onClick={() => setFriendQuickActionsTarget(null)}
-          className="fixed inset-0 bg-black/75 md:bg-black/50 backdrop-blur-xs z-[75] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 bg-black/75 md:bg-black/50 backdrop-blur-xs z-[75] flex items-end sm:items-center justify-center p-0 sm:p-4 ${backdropMotionClass(friendQuickPresence.isClosing)}`}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -13731,7 +13847,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label={`Settings for ${friendQuickActionsTarget.name || friendQuickActionsTarget.username}`}
             tabIndex={-1}
-            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden ${sheetModalMotionClass(friendQuickPresence.isClosing, 'sm')} max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
@@ -14054,20 +14170,21 @@ export default function ChatConversation() {
             </div>
           </div>
         </div>
-      )}
+        )
+      })(friendQuickActionsTarget || friendQuickPresence.data)}
 
       {/* ── MUTE NOTIFICATIONS DURATION SELECTOR MODAL (WhatsApp / Telegram Standard - Item 2.6) ── */}
-      {showMuteModal && activeConversation && (
+      {muteModalPresence.mounted && (activeConversation || muteModalPresence.data) && ((activeConversation) => (
         <div
           onClick={() => setShowMuteModal(false)}
-          className="fixed inset-0 bg-black/85 backdrop-blur-xl z-[85] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 bg-black/85 backdrop-blur-xl z-[85] flex items-end sm:items-center justify-center p-0 sm:p-4 ${backdropMotionClass(muteModalPresence.isClosing)}`}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label="Mute notifications"
-            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden ${sheetModalMotionClass(muteModalPresence.isClosing, 'sm')} max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
@@ -14245,20 +14362,20 @@ export default function ChatConversation() {
             </div>
           </div>
         </div>
-      )}
+      ))(activeConversation || muteModalPresence.data)}
 
       {/* ── CHAT WALLPAPER & THEME PICKER MODAL (Item 2.7) ── */}
-      {showWallpaperModal && activeConversation && (
+      {wallpaperModalPresence.mounted && (activeConversation || wallpaperModalPresence.data) && ((activeConversation) => (
         <div
           onClick={() => setShowWallpaperModal(false)}
-          className="fixed inset-0 bg-black/85 backdrop-blur-xl z-[85] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 bg-black/85 backdrop-blur-xl z-[85] flex items-end sm:items-center justify-center p-0 sm:p-4 ${backdropMotionClass(wallpaperModalPresence.isClosing)}`}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label="Chat wallpaper"
-            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl overflow-hidden ${sheetModalMotionClass(wallpaperModalPresence.isClosing, 'sm')} max-h-[92dvh] flex flex-col pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900 shadow-slate-300/50' : 'bg-[#0f1114] border-white/[0.07] text-white shadow-black/90'
             }`}
           >
@@ -14382,21 +14499,21 @@ export default function ChatConversation() {
             </div>
           </div>
         </div>
-      )}
+      ))(activeConversation || wallpaperModalPresence.data)}
 
       {/* ── STARRED / SAVED MESSAGES HUB MODAL (Item 2.8) ── */}
-      {showStarredModal && (
+      {starredModalPresence.mounted && (
         <div
           role="presentation"
           onClick={() => setShowStarredModal(false)}
-          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 ${backdropMotionClass(starredModalPresence.isClosing)}`}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-label="Starred Messages"
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-lg max-h-[85dvh] rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b flex flex-col shadow-2xl animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 overflow-hidden pb-[max(1rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
+            className={`w-full max-w-lg max-h-[85dvh] rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b flex flex-col shadow-2xl ${sheetModalMotionClass(starredModalPresence.isClosing, 'sm')} overflow-hidden pb-[max(1rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
@@ -14590,9 +14707,9 @@ export default function ChatConversation() {
       )}
 
       {/* ── DRAG & DROP LUXURY VIEWPORT DROPZONE OVERLAY (Item 4) ── */}
-      {isDraggingOver && activeConversation && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex flex-col items-center justify-center p-6 select-none animate-in fade-in duration-150 pointer-events-none">
-          <div className="w-full max-w-md border-2 border-dashed border-[#facc15] bg-[#18181b]/95 rounded-3xl p-8 flex flex-col items-center justify-center gap-4 text-center shadow-2xl shadow-yellow-500/25 animate-in zoom-in-95 duration-150">
+      {dragOverlayPresence.mounted && (activeConversation || dragOverlayPresence.data) && (
+        <div className={`fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex flex-col items-center justify-center p-6 select-none pointer-events-none ${backdropMotionClass(dragOverlayPresence.isClosing)}`}>
+          <div className={`w-full max-w-md border-2 border-dashed border-[#facc15] bg-[#18181b]/95 rounded-3xl p-8 flex flex-col items-center justify-center gap-4 text-center shadow-2xl shadow-yellow-500/25 ${modalMotionClass(dragOverlayPresence.isClosing)}`}>
             <div className="w-20 h-20 rounded-3xl bg-yellow-400/10 border border-yellow-400/30 flex items-center justify-center text-[#facc15] animate-bounce">
               <Upload className="w-10 h-10 stroke-[2.2]" />
             </div>
@@ -14603,7 +14720,7 @@ export default function ChatConversation() {
               <p className="text-xs text-zinc-400 font-medium max-w-xs">
                 Drop your image here to preview, crop, add captions, and send to{' '}
                 <span className="text-[#facc15] font-bold">
-                  {getContactDisplayName(activeConversation) || 'chat'}
+                  {getContactDisplayName(activeConversation || dragOverlayPresence.data) || 'chat'}
                 </span>
               </p>
             </div>
@@ -14616,10 +14733,10 @@ export default function ChatConversation() {
       )}
 
       {/* ── PWA & APK INSTALL MODAL ── */}
-      {showPwaInstallModal && (
+      {pwaInstallPresence.mounted && (
         <div
           onClick={() => setShowPwaInstallModal(false)}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 ${backdropMotionClass(pwaInstallPresence.isClosing)}`}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -14628,7 +14745,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="Install app"
             tabIndex={-1}
-            className={`w-full max-w-sm rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl p-5 sm:p-6 space-y-4 animate-sheet-spring-up sm:animate-in sm:zoom-in-95 sm:duration-200 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
+            className={`w-full max-w-sm rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl p-5 sm:p-6 space-y-4 ${sheetModalMotionClass(pwaInstallPresence.isClosing, 'sm')} pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] sm:pb-6 ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
@@ -14716,11 +14833,13 @@ export default function ChatConversation() {
       )}
 
       {/* ── POLISHED CONFIRMATION DIALOG (Item 3.5: Luxury Animated Action Sheet) ── */}
-      {confirmDialog && (
+      {confirmDialogPresence.mounted && ((confirmDialog) => {
+        if (!confirmDialog) return null
+        return (
         <div
           role="presentation"
           onClick={() => setConfirmDialog(null)}
-          className="fixed inset-0 z-[70] bg-black/75 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200"
+          className={`fixed inset-0 z-[70] bg-black/75 backdrop-blur-md flex items-center justify-center p-4 ${backdropMotionClass(confirmDialogPresence.isClosing)}`}
         >
           <div
             role="alertdialog"
@@ -14730,7 +14849,7 @@ export default function ChatConversation() {
             ref={confirmDialogRef}
             tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-sm rounded-[28px] border p-5 sm:p-6 space-y-5 shadow-2xl animate-popover-spring origin-center relative overflow-hidden ${
+            className={`w-full max-w-sm rounded-[28px] border p-5 sm:p-6 space-y-5 shadow-2xl ${modalMotionClass(confirmDialogPresence.isClosing)} origin-center relative overflow-hidden ${
               isLight 
                 ? 'bg-white/95 border-slate-200 text-slate-900 shadow-slate-900/15' 
                 : 'bg-[#141418]/95 border-[#282830] text-white shadow-black/90'
@@ -14822,7 +14941,8 @@ export default function ChatConversation() {
             </div>
           </div>
         </div>
-      )}
+        )
+      })(confirmDialog || confirmDialogPresence.data)}
 
       {/* ── DESKTOP PRIVACY SHIELD OVERLAY (ACTIVATES ON PRINT-SCREEN, SNIPPING TOOL & DESKTOP WINDOW BLUR) ── */}
       {showShield && (

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../store/useChatStore'
 import { useDialogA11y } from '../hooks/useDialogA11y'
+import { backdropMotionClass, modalMotionClass, useAnimatedPresence } from '../hooks/useAnimatedPresence'
 
 const SETUP_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -110,7 +111,10 @@ export default function RecoveryPinModal() {
     }
   }, [uid, chatToken, identityKeypair, identityNeedsPassphrase, recoveryPromptNonce])
 
-  if (!mode) return null
+  const presence = useAnimatedPresence(mode, 190)
+
+  if (!presence.mounted) return null
+  const displayMode = mode || presence.data || 'setup'
 
   const resetInputs = () => {
     setPin('')
@@ -225,14 +229,14 @@ export default function RecoveryPinModal() {
   const fieldClass = 'ui-input text-sm'
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className={`fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm ${backdropMotionClass(presence.isClosing)}`}>
       <div
         ref={dialogRef}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="recovery-pin-title"
-        className={`ui-card w-full max-w-sm origin-center p-5 animate-popover-spring ${
+        className={`ui-card w-full max-w-sm origin-center p-5 ${modalMotionClass(presence.isClosing)} ${
           isLight ? 'border-slate-200/90 bg-white text-slate-900' : 'border-white/[0.08] bg-[#0f1114] text-white'
         }`}
       >
@@ -240,14 +244,14 @@ export default function RecoveryPinModal() {
           <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
             isLight ? 'bg-amber-50 text-amber-700' : 'bg-amber-500/10 text-amber-400'
           }`}>
-            {mode === 'unlock' ? <KeyRound className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
+            {displayMode === 'unlock' ? <KeyRound className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
           </div>
           <div className="min-w-0">
             <h2 id="recovery-pin-title" className="text-base font-semibold tracking-tight">
-              {mode === 'unlock' ? 'Unlock your chats' : 'Protect your chat backup'}
+              {displayMode === 'unlock' ? 'Unlock your chats' : 'Protect your chat backup'}
             </h2>
             <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
-              {mode === 'unlock'
+              {displayMode === 'unlock'
                 ? 'This account has an encrypted key backup.'
                 : 'Encrypt your key with a Recovery PIN.'}
             </p>
