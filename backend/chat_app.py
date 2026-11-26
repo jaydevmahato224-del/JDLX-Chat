@@ -57,8 +57,7 @@ app.config.update(
 )
 
 # Only the chat frontend and the admin panel need browser access.  Additional
-# deployments can be added through CHAT_CORS_ORIGINS (comma separated).
-_default_cors_origins = [
+default_cors_origins = [
     r"^https?://localhost(:\d+)?$",
     r"^https?://127\.0\.0\.1(:\d+)?$",
     r"^capacitor://localhost$",
@@ -81,7 +80,7 @@ _extra_origins = [
 ]
 CORS(
     app,
-    resources={r"/api/.*": {"origins": _default_cors_origins + _extra_origins}},
+    resources={r"/api/.*": {"origins": default_cors_origins + _extra_origins}},
     supports_credentials=True,
     allow_headers=["Authorization", "Content-Type", "X-Requested-With", "Accept"],
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -356,21 +355,12 @@ def payload_too_large(_error):
 
 @app.errorhandler(500)
 def internal_error(error):
+    # Keep full exception and traceback in server logs for diagnostics, while
+    # returning a generic response so implementation details never reach clients.
     logger.exception("Unhandled chat service error: %s", error)
-    # TEMPORARY diagnostics: an intermittent 500 on message send could not be
-    # traced without runtime logs, so the response names the exception class
-    # (and a short text in ``detail``). No user data or credentials are added —
-    # remove once the failing exception is identified.
-    original = getattr(error, "original_exception", None) or error
-    error_class = type(original).__name__
-    try:
-        detail = str(original)[:180]
-    except Exception:
-        detail = ""
     return jsonify({
         "success": False,
-        "message": f"Internal server error [{error_class}]",
-        "detail": detail,
+        "message": "Internal server error",
     }), 500
 
 
