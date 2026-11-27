@@ -581,18 +581,22 @@ export default function ChatLogin() {
       return
     }
 
-    if (cleanPhone && cleanPhone.length !== 10) {
-      setErrorMsg('Mobile number must be 10 digits (or leave it empty).')
+    if (!cleanPhone) {
+      setErrorMsg(
+        googleSignupTicket
+          ? 'Please enter your 10-digit mobile number to finish Google sign-up.'
+          : 'Mobile number is required so your contacts can find you on chat.'
+      )
+      return
+    }
+
+    if (cleanPhone.length !== 10) {
+      setErrorMsg('Please enter a valid 10-digit mobile number.')
       return
     }
 
     if (!regGender) {
       setErrorMsg('Please select your gender.')
-      return
-    }
-
-    if (googleSignupTicket && !cleanPhone) {
-      setErrorMsg('Please enter your 10-digit mobile number to finish Google sign-up.')
       return
     }
 
@@ -673,11 +677,11 @@ export default function ChatLogin() {
     <div className={`login-sheet app-scroll-root w-full font-sans select-text transition-colors duration-200 ${
       isLight ? 'bg-[#f6f7f9] text-slate-900' : 'official-chat-dark dark bg-[#090a0c] text-white'
     }`}>
-      <div className="mx-auto flex min-h-[100dvh] w-full max-w-[440px] flex-col px-4 sm:px-6 pb-[env(safe-area-inset-bottom)]">
-      {/* Top Bar: chat brand + theme switcher */}
-      <header className={`sticky top-0 z-30 w-full ios-safe-header flex items-center justify-between gap-3 pt-[max(0.9rem,env(safe-area-inset-top))] pb-2 transition-colors duration-200 ${
-        isLight ? 'bg-white border-b border-slate-200' : 'bg-[#090a0c] border-b border-white/10'
+      {/* Full-bleed sticky top bar (no horizontal scroll gaps on mobile) */}
+      <header className={`sticky top-0 z-30 w-full ios-safe-header border-b px-4 pt-[max(0.9rem,env(safe-area-inset-top))] pb-2 transition-colors duration-200 sm:px-6 ${
+        isLight ? 'bg-white border-slate-200' : 'bg-[#090a0c] border-white/10'
       }`}>
+        <div className="mx-auto flex w-full max-w-[440px] items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
           <div className={`h-9 w-9 shrink-0 overflow-hidden rounded-xl border ${isLight ? 'border-slate-200 bg-white shadow-sm' : 'border-white/10 bg-[#14171b]'}`}>
             <img src="/logo192.png" alt="" className="h-full w-full object-contain" />
@@ -706,16 +710,18 @@ export default function ChatLogin() {
             <span className="hidden sm:inline">Store</span>
           </a>
 
-          <a
-            href="/downloads/official-chat.apk"
-            download="official-chat.apk"
-            title="Download the JDLX Chat Android APK"
-            aria-label="Download the JDLX Chat Android APK"
-            className={`ui-btn ui-btn-ghost h-9 min-h-0 gap-1.5 px-2.5 text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}
-          >
-            <Download className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden sm:inline">APK</span>
-          </a>
+          {!isCapacitorNative() && (
+            <a
+              href="/downloads/official-chat.apk"
+              download="official-chat.apk"
+              title="Download the JDLX Chat Android APK"
+              aria-label="Download the JDLX Chat Android APK"
+              className={`ui-btn ui-btn-ghost h-9 min-h-0 gap-1.5 px-2.5 text-[11px] ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}
+            >
+              <Download className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">APK</span>
+            </a>
+          )}
 
           {/* Theme Switcher */}
           <button
@@ -732,8 +738,10 @@ export default function ChatLogin() {
                 : <Sun className="h-4 w-4 text-amber-500" />}
           </button>
         </div>
+        </div>
       </header>
 
+      <div className="mx-auto flex w-full max-w-[440px] flex-1 flex-col px-4 sm:px-6 pb-[env(safe-area-inset-bottom)]">
       {/* Main Card */}
       <main className="flex w-full flex-1 flex-col pt-3 sm:pt-5 pb-4 sm:pb-8">
         <div ref={cardRef} className={`ui-card relative overflow-hidden p-5 transition-colors sm:p-6 w-full min-w-0 ${
@@ -775,7 +783,7 @@ export default function ChatLogin() {
               ? 'Sign in with your username, email or mobile number to continue to your private chats.'
               : googleSignupTicket
                 ? 'Google verified your email. Add the details your friends will see.'
-                : 'Create a unique handle with your email or mobile number. It only takes a minute.'}
+                : 'Create your handle with your email and mobile number so friends can find you.'}
           </p>
 
           {inviteRef && (
@@ -1062,11 +1070,7 @@ export default function ChatLogin() {
                   <label className="field-label flex items-center gap-1.5">
                     <Smartphone className={`w-3.5 h-3.5 ${isLight ? 'text-amber-600' : 'text-[#facc15]'}`} />
                     <span>Mobile Number</span>
-                    {googleSignupTicket ? (
-                      <span className="text-amber-500 font-black">* (Required)</span>
-                    ) : (
-                      <span className={`text-[10px] font-normal ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}>(Optional)</span>
-                    )}
+                    <span className="text-amber-500 font-black">*</span>
                   </label>
                   {regPhone.length === 10 && (
                     <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1 animate-fade-in">
@@ -1096,6 +1100,7 @@ export default function ChatLogin() {
                       placeholder="98765 43210"
                       value={formatIndianPhone(regPhone)}
                       onChange={handlePhoneChange}
+                      required
                       className={`ui-input tracking-wide text-base sm:text-sm ${
                         regPhone.length === 10 ? 'border-emerald-500/60 focus:border-emerald-500' : ''
                       }`}

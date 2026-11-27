@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { Phone, Mic, Volume2, VolumeX, X, Loader2, RefreshCw } from 'lucide-react'
+import { Phone, Mic, MicOff, X, Loader2 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore, CALL_RING_TIMEOUT_MS } from '../store/useChatStore'
+import { resolveMediaUrl } from '../config'
 import toast from 'react-hot-toast'
 import { startIncomingRingtone, stopIncomingRingtone, unlockSounds } from '../utils/sounds'
+import { subscribeNativeAudioRoutes } from '../utils/callAudio'
 import { backdropMotionClass, modalMotionClass, useAnimatedPresence } from '../hooks/useAnimatedPresence'
+import SpeakerSwitch from './SpeakerSwitch'
 
 export default function IncomingCallModal() {
   const {
@@ -12,9 +15,12 @@ export default function IncomingCallModal() {
     activeConversation,
     chatUser,
     callIsMuted,
-    callIsSpeakerOn,
+    callSpeakerMode,
+    callHeadsetInfo,
     toggleMute,
-    toggleSpeaker,
+    setSpeakerMode,
+    syncNativeAudioRoutes,
+    applyNativeAudioRoutesPayload,
     answerCall,
     endCall
   } = useChatStore(useShallow((state) => state))
@@ -26,6 +32,8 @@ export default function IncomingCallModal() {
   // immediately; the state only drives the disabled/spinner UI.
   const answeringRef = useRef(false)
   const [answering, setAnswering] = useState(false)
+  const [avatarFailed, setAvatarFailed] = useState(false)
+
   const handleAnswer = async () => {
     if (answeringRef.current) return
     answeringRef.current = true
@@ -87,27 +95,49 @@ export default function IncomingCallModal() {
   const isIncomingVisible = Boolean(
     activeCall && activeCall.state === 'ringing' && activeCall.callerId !== chatUser?.id
   )
+
+  useEffect(() => {
+    if (!isIncomingVisible) return undefined
+    syncNativeAudioRoutes()
+    return subscribeNativeAudioRoutes(applyNativeAudioRoutesPayload)
+  }, [isIncomingVisible, syncNativeAudioRoutes, applyNativeAudioRoutesPayload])
+
+  const matchingConv = String(activeConversation?.id) === String(activeCall?.roomId) ? activeConversation : null
+  const currentPeerAvatar =
+    activeCall?.peerAvatar ||
+    matchingConv?.contact_avatar ||
+    matchingConv?.other_user?.profile_image ||
+    null
+
+  useEffect(() => {
+    setAvatarFailed(false)
+  }, [currentPeerAvatar])
+
   const presence = useAnimatedPresence(
     isIncomingVisible
       ? {
           peerName:
             activeCall.peerName ||
-            (String(activeConversation?.id) === String(activeCall.roomId)
-              ? activeConversation?.other_user?.name || activeConversation?.other_user?.username
-              : null) ||
-            'Incoming Call'
+            matchingConv?.contact_name ||
+            matchingConv?.other_user?.name ||
+            matchingConv?.other_user?.username ||
+            'Incoming Call',
+          peerAvatar: currentPeerAvatar,
+          callType: activeCall.callType || 'voice'
         }
       : null,
-    190
+    250
   )
 
   if (!presence.mounted) return null
 
   const displayName = presence.data?.peerName || 'Incoming Call'
+  const displayAvatar = resolveMediaUrl(currentPeerAvatar || presence.data?.peerAvatar || '')
+  const displayCallType = activeCall?.callType || presence.data?.callType || 'voice'
 
   return (
     <div
-      className={`fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] ${backdropMotionClass(presence.isClosing)}`}
+      className={`fixed inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] ${backdropMotionClass(presence.isClosing)}`}
       role="dialog"
       aria-modal="true"
       aria-label="Incoming call"
@@ -138,58 +168,80 @@ export default function IncomingCallModal() {
         </div>
 
         {/* Body */}
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col items-center justify-center py-6 sm:py-8 px-4 sm:px-6">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+          <div className="flex min-h-full flex-col items-center justify-center py-6 sm:py-8 px-4 sm:px-6">
           <div className="relative">
             <div className="absolute inset-0 rounded-full border border-white/5 bg-gradient-to-b from-white/5 to-transparent animate-pulse" />
-            <div className="relative z-10 flex h-28 w-28 sm:h-32 sm:w-32 shrink-0 items-center justify-center rounded-full border-2 border-[#facc15]/40 bg-[#090a0c]/80 shadow-[0_0_30px_rgba(250,204,21,0.15)]">
-              <Phone className="h-9 w-9 sm:h-10 sm:w-10 text-[#facc15]" />
+            <div className="relative z-10 flex h-28 w-28 sm:h-32 sm:w-32 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-[#facc15]/40 bg-[#090a0c]/80 shadow-[0_0_30px_rgba(250,204,21,0.15)]">
+              {displayAvatar && !avatarFailed ? (
+                <img
+                  src={displayAvatar}
+                  alt=""
+                  onError={() => setAvatarFailed(true)}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <Phone className="h-9 w-9 sm:h-10 sm:w-10 text-[#facc15]" />
+              )}
             </div>
           </div>
 
           <div className="mt-5 sm:mt-6 text-center">
             <p className="text-zinc-400 text-xs sm:text-sm font-medium">Ringing…</p>
-            <p className="text-white text-lg sm:text-xl font-bold mt-1">{activeCall.callType === 'video' ? 'Video Call' : 'Voice Call'}</p>
+            <p className="text-white text-lg sm:text-xl font-bold mt-1">{displayCallType === 'video' ? 'Video Call' : 'Voice Call'}</p>
+            {callIsMuted && (
+              <span className="mt-2 inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-rose-300">
+                <MicOff className="h-3 w-3" /> Mic muted
+              </span>
+            )}
           </div>
 
           {/* Controls */}
-          <div className="mt-6 sm:mt-8 flex w-full justify-center gap-4 px-2">
-            <button
-              type="button"
-              onClick={toggleMute}
-              className={`h-12 w-12 sm:h-13 sm:w-13 shrink-0 rounded-2xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
-                callIsMuted
-                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
-                  : 'bg-white/5 border-white/10 text-white hover:bg-white/10'
-              }`}
-              aria-label={callIsMuted ? 'Unmute microphone' : 'Mute microphone'}
-            >
-              <Mic className={`h-5 w-5 ${callIsMuted ? 'text-rose-400' : 'text-[#facc15]'}`} />
-            </button>
-            <button
-              type="button"
-              onClick={handleAnswer}
-              disabled={answering}
-              className="h-13 w-13 sm:h-14 sm:w-14 shrink-0 rounded-2xl border border-emerald-500/50 bg-emerald-600 flex items-center justify-center text-white shadow-[0_0_24px_rgba(16,185,129,0.35)] transition-all hover:bg-emerald-500 hover:scale-105 active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
-              aria-label={answering ? 'Connecting call' : 'Accept call'}
-            >
-              {answering ? <Loader2 className="h-6 w-6 animate-spin" /> : <Phone className="h-6 w-6" />}
-            </button>
-            <button
-              type="button"
-              onClick={toggleSpeaker}
-              className={`h-12 w-12 sm:h-13 sm:w-13 shrink-0 rounded-2xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
-                callIsSpeakerOn
-                  ? 'bg-amber-500/20 border-yellow-500/40 text-[#facc15]'
-                  : 'bg-white/5 border-white/10 text-white hover:bg-white/10'
-              }`}
-              aria-label={callIsSpeakerOn ? 'Turn off speaker' : 'Turn on speaker'}
-            >
-              {callIsSpeakerOn ? (
-                <Volume2 className="h-5 w-5 text-[#facc15]" />
-              ) : (
-                <VolumeX className="h-5 w-5 text-zinc-400" />
-              )}
-            </button>
+          <div className="mt-6 sm:mt-7 flex w-full flex-col items-center gap-4 px-2">
+            <SpeakerSwitch
+              mode={callSpeakerMode}
+              onChange={setSpeakerMode}
+              headsetInfo={callHeadsetInfo}
+              variant="card"
+            />
+            <div className="flex w-full justify-center gap-6">
+              <div className="flex flex-col items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={toggleMute}
+                  className={`h-12 w-12 sm:h-13 sm:w-13 shrink-0 rounded-2xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+                    callIsMuted
+                      ? 'bg-rose-500/20 border-rose-500/40 text-rose-400'
+                      : 'bg-white/5 border-white/10 text-white hover:bg-white/10'
+                  }`}
+                  aria-label={callIsMuted ? 'Unmute microphone' : 'Mute microphone'}
+                >
+                  {callIsMuted ? (
+                    <MicOff className="h-5 w-5 text-rose-400" />
+                  ) : (
+                    <Mic className="h-5 w-5 text-[#facc15]" />
+                  )}
+                </button>
+                <span className="text-[11px] font-medium text-zinc-400">
+                  {callIsMuted ? 'Unmute' : 'Mute'}
+                </span>
+              </div>
+              <div className="flex flex-col items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleAnswer}
+                  disabled={answering}
+                  className="h-12 w-12 sm:h-13 sm:w-13 shrink-0 rounded-2xl border border-emerald-500/50 bg-emerald-600 flex items-center justify-center text-white shadow-[0_0_24px_rgba(16,185,129,0.35)] transition-all hover:bg-emerald-500 hover:scale-105 active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
+                  aria-label={answering ? 'Connecting call' : 'Accept call'}
+                >
+                  {answering ? <Loader2 className="h-6 w-6 animate-spin" /> : <Phone className="h-6 w-6" />}
+                </button>
+                <span className="text-[11px] font-medium text-emerald-400">
+                  {answering ? 'Joining…' : 'Accept'}
+                </span>
+              </div>
+            </div>
+          </div>
           </div>
         </div>
       </div>

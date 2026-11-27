@@ -111,7 +111,7 @@ export default function RecoveryPinModal() {
     }
   }, [uid, chatToken, identityKeypair, identityNeedsPassphrase, recoveryPromptNonce])
 
-  const presence = useAnimatedPresence(mode, 190)
+  const presence = useAnimatedPresence(mode, 250)
 
   if (!presence.mounted) return null
   const displayMode = mode || presence.data || 'setup'
@@ -229,14 +229,14 @@ export default function RecoveryPinModal() {
   const fieldClass = 'ui-input text-sm'
 
   return (
-    <div className={`fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm ${backdropMotionClass(presence.isClosing)}`}>
+    <div className={`fixed inset-0 z-[300] flex items-center justify-center overflow-y-auto bg-black/60 p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))] backdrop-blur-sm ${backdropMotionClass(presence.isClosing)}`}>
       <div
         ref={dialogRef}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="recovery-pin-title"
-        className={`ui-card w-full max-w-sm origin-center p-5 ${modalMotionClass(presence.isClosing)} ${
+        className={`ui-card w-full max-w-sm max-h-[90dvh] overflow-y-auto overscroll-contain origin-center p-5 ${modalMotionClass(presence.isClosing)} ${
           isLight ? 'border-slate-200/90 bg-white text-slate-900' : 'border-white/[0.08] bg-[#0f1114] text-white'
         }`}
       >

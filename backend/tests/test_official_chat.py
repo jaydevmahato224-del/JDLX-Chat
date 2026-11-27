@@ -1260,12 +1260,13 @@ def test_block_and_report_controls(client, db):
 
 
 def test_chat_signup_login_and_search_by_email(client, db):
-    """Chat accounts can be created with just an email, signed into with that
-    email, and found by an exact email search - without exposing the address."""
+    """Chat accounts require a 10-digit mobile number at signup, can sign into
+    with email, and be found by an exact email search - without exposing PII."""
     res = client.post('/api/chat/auth/register', json={
         'full_name': 'Email Only User',
         'username': 'email_only_user',
         'email': 'Email.Only@Example.com',
+        'phone': '9865001261',
         'password': 'Emailpass123'
     })
     assert res.status_code == 201
@@ -1286,6 +1287,7 @@ def test_chat_signup_login_and_search_by_email(client, db):
         'full_name': 'Email Searcher',
         'username': 'email_searcher',
         'email': 'email.searcher@example.com',
+        'phone': '9865001262',
         'password': 'Searchpass123'
     })
     assert other.status_code == 201
@@ -1303,10 +1305,12 @@ def test_chat_signup_login_and_search_by_email(client, db):
     }).get_json()['data']
     assert not any(u['username'] == 'email_only_user' for u in partial)
 
-
-    # Missing email AND phone is rejected at signup.
+    # Missing mobile number is rejected at signup even when email is present.
     assert client.post('/api/chat/auth/register', json={
-        'full_name': 'No Contact User', 'username': 'no_contact_user', 'password': 'Contactpass1'
+        'full_name': 'No Phone User',
+        'username': 'no_phone_user',
+        'email': 'no.phone@example.com',
+        'password': 'Contactpass1'
     }).status_code == 400
 
 
@@ -1314,16 +1318,16 @@ def test_clear_does_not_delete_direct_chat_history(client, db):
     """Legacy /chat/clear must only touch the support room. It used to resolve
     a DM room from user_id (the lower-id participant) and delete BOTH sides'
     history - the reason conversations appeared to vanish."""
-    def register(name, username):
+    def register(name, username, phone):
         res = client.post('/api/chat/auth/register', json={
-            'full_name': name, 'username': username,
+            'full_name': name, 'username': username, 'phone': phone,
             'email': f'{username}@example.com', 'password': 'Clearpass123'
         })
         assert res.status_code == 201
         return res.get_json()['data']
 
-    first = register('Clear First', 'clear_first')
-    second = register('Clear Second', 'clear_second')
+    first = register('Clear First', 'clear_first', '9865001311')
+    second = register('Clear Second', 'clear_second', '9865001312')
     auth_first = {'Authorization': f"Bearer {first['chat_token']}"}
     auth_second = {'Authorization': f"Bearer {second['chat_token']}"}
 
@@ -1351,16 +1355,16 @@ def test_clear_does_not_delete_direct_chat_history(client, db):
 
 def test_friend_request_can_be_resent_after_decline(client, db):
     """A declined request must not block the pair forever."""
-    def register(name, username):
+    def register(name, username, phone):
         res = client.post('/api/chat/auth/register', json={
-            'full_name': name, 'username': username,
+            'full_name': name, 'username': username, 'phone': phone,
             'email': f'{username}@example.com', 'password': 'Declinepass1'
         })
         assert res.status_code == 201
         return res.get_json()['data']
 
-    sender = register('Decline Sender', 'decline_sender')
-    receiver = register('Decline Receiver', 'decline_receiver')
+    sender = register('Decline Sender', 'decline_sender', '9865001351')
+    receiver = register('Decline Receiver', 'decline_receiver', '9865001352')
     auth_sender = {'Authorization': f"Bearer {sender['chat_token']}"}
     auth_receiver = {'Authorization': f"Bearer {receiver['chat_token']}"}
 
@@ -1409,15 +1413,27 @@ def test_google_chat_signup_requires_completion_form(client, db):
     # 1. Google alone creates nothing.
     assert count_accounts() == 0
 
-    # 2. Gender is mandatory on the completion form.
-    missing = client.post('/api/chat/auth/google/complete', json={
+    # 2. Gender and mobile number are both mandatory on the completion form.
+    missing_gender = client.post('/api/chat/auth/google/complete', json={
         'ticket': ticket,
         'full_name': 'Google Complete',
         'username': 'google_complete',
+        'phone': '9876500124',
         'gender': '',
         'password': 'Googlepass1'
     })
-    assert missing.status_code == 400
+    assert missing_gender.status_code == 400
+    assert count_accounts() == 0
+
+    missing_phone = client.post('/api/chat/auth/google/complete', json={
+        'ticket': ticket,
+        'full_name': 'Google Complete',
+        'username': 'google_complete',
+        'phone': '',
+        'gender': 'male',
+        'password': 'Googlepass1'
+    })
+    assert missing_phone.status_code == 400
     assert count_accounts() == 0
 
     # 3. Complete details create the account + chat tokens.
@@ -1448,6 +1464,7 @@ def test_google_chat_signup_requires_completion_form(client, db):
         'ticket': ticket,
         'full_name': 'Google Complete',
         'username': 'google_complete_2',
+        'phone': '9876500125',
         'gender': 'male',
         'password': 'Googlepass1'
     })
@@ -1457,16 +1474,16 @@ def test_google_chat_signup_requires_completion_form(client, db):
 def test_social_events_push_friend_requests_and_accepts(client, db):
     """The realtime social poll must return a new request, then the accepted
     friendship, as soon as its revision changes (no 30s wait)."""
-    def register(name, username):
+    def register(name, username, phone):
         res = client.post('/api/chat/auth/register', json={
-            'full_name': name, 'username': username,
+            'full_name': name, 'username': username, 'phone': phone,
             'email': f'{username}@example.com', 'password': 'Socialpass1'
         })
         assert res.status_code == 201
         return res.get_json()['data']
 
-    alice = register('Social Alice', 'social_alice')
-    bob = register('Social Bob', 'social_bob')
+    alice = register('Social Alice', 'social_alice', '9876500201')
+    bob = register('Social Bob', 'social_bob', '9876500202')
     auth_alice = {'Authorization': f"Bearer {alice['chat_token']}"}
     auth_bob = {'Authorization': f"Bearer {bob['chat_token']}"}
 
@@ -1510,16 +1527,16 @@ def test_social_events_push_friend_requests_and_accepts(client, db):
 def test_chat_push_subscription_and_friend_request_delivery(client, db, monkeypatch):
     """Push subscriptions are scoped to chat_users, and a friend request
     triggers an OS push for the recipient (when configured)."""
-    def register(name, username):
+    def register(name, username, phone):
         res = client.post('/api/chat/auth/register', json={
-            'full_name': name, 'username': username,
+            'full_name': name, 'username': username, 'phone': phone,
             'email': f'{username}@example.com', 'password': 'Pushpass123'
         })
         assert res.status_code == 201
         return res.get_json()['data']
 
-    sender = register('Push Sender', 'push_sender')
-    receiver = register('Push Receiver', 'push_receiver')
+    sender = register('Push Sender', 'push_sender', '9876500211')
+    receiver = register('Push Receiver', 'push_receiver', '9876500212')
     auth_receiver = {'Authorization': f"Bearer {receiver['chat_token']}"}
     auth_sender = {'Authorization': f"Bearer {sender['chat_token']}"}
 
@@ -1578,16 +1595,16 @@ def test_chat_push_subscription_and_friend_request_delivery(client, db, monkeypa
 
 def test_chat_native_device_push_registration_and_message_delivery(client, db, monkeypatch):
     """FCM tokens are scoped to chat_users and a new DM triggers device push."""
-    def register(name, username):
+    def register(name, username, phone):
         res = client.post('/api/chat/auth/register', json={
-            'full_name': name, 'username': username,
+            'full_name': name, 'username': username, 'phone': phone,
             'email': f'{username}@example.com', 'password': 'Devicepass123'
         })
         assert res.status_code == 201
         return res.get_json()['data']
 
-    sender = register('Device Sender', 'device_sender')
-    receiver = register('Device Receiver', 'device_receiver')
+    sender = register('Device Sender', 'device_sender', '9876500221')
+    receiver = register('Device Receiver', 'device_receiver', '9876500222')
     auth_sender = {'Authorization': f"Bearer {sender['chat_token']}"}
     auth_receiver = {'Authorization': f"Bearer {receiver['chat_token']}"}
 
@@ -1692,6 +1709,7 @@ def test_main_app_chat_web_oauth_handoff_returns_code(client, db, app_module):
         'full_name': 'Main Web OAuth',
         'username': f"mainweb_{suffix}",
         'email': email,
+        'phone': '9876500231',
         'password': 'Mainwebpass123',
         'gender': 'male',
     })
@@ -1735,6 +1753,7 @@ def test_chat_native_oauth_handoff_exchange(client, db):
 
     res = client.post('/api/chat/auth/register', json={
         'full_name': 'Handoff User', 'username': 'handoff_user',
+        'phone': '9876500241',
         'email': 'handoff_user@example.com', 'password': 'Handoffpass123'
     })
     assert res.status_code == 201
@@ -1768,16 +1787,16 @@ def test_chat_native_oauth_handoff_exchange(client, db):
 def test_no_messaging_without_accepted_friendship(client, db):
     """A direct room alone is NOT permission to talk. Sending (and opening)
     must require an accepted friend request, even when a stale room exists."""
-    def register(name, username):
+    def register(name, username, phone):
         res = client.post('/api/chat/auth/register', json={
-            'full_name': name, 'username': username,
+            'full_name': name, 'username': username, 'phone': phone,
             'email': f'{username}@example.com', 'password': 'Gatepass123'
         })
         assert res.status_code == 201
         return res.get_json()['data']
 
-    alice = register('Gate Alice', 'gate_alice')
-    bob = register('Gate Bob', 'gate_bob')
+    alice = register('Gate Alice', 'gate_alice', '9876500251')
+    bob = register('Gate Bob', 'gate_bob', '9876500252')
     auth_alice = {'Authorization': f"Bearer {alice['chat_token']}"}
     auth_bob = {'Authorization': f"Bearer {bob['chat_token']}"}
 
@@ -1822,10 +1841,10 @@ def test_no_messaging_without_accepted_friendship(client, db):
     }).status_code == 200
 
 
-def test_email_only_registration_does_not_conflict_on_empty_phone(client, db):
-    """Email-only registrations (without a mobile number) must succeed and never
-    trigger a 409 duplicate phone conflict against existing null/empty phone records."""
-    # User 1 registers with email and no phone
+def test_registration_requires_phone_and_legacy_null_phones_do_not_conflict(client, db):
+    """New registrations must provide a valid 10-digit mobile number, while
+    legacy NULL-phone accounts in DB must neither conflict nor break login."""
+    # Missing or invalid mobile numbers are rejected cleanly for new accounts.
     res1 = client.post('/api/chat/auth/register', json={
         'full_name': 'Email User One',
         'username': 'email_user_one',
@@ -1833,18 +1852,36 @@ def test_email_only_registration_does_not_conflict_on_empty_phone(client, db):
         'password': 'Password123',
         'phone': ''
     })
-    assert res1.status_code == 201
-    assert res1.get_json()['success'] is True
+    assert res1.status_code == 400
 
-    # User 2 also registers with email and no phone (or omitted phone)
     res2 = client.post('/api/chat/auth/register', json={
         'full_name': 'Email User Two',
         'username': 'email_user_two',
         'email': 'email_user_two@example.com',
         'password': 'Password123'
     })
-    assert res2.status_code == 201
-    assert res2.get_json()['success'] is True
+    assert res2.status_code == 400
+
+    # Two legacy DB rows with phone IS NULL must not violate uniqueness, and
+    # must still be able to sign in with password.
+    from werkzeug.security import generate_password_hash
+    pw_hash = generate_password_hash('LegacyPass123')
+    db.execute(
+        "INSERT INTO chat_users (name, username, email, phone, password_hash, gender) VALUES (?, ?, ?, NULL, ?, 'male')",
+        ('Legacy One', 'legacy_one', 'legacy_one@example.com', pw_hash),
+    )
+    db.execute(
+        "INSERT INTO chat_users (name, username, email, phone, password_hash, gender) VALUES (?, ?, ?, NULL, ?, 'female')",
+        ('Legacy Two', 'legacy_two', 'legacy_two@example.com', pw_hash),
+    )
+    db.commit()
+
+    login_legacy = client.post('/api/chat/auth/login', json={
+        'identifier': 'legacy_one@example.com',
+        'password': 'LegacyPass123',
+    })
+    assert login_legacy.status_code == 200
+    assert login_legacy.get_json()['data']['user']['username'] == 'legacy_one'
 
 
 def test_chat_profile_get_and_update(client, db):
@@ -1895,6 +1932,188 @@ def test_chat_profile_get_and_update(client, db):
         'username': 'profile_tester_v2'
     })
     assert res_conflict.status_code == 409
+
+
+def test_contact_sync_suggestions_notifications_and_phone_search(client, db):
+    """Syncing phonebook contacts identifies registered JDLX Chat users,
+    deduplicates join/suggestion notifications, exposes suggestions, and
+    matches formatted 10-digit phone searches without leaking PII."""
+    def register(name, username, phone):
+        res = client.post('/api/chat/auth/register', json={
+            'full_name': name,
+            'username': username,
+            'phone': phone,
+            'email': f'{username}@example.com',
+            'password': 'ContactPass123',
+        })
+        assert res.status_code == 201
+        return res.get_json()['data']
+
+    alice = register('Contact Alice', 'contact_alice', '9876500301')
+    bob = register('Contact Bob', 'contact_bob', '9876500302')
+    alice_headers = {'Authorization': f"Bearer {alice['chat_token']}"}
+
+    sync_res = client.post('/api/chat/contacts/sync', headers=alice_headers, json={
+        'contacts': [
+            {'name': 'Bob School', 'phone': '+91 98765-00302'},
+            {'name': 'Charlie Unreg', 'phone': '09876500399'},
+            {'name': 'Myself', 'phone': '9876500301'},
+            {'name': 'Too Short', 'phone': '12345'},
+        ]
+    })
+    assert sync_res.status_code == 200
+    sync_data = sync_res.get_json()['data']
+    assert sync_data['synced_count'] == 2
+    assert sync_data['registered_count'] == 1
+    assert sync_data['unregistered_count'] == 1
+    assert sync_data['notifications_created'] == 1
+
+    reg_user = sync_data['registered'][0]
+    assert reg_user['id'] == bob['user']['id']
+    assert reg_user['contact_name'] == 'Bob School'
+    assert reg_user['uses_jdlx_chat'] is True
+    assert reg_user['friend_status'] == 'none'
+    assert 'phone' not in reg_user
+    assert 'email' not in reg_user
+
+    unreg = sync_data['unregistered'][0]
+    assert unreg == {'contact_name': 'Charlie Unreg', 'phone': '9876500399'}
+
+    # Notification persisted once for Alice.
+    notifs = client.get('/api/chat/notifications', headers=alice_headers).get_json()['data']
+    suggestion_notifs = [n for n in notifs if n['title'] == 'Contact on JDLX Chat']
+    assert len(suggestion_notifs) == 1
+    assert 'Bob School' in suggestion_notifs[0]['message']
+
+    # Re-syncing does not create duplicate alerts.
+    resync_data = client.post('/api/chat/contacts/sync', headers=alice_headers, json={
+        'contacts': [
+            {'name': 'Bob School', 'phone': '9876500302'},
+            {'name': 'Charlie Unreg', 'phone': '9876500399'},
+        ]
+    }).get_json()['data']
+    assert resync_data['notifications_created'] == 0
+
+    # GET /contacts/suggestions returns the saved split.
+    sugg_data = client.get('/api/chat/contacts/suggestions', headers=alice_headers).get_json()['data']
+    assert len(sugg_data['registered']) == 1
+    assert sugg_data['registered'][0]['id'] == bob['user']['id']
+    assert sugg_data['unregistered'] == [{'contact_name': 'Charlie Unreg', 'phone': '9876500399'}]
+
+    # Searching formatted 10-digit numbers finds registered users without leaking PII.
+    search_fmt = client.get('/api/chat/users/search?q=%2B91%2098765-00302', headers=alice_headers)
+    assert search_fmt.status_code == 200
+    found = search_fmt.get_json()['data']
+    assert len(found) == 1
+    assert found[0]['id'] == bob['user']['id']
+    assert 'phone' not in found[0]
+    assert 'email' not in found[0]
+
+    # Searching an unregistered 10-digit number returns an empty list so UI can offer invite.
+    search_unreg = client.get('/api/chat/users/search?q=98765%2000399', headers=alice_headers)
+    assert search_unreg.status_code == 200
+    assert search_unreg.get_json()['data'] == []
+
+
+def test_contact_joined_notification_when_saved_number_registers(client, db, monkeypatch):
+    """When a synced phonebook contact later registers, the contact owner gets
+    an in-app alert, realtime friend_event, push notification, and updated suggestion."""
+    import chat_routes
+
+    push_calls = []
+    realtime_calls = []
+    monkeypatch.setattr(
+        chat_routes,
+        '_dispatch_chat_pushes',
+        lambda user_ids, title, body, url, **kwargs: push_calls.append((list(user_ids), title, body, url, kwargs)),
+    )
+    monkeypatch.setattr(
+        chat_routes,
+        'broadcast_supabase_chat_event',
+        lambda events: realtime_calls.extend(events),
+    )
+
+    alice = client.post('/api/chat/auth/register', json={
+        'full_name': 'Owner Alice',
+        'username': 'owner_alice',
+        'phone': '9876500311',
+        'email': 'owner_alice@example.com',
+        'password': 'OwnerPass123',
+    }).get_json()['data']
+    alice_headers = {'Authorization': f"Bearer {alice['chat_token']}"}
+
+    # Sync Charlie's number before Charlie joins JDLX Chat.
+    initial_sync = client.post('/api/chat/contacts/sync', headers=alice_headers, json={
+        'contacts': [{'name': 'Future Friend', 'phone': '9876500312'}]
+    }).get_json()['data']
+    assert initial_sync['registered'] == []
+    assert len(initial_sync['unregistered']) == 1
+
+    # Now Charlie registers with that mobile number.
+    charlie_res = client.post('/api/chat/auth/register', json={
+        'full_name': 'Charlie New',
+        'username': 'charlie_new',
+        'phone': '9876500312',
+        'email': 'charlie_new@example.com',
+        'password': 'CharliePass123',
+    })
+    assert charlie_res.status_code == 201
+    charlie_id = charlie_res.get_json()['data']['user']['id']
+
+    # Alice receives stored notification + push + realtime event.
+    notifs = client.get('/api/chat/notifications', headers=alice_headers).get_json()['data']
+    joined_notifs = [n for n in notifs if n['title'] == 'Contact on JDLX Chat']
+    assert len(joined_notifs) == 1
+    assert 'Future Friend' in joined_notifs[0]['message']
+    assert '@charlie_new' in joined_notifs[0]['message']
+
+    assert any(
+        alice['user']['id'] in uids and title == 'Contact on JDLX Chat' and url == '/chat?open=suggestions'
+        for uids, title, _body, url, _kw in push_calls
+    )
+    assert any(
+        channel == f"chat_user_{alice['user']['id']}" and ev == 'friend_event'
+        and payload.get('action') == 'contact_joined' and payload.get('from_user_id') == charlie_id
+        for channel, ev, payload in realtime_calls
+    )
+
+    # Suggestions endpoint now lists Charlie as registered and clears unregistered.
+    sugg = client.get('/api/chat/contacts/suggestions', headers=alice_headers).get_json()['data']
+    assert len(sugg['registered']) == 1
+    assert sugg['registered'][0]['id'] == charlie_id
+    assert sugg['registered'][0]['contact_name'] == 'Future Friend'
+    assert sugg['unregistered'] == []
+
+
+def test_contact_sync_excludes_blocked_users_and_skips_join_alerts(client, db):
+    """Blocked users must never appear in registered suggestions or emit join alerts."""
+    alice = client.post('/api/chat/auth/register', json={
+        'full_name': 'Block Alice',
+        'username': 'block_alice',
+        'phone': '9876500321',
+        'password': 'BlockPass123',
+    }).get_json()['data']
+    bob = client.post('/api/chat/auth/register', json={
+        'full_name': 'Block Bob',
+        'username': 'block_bob',
+        'phone': '9876500322',
+        'password': 'BlockPass123',
+    }).get_json()['data']
+
+    alice_headers = {'Authorization': f"Bearer {alice['chat_token']}"}
+    db.execute(
+        "INSERT INTO chat_blocks (blocker_id, blocked_id) VALUES (?, ?)",
+        (alice['user']['id'], bob['user']['id']),
+    )
+    db.commit()
+
+    sync_res = client.post('/api/chat/contacts/sync', headers=alice_headers, json={
+        'contacts': [{'name': 'Blocked Person', 'phone': '9876500322'}]
+    })
+    assert sync_res.status_code == 200
+    data = sync_res.get_json()['data']
+    assert data['registered'] == []
+    assert data['notifications_created'] == 0
 
 
 

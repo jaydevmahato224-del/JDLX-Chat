@@ -11,6 +11,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ScreenProtectionPlugin.class);
         registerPlugin(CallAudioPlugin.class);
         registerPlugin(CallBridgePlugin.class);
+        registerPlugin(AppPermissionsPlugin.class);
+        registerPlugin(ContactsPlugin.class);
         super.onCreate(savedInstanceState);
         dismissCallNotification(getIntent());
     }

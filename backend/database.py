@@ -1306,6 +1306,8 @@ def chat_schema_is_current():
         "official_chat_security_events",
         "official_chat_sso_codes",
         "chat_users",
+        "chat_user_contacts",
+        "chat_contact_suggestion_alerts",
         "chat_push_subscriptions",
         "chat_push_tokens",
         "chat_vapid_keys",
@@ -2966,6 +2968,25 @@ def init_db():
         ('profile_image', 'TEXT'),
         ('last_seen_at', 'TIMESTAMP'),
     ])
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS chat_user_contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        contact_phone TEXT NOT NULL,
+        contact_name TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, contact_phone)
+    )''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_user_contacts_user ON chat_user_contacts(user_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_user_contacts_phone ON chat_user_contacts(contact_phone)')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS chat_contact_suggestion_alerts (
+        user_id INTEGER NOT NULL,
+        suggested_user_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, suggested_user_id)
+    )''')
 
     # --- Official Chat Web Push (VAPID) Subscriptions ---
     # Chat identities live in `chat_users`, NOT the storefront `users` table, so

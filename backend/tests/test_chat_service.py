@@ -97,6 +97,7 @@ def test_chat_web_oauth_handoff_returns_code_not_url_tokens(
             "full_name": "Web OAuth User",
             "username": f"weboauth_{uuid.uuid4().hex[:10]}",
             "email": email,
+            "phone": f"97{uuid.uuid4().int % 10**8:08d}",
             "password": "weboauthpass123",
         })
         assert registered.status_code == 201

@@ -7,13 +7,21 @@ import { SUPABASE_PRIVATE_CHANNELS, isCapacitorNative } from '../config'
 import { subscribeToChatPush, unsubscribeFromChatPush } from '../utils/push'
 import { disableChatNativePush, enableChatNativePush } from '../utils/nativePush'
 import {
+  checkNativeContactsPermission,
+  requestNativeContactsPermission,
+  readNativeDeviceContacts
+} from '../utils/contacts'
+import {
   CALL_AUDIO_CONSTRAINTS,
   applyCallAudioBitrate,
   applyLowDataAudioSdp
 } from '../utils/callAudioProfile'
 import {
+  CALL_SPEAKER_MODES,
+  normalizeSpeakerMode,
   startNativeCallAudio,
-  setNativeSpeaker,
+  setNativeSpeakerMode,
+  getNativeCallAudioRoutes,
   stopNativeCallAudio,
   unlockRemoteAudio,
   stopRemoteCallAudio
@@ -192,6 +200,7 @@ let callStartGeneration = 0
 // endCall() fires its hangup request in the background. A new offer must not
 // race it, or the previous row is still 'active' and the server answers 409.
 let pendingEndCallRequest = null
+let switchingCallCamera = false
 
 const parseIceCandidate = (raw) => {
   if (!raw) return null
@@ -1089,6 +1098,12 @@ export const useChatStore = create((set, get) => ({
   outgoingRequests: [],
   pendingRequestsCount: 0,
   inviteInfo: null,
+  contactSuggestions: [],
+  unregisteredContacts: [],
+  contactsPermission: isCapacitorNative() ? 'prompt' : 'unsupported',
+  contactsSyncing: false,
+  contactsSyncedAt: 0,
+  contactsSyncedCount: 0,
   messages: INITIAL_MESSAGES,
   messagesLoading: Boolean(INITIAL_ACTIVE_ROOM_ID && (!INITIAL_MESSAGES || INITIAL_MESSAGES.length === 0)),
   messagesHasMore: false,
@@ -1141,7 +1156,12 @@ export const useChatStore = create((set, get) => ({
   callRemoteStream: null,      // MediaStream (peer audio)
   callPeerConnection: null,    // RTCPeerConnection
   callIsMuted: false,
+  callSpeakerMode: CALL_SPEAKER_MODES.LOUD,
   callIsSpeakerOn: true,
+  callHeadsetInfo: { connected: false, type: '' },
+  callIsCameraOff: false,
+  callCameraFacing: 'user',
+  callIsMinimized: false,
   callTimerSeconds: 0,
   // Live RTCPeerConnection state ('connecting' until ICE + DTLS finish), so the
   // call screen can say "Connecting…" instead of pretending the call is up.
@@ -1295,6 +1315,11 @@ export const useChatStore = create((set, get) => ({
       incomingRequests: userChanged ? [] : get().incomingRequests,
       outgoingRequests: userChanged ? [] : get().outgoingRequests,
       pendingRequestsCount: userChanged ? 0 : get().pendingRequestsCount,
+      contactSuggestions: userChanged ? [] : get().contactSuggestions,
+      unregisteredContacts: userChanged ? [] : get().unregisteredContacts,
+      contactsSyncedAt: userChanged ? 0 : get().contactsSyncedAt,
+      contactsSyncedCount: userChanged ? 0 : get().contactsSyncedCount,
+      contactsSyncing: false,
       peerTyping: userChanged ? false : get().peerTyping,
       peerTypingUser: userChanged ? null : get().peerTypingUser,
       peerOnline: userChanged ? false : get().peerOnline,
@@ -1376,6 +1401,11 @@ export const useChatStore = create((set, get) => ({
       incomingRequests: [],
       outgoingRequests: [],
       pendingRequestsCount: 0,
+      contactSuggestions: [],
+      unregisteredContacts: [],
+      contactsSyncing: false,
+      contactsSyncedAt: 0,
+      contactsSyncedCount: 0,
       messages: [],
       messagesLoading: false,
       messagesError: null,
@@ -1741,8 +1771,8 @@ export const useChatStore = create((set, get) => ({
     }
   },
 
-  // Register with Full Name, Username, Phone, Password
-  registerWithPassword: async ({ fullName, username, phone, password, email = '' }) => {
+  // Register with Full Name, Username, Phone, Gender, Password
+  registerWithPassword: async ({ fullName, username, phone, gender = '', password, email = '' }) => {
     set({ loading: true, error: null })
     try {
       const res = await apiFetch('/chat/auth/register', {
@@ -1752,6 +1782,7 @@ export const useChatStore = create((set, get) => ({
           full_name: (fullName || '').trim(),
           username: (username || '').trim(),
           phone: (phone || '').trim(),
+          gender: (gender || '').trim(),
           password,
           email: (email || '').trim()
         })
@@ -4066,12 +4097,19 @@ export const useChatStore = create((set, get) => ({
               return patch
             })
           })
-          .on('broadcast', { event: 'friend_event' }, () => {
-            // New friend request / accepted request: a soft notification cue,
-            // the same one the app uses for background alerts.
+          .on('broadcast', { event: 'friend_event' }, (msg) => {
+            // New friend request / accepted request / contact joined JDLX Chat.
+            const action = msg?.payload?.action
             playSound('notification')
             get().fetchFriendsAndRequests()
             get().fetchConversations()
+            if (action === 'contact_joined') {
+              get().fetchNotifications()
+              get().fetchUnreadCount()
+              get().fetchContactSuggestions()
+            } else if (get().contactSuggestions.length > 0 || get().unregisteredContacts.length > 0) {
+              get().fetchContactSuggestions()
+            }
           })
           .subscribe((status) => {
             userWsSubscribed = (status === 'SUBSCRIBED')
@@ -4125,10 +4163,14 @@ export const useChatStore = create((set, get) => ({
             socialRealtimeRevision: data.revision || previousRevision
           })
 
-          // New incoming message or friendship status changed: sync inbox & active chat in real-time
+          // New incoming message or friendship/notification status changed: sync inbox, notifications & active chat in real-time
           if (previousRevision && data.revision && data.revision !== previousRevision) {
             get().fetchConversations()
             get().fetchUnreadCount()
+            get().fetchNotifications()
+            if (get().contactSuggestions.length > 0 || get().unregisteredContacts.length > 0) {
+              get().fetchContactSuggestions()
+            }
             if (get().activeRoomId) {
               get().fetchRoomMessages(get().activeRoomId)
             }
@@ -4188,7 +4230,15 @@ export const useChatStore = create((set, get) => ({
             action: 'request'
           })
         }
+        set((state) => ({
+          contactSuggestions: (state.contactSuggestions || []).map((u) =>
+            sameId(u.id, targetUserId) ? { ...u, friend_status: 'pending_sent' } : u
+          )
+        }))
         get().fetchFriendsAndRequests()
+        if (get().contactSuggestions.length > 0) {
+          get().fetchContactSuggestions()
+        }
         return { success: true, message: json.message }
       }
       return { success: false, error: json.message || 'Failed to send request' }
@@ -4219,8 +4269,23 @@ export const useChatStore = create((set, get) => ({
             action
           })
         }
+        set((state) => ({
+          contactSuggestions: (state.contactSuggestions || []).map((u) => {
+            if (sameId(u.friend_request_id, requestId) || (targetFriendId && sameId(u.id, targetFriendId))) {
+              return {
+                ...u,
+                friend_status: action === 'accept' ? 'friends' : 'none',
+                friend_request_id: null
+              }
+            }
+            return u
+          })
+        }))
         get().fetchFriendsAndRequests()
         get().fetchConversations()
+        if (get().contactSuggestions.length > 0) {
+          get().fetchContactSuggestions()
+        }
         return { success: true, data: json.data }
       }
       return { success: false, error: json.message }
@@ -4246,6 +4311,105 @@ export const useChatStore = create((set, get) => ({
       return null
     } catch {
       return null
+    }
+  },
+
+  // 7b. Phonebook contact discovery & suggestions
+  refreshContactsPermission: async () => {
+    const res = await checkNativeContactsPermission()
+    set({ contactsPermission: res.state })
+    return res
+  },
+
+  fetchContactSuggestions: async () => {
+    const token = get().chatToken
+    if (!token) return null
+
+    try {
+      const res = await apiFetch('/chat/contacts/suggestions', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const json = await res.json()
+      if (res.ok && json.success && json.data) {
+        set({
+          contactSuggestions: json.data.registered || [],
+          unregisteredContacts: json.data.unregistered || [],
+          contactsSyncedCount: json.data.synced_count || 0
+        })
+        return json.data
+      }
+      return null
+    } catch {
+      return null
+    }
+  },
+
+  syncDeviceContacts: async ({ requestPermission = false, manualContacts = null } = {}) => {
+    const token = get().chatToken
+    if (!token) return { success: false, error: 'Not authenticated' }
+
+    set({ contactsSyncing: true })
+    try {
+      let contactsList = Array.isArray(manualContacts) ? manualContacts : null
+
+      if (!contactsList) {
+        if (!isCapacitorNative()) {
+          set({ contactsSyncing: false })
+          const saved = await get().fetchContactSuggestions()
+          return {
+            success: Boolean(saved),
+            native: false,
+            ...(saved || { registered: [], unregistered: [], synced_count: 0 })
+          }
+        }
+
+        let perm = await checkNativeContactsPermission()
+        if (!perm.granted && requestPermission) {
+          perm = await requestNativeContactsPermission()
+        }
+        set({ contactsPermission: perm.state })
+
+        if (!perm.granted) {
+          set({ contactsSyncing: false })
+          await get().fetchContactSuggestions()
+          return { success: false, needsPermission: true, permission: perm.state }
+        }
+
+        const nativeRead = await readNativeDeviceContacts()
+        contactsList = nativeRead.contacts || []
+      }
+
+      const res = await apiFetch('/chat/contacts/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ contacts: contactsList })
+      })
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        set({ contactsSyncing: false })
+        return { success: false, error: json.message || 'Could not sync contacts' }
+      }
+
+      const data = json.data || {}
+      set({
+        contactSuggestions: data.registered || [],
+        unregisteredContacts: data.unregistered || [],
+        contactsSyncedCount: data.synced_count ?? contactsList.length,
+        contactsSyncedAt: Date.now(),
+        contactsSyncing: false
+      })
+
+      if (data.notifications_created > 0) {
+        get().fetchNotifications()
+        get().fetchUnreadCount()
+      }
+      return { success: true, ...data }
+    } catch (err) {
+      set({ contactsSyncing: false })
+      return { success: false, error: err?.message || 'Could not sync contacts' }
     }
   },
 
@@ -4540,10 +4704,15 @@ export const useChatStore = create((set, get) => ({
       state.callRemoteStream.getTracks().forEach((t) => t.stop())
       set({ callRemoteStream: null })
     }
+    switchingCallCamera = false
     set({
       activeCall: null,
       callIsMuted: false,
+      callSpeakerMode: CALL_SPEAKER_MODES.LOUD,
       callIsSpeakerOn: true,
+      callIsCameraOff: false,
+      callCameraFacing: 'user',
+      callIsMinimized: false,
       callConnectionState: null,
       callDeepLinkHandled: null
     })
@@ -4634,12 +4803,147 @@ export const useChatStore = create((set, get) => ({
     set({ callIsMuted: next })
   },
 
-  toggleSpeaker: () => {
-    const next = !get().callIsSpeakerOn
-    set({ callIsSpeakerOn: next })
-    // Web cannot route output; the APK plugin switches speaker/earpiece.
-    setNativeSpeaker(next)
+  setSpeakerMode: (mode) => {
+    let nextMode = normalizeSpeakerMode(mode)
+    if (nextMode === CALL_SPEAKER_MODES.HEADSET && !get().callHeadsetInfo?.connected) {
+      nextMode = CALL_SPEAKER_MODES.EAR
+    }
+    set({ callSpeakerMode: nextMode, callIsSpeakerOn: nextMode === CALL_SPEAKER_MODES.LOUD })
+    // Web cannot route output; the APK plugin switches loud / ear / headset.
+    setNativeSpeakerMode(nextMode)
   },
+
+  toggleSpeaker: () => {
+    const nextMode =
+      get().callSpeakerMode === CALL_SPEAKER_MODES.LOUD
+        ? CALL_SPEAKER_MODES.EAR
+        : CALL_SPEAKER_MODES.LOUD
+    get().setSpeakerMode(nextMode)
+  },
+
+  applyNativeAudioRoutesPayload: (payload) => {
+    if (!payload) return
+    const connected = Boolean(payload.hasHeadset)
+    const type = typeof payload.headsetType === 'string' ? payload.headsetType : ''
+    const prev = get().callHeadsetInfo
+    if (!prev || prev.connected !== connected || prev.type !== type) {
+      set({ callHeadsetInfo: { connected, type } })
+    }
+    if (!connected && get().callSpeakerMode === CALL_SPEAKER_MODES.HEADSET) {
+      const fallback = payload.mode && payload.mode !== CALL_SPEAKER_MODES.HEADSET
+        ? normalizeSpeakerMode(payload.mode)
+        : (get().activeCall?.callType === 'video' ? CALL_SPEAKER_MODES.LOUD : CALL_SPEAKER_MODES.EAR)
+      set({ callSpeakerMode: fallback, callIsSpeakerOn: fallback === CALL_SPEAKER_MODES.LOUD })
+      setNativeSpeakerMode(fallback)
+    }
+  },
+
+  syncNativeAudioRoutes: async () => {
+    const payload = await getNativeCallAudioRoutes()
+    get().applyNativeAudioRoutesPayload(payload)
+    return payload
+  },
+
+  toggleVideoCamera: () => {
+    const { activeCall, callLocalStream, callIsCameraOff } = get()
+    if (activeCall?.callType !== 'video' || !callLocalStream) return
+    const nextOff = !callIsCameraOff
+    callLocalStream.getVideoTracks().forEach((t) => { t.enabled = !nextOff })
+    set({ callIsCameraOff: nextOff })
+  },
+
+  switchCallCamera: async () => {
+    if (switchingCallCamera) return { success: false, busy: true }
+    const { activeCall, callLocalStream, callCameraFacing } = get()
+    if (activeCall?.callType !== 'video' || !callLocalStream) {
+      return { success: false, error: 'Video stream unavailable' }
+    }
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      return { success: false, error: 'Camera switching is not supported' }
+    }
+    switchingCallCamera = true
+    const prevFacing = callCameraFacing === 'environment' ? 'environment' : 'user'
+    const nextFacing = prevFacing === 'user' ? 'environment' : 'user'
+    const oldVideoTracks = callLocalStream.getVideoTracks()
+
+    const attachVideoTrack = async (newTrack, facing) => {
+      newTrack.enabled = !get().callIsCameraOff
+      const pc = get().callPeerConnection
+      if (pc) {
+        const sender =
+          pc.getSenders().find((s) => s.track?.kind === 'video' || oldVideoTracks.includes(s.track)) ||
+          (typeof pc.getTransceivers === 'function'
+            ? pc.getTransceivers().find((t) => t.receiver?.track?.kind === 'video')?.sender
+            : null)
+        if (sender && typeof sender.replaceTrack === 'function') {
+          await sender.replaceTrack(newTrack)
+        }
+      }
+      const currentStream = get().callLocalStream
+      if (!currentStream) {
+        try { newTrack.stop() } catch {}
+        return
+      }
+      const updatedStream = new MediaStream([...currentStream.getAudioTracks(), newTrack])
+      set({ callLocalStream: updatedStream, callCameraFacing: facing })
+    }
+
+    try {
+      // Release the active lens first: many Android devices cannot hold front
+      // and back cameras open simultaneously.
+      oldVideoTracks.forEach((t) => { try { t.stop() } catch {} })
+
+      let newStream = null
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { exact: nextFacing } }
+        })
+      } catch {
+        try {
+          newStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { facingMode: { ideal: nextFacing } }
+          })
+        } catch {
+          newStream = null
+        }
+      }
+
+      if (!get().activeCall) {
+        if (newStream) newStream.getTracks().forEach((t) => { try { t.stop() } catch {} })
+        return { success: false, error: 'Call ended' }
+      }
+
+      const newTrack = newStream?.getVideoTracks?.()[0] || null
+      if (!newTrack) {
+        // Restore previous camera if this device only has a single lens.
+        try {
+          const fallbackStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { facingMode: prevFacing }
+          })
+          const fallbackTrack = fallbackStream.getVideoTracks()[0]
+          if (fallbackTrack) await attachVideoTrack(fallbackTrack, prevFacing)
+        } catch {}
+        return { success: false, error: 'Could not switch camera on this device' }
+      }
+
+      await attachVideoTrack(newTrack, nextFacing)
+      return { success: true, facing: nextFacing }
+    } catch (e) {
+      console.warn('switch call camera error:', e)
+      return { success: false, error: 'Could not switch camera' }
+    } finally {
+      switchingCallCamera = false
+    }
+  },
+
+  minimizeCall: () => {
+    if (get().activeCall) set({ callIsMinimized: true })
+  },
+
+  restoreCall: () => set({ callIsMinimized: false }),
 
   // Chrome >= M100 emits `a=extmap-allow-mixed`, which Firefox's SDP parser
   // cannot read — it rejects the WHOLE remote description with
@@ -4818,8 +5122,14 @@ export const useChatStore = create((set, get) => ({
       localStream.getTracks().forEach((t) => { try { t.stop() } catch {} })
       return { success: false, error: 'Call cancelled' }
     }
-    set({ callLocalStream: localStream, callIsMuted: false })
-    startNativeCallAudio({ video: callType === 'video', speaker: get().callIsSpeakerOn })
+    set({
+      callLocalStream: localStream,
+      callIsMuted: false,
+      callIsCameraOff: false,
+      callCameraFacing: 'user',
+      callIsMinimized: false
+    })
+    startNativeCallAudio({ video: callType === 'video', speakerMode: get().callSpeakerMode })
 
     // ICE gathering starts as soon as setLocalDescription() runs, which is
     // BEFORE the offer row exists on the backend. Those early candidates used
@@ -4992,11 +5302,17 @@ export const useChatStore = create((set, get) => ({
     // is available in the incoming-call modal, and resetting it here turned
     // the microphone on the moment the user answered.
     const stayMuted = get().callIsMuted
-    set({ callLocalStream: localStream, callIsMuted: stayMuted })
+    set({
+      callLocalStream: localStream,
+      callIsMuted: stayMuted,
+      callIsCameraOff: false,
+      callCameraFacing: 'user',
+      callIsMinimized: false
+    })
     if (stayMuted) {
       localStream.getAudioTracks().forEach((t) => { t.enabled = false })
     }
-    startNativeCallAudio({ video: isVideo, speaker: get().callIsSpeakerOn })
+    startNativeCallAudio({ video: isVideo, speakerMode: get().callSpeakerMode })
 
     try {
       const answerIceBatcher = createIceBatcher(roomId, () => get().chatToken || chatToken)

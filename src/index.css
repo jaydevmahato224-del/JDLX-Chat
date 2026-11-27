@@ -17,6 +17,7 @@
    1. DESIGN TOKENS & THEME
    ------------------------------------------------------------------------------ */
 @theme {
+  --breakpoint-xs: 24rem;
   /* 
      JDLX Design System v3.1 
      Theme: Digital Concierge (Luxury & Precision)
@@ -1878,6 +1879,10 @@ html, body {
     opacity: 1;
     transform: translate3d(0, 0, 0);
   }
+  80% {
+    opacity: 1;
+    transform: translate3d(0, 88%, 0);
+  }
   100% {
     opacity: 0;
     transform: translate3d(0, 100%, 0);
@@ -1890,7 +1895,7 @@ html, body {
 }
 
 @utility animate-sheet-exit-down {
-  animation: sheetSlideDown 0.2s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  animation: sheetSlideDown 0.24s cubic-bezier(0.32, 0.72, 0, 1) forwards;
   will-change: transform, opacity;
 }
 
@@ -1911,6 +1916,10 @@ html, body {
     opacity: 1;
     transform: translate3d(0, 0, 0);
   }
+  80% {
+    opacity: 1;
+    transform: translate3d(88%, 0, 0);
+  }
   100% {
     opacity: 0;
     transform: translate3d(100%, 0, 0);
@@ -1923,7 +1932,7 @@ html, body {
 }
 
 @utility animate-drawer-exit-right {
-  animation: drawerSlideRightExit 0.2s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  animation: drawerSlideRightExit 0.24s cubic-bezier(0.32, 0.72, 0, 1) forwards;
   will-change: transform, opacity;
 }
 
@@ -1935,6 +1944,7 @@ html, body {
 
 @keyframes backdropFadeOut {
   0% { opacity: 1; }
+  30% { opacity: 0.85; }
   100% { opacity: 0; }
 }
 
@@ -1965,7 +1975,7 @@ html, body {
 }
 
 @utility animate-backdrop-exit {
-  animation: backdropFadeOut 0.19s ease-in forwards;
+  animation: backdropFadeOut 0.23s ease-out forwards;
 }
 
 @utility animate-modal-enter {
@@ -1974,7 +1984,7 @@ html, body {
 }
 
 @utility animate-modal-exit {
-  animation: modalZoomOut 0.18s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  animation: modalZoomOut 0.2s cubic-bezier(0.32, 0.72, 0, 1) forwards;
   will-change: transform, opacity;
 }
 
@@ -2010,7 +2020,7 @@ html, body {
 }
 
 @utility animate-popover-exit {
-  animation: popoverExitScale 0.15s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  animation: popoverExitScale 0.17s cubic-bezier(0.32, 0.72, 0, 1) forwards;
   will-change: transform, opacity;
 }
 
@@ -2021,8 +2031,9 @@ html, body {
     inset: 0;
     z-index: 40;
     transform: translate3d(var(--mobile-chat-x, 0%), 0, 0);
-    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: transform 250ms cubic-bezier(0.22, 1, 0.36, 1);
     will-change: transform;
+    backface-visibility: hidden;
   }
   .mobile-chat-pane.mobile-chat-dragging {
     transition: none;
@@ -2725,10 +2736,6 @@ html.jdlx-blank-capture #jdlx-blank-overlay {
 @media (max-width: 640px) {
   .app-scroll-root {
     padding-bottom: env(safe-area-inset-bottom);
-  }
-  .login-sheet main > div {
-    border-radius: 0 !important;
-    min-height: unset !important;
   }
   /* Prevent automatic browser viewport zoom when tapping inputs on mobile */
   input[type="text"],

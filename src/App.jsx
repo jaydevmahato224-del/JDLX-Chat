@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from './store/useChatStore'
 import { initChatNativePush, syncChatPushToken } from './utils/nativePush'
 import { configureNativeCalls, clearNativeCalls } from './utils/callNative'
+import { ensureStartupPermissions } from './utils/appPermissions'
 import { API_BASE_URL, isCapacitorNative } from './config'
 
 // Route-level code splitting: the login screen no longer downloads the ~10k-line
@@ -29,6 +30,13 @@ function App() {
   useEffect(() => {
     fetchChatBranding()
   }, [fetchChatBranding])
+
+  // Request required Android runtime permissions (Contacts, Mic, Camera, Notifications)
+  // once cleanly on app open before FCM registration asks separately.
+  useEffect(() => {
+    if (!isCapacitorNative()) return
+    ensureStartupPermissions().catch(() => {})
+  }, [])
 
   // Private Realtime channels: fetch the short-lived Supabase JWT once per
   // session. No-op when VITE_SUPABASE_PRIVATE_CHANNELS is not enabled.
@@ -110,7 +118,10 @@ function App() {
       {/* Chat-styled toast notifications */}
       <Toaster
         position="top-center"
-        containerStyle={{ zIndex: 9999999 }}
+        containerStyle={{
+          zIndex: 9999999,
+          top: 'max(0.75rem, env(safe-area-inset-top, 0px))'
+        }}
         toastOptions={{
           duration: 3200,
           style: {

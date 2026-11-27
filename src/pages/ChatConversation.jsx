@@ -89,6 +89,22 @@ import { resolveMediaUrl, API_BASE_URL, isCapacitorNative } from '../config'
 import { sameId } from '../utils/ids'
 import { triggerHaptic } from '../utils/haptics'
 import { copyTextToClipboard } from '../utils/clipboard'
+import {
+  extractSearchablePhone,
+  formatIndianPhoneDisplay,
+  normalizeIndianPhone,
+  buildInviteMessage,
+  inviteViaSms,
+  inviteViaWhatsApp,
+  isWebContactPickerSupported,
+  pickWebContacts
+} from '../utils/contacts'
+import {
+  waitForStartupPermissions,
+  getAppPermissionsStatus,
+  requestSingleAppPermission,
+  openNativeAppSettings
+} from '../utils/appPermissions'
 import { useDialogA11y } from '../hooks/useDialogA11y'
 import {
   backdropMotionClass,
@@ -1180,6 +1196,12 @@ export default function ChatConversation() {
     respondFriendRequest,
     inviteInfo,
     fetchInviteInfo,
+    contactSuggestions,
+    unregisteredContacts,
+    contactsPermission,
+    contactsSyncing,
+    fetchContactSuggestions,
+    syncDeviceContacts,
     searchUsers,
     messages, 
     messagesLoading,
@@ -1238,7 +1260,17 @@ export default function ChatConversation() {
   // which is what made taps feel late and queue up. CallScreen and
   // IncomingCallModal read those fields themselves.
   } = useChatStore(useShallow((state) => {
-    const { callTimerSeconds, callIsMuted, callIsSpeakerOn, ...rest } = state
+    const {
+      callTimerSeconds,
+      callIsMuted,
+      callIsSpeakerOn,
+      callSpeakerMode,
+      callHeadsetInfo,
+      callIsCameraOff,
+      callCameraFacing,
+      callIsMinimized,
+      ...rest
+    } = state
     return rest
   }))
 
@@ -1288,13 +1320,17 @@ export default function ChatConversation() {
 
   // Mobile Edge Swipe-to-Back (iOS / Android Native standard: clientX <= 28px)
   const [edgeSwipeOffset, setEdgeSwipeOffset] = useState(0)
+  const [isEdgeDragging, setIsEdgeDragging] = useState(false)
   const isEdgeSwipingRef = useRef(false)
   const edgeSwipeStartRef = useRef({ x: 0, y: 0 })
   const edgeHapticFiredRef = useRef(false)
 
   // Modals & Drawers
   const [showAddFriendModal, setShowAddFriendModal] = useState(false)
-  const [friendModalTab, setFriendModalTab] = useState('search') // 'search' | 'requests' | 'invite'
+  const [friendModalTab, setFriendModalTab] = useState('search') // 'search' | 'contacts' | 'requests' | 'invite'
+  const [contactsTabFilter, setContactsTabFilter] = useState('')
+  const [appPermissions, setAppPermissions] = useState(null)
+  const [requestingPermAlias, setRequestingPermAlias] = useState('')
   const [showPushPrompt, setShowPushPrompt] = useState(false)
   const [showProfileDrawer, setShowProfileDrawer] = useState(false)
   const [showNotificationsDrawer, setShowNotificationsDrawer] = useState(false)
@@ -2297,6 +2333,9 @@ export default function ChatConversation() {
     setEditUsername(chatUser.username || '')
     setEditBio(chatUser.bio || 'Hey there! I am using JDLX Chat')
     setEditGender(chatUser.gender || 'prefer_not_to_say')
+    if (isCapacitorNative()) {
+      getAppPermissionsStatus().then(setAppPermissions).catch(() => {})
+    }
   }, [showProfileDrawer, chatUser])
 
   // Reset contact rename & note draft states when modal closes
@@ -2475,7 +2514,7 @@ export default function ChatConversation() {
       if (document.fullscreenElement) {
         try { document.exitFullscreen().catch(() => {}) } catch {}
       }
-    }, 200)
+    }, 250)
   }, [])
 
   // Mirror the lightbox state in refs so navigation never has to call a setter
@@ -3044,7 +3083,7 @@ export default function ChatConversation() {
 
   // Symmetric exit-animation presence trackers (keeps overlays mounted cleanly
   // through CSS exit keyframes without delaying state cleanup or business logic).
-  const mobileChatPresence = useAnimatedPresence(mobileView === 'chat', 240)
+  const mobileChatPresence = useAnimatedPresence(mobileView === 'chat', 310)
   const [mobileChatSlideIn, setMobileChatSlideIn] = useState(false)
   useEffect(() => {
     if (mobileView !== 'chat') {
@@ -3061,50 +3100,50 @@ export default function ChatConversation() {
     }
   }, [mobileView])
 
-  const friendsMenuPresence = useAnimatedPresence(showFriendsMenu, 160)
-  const attachmentTrayPresence = useAnimatedPresence(showAttachmentTray && !isBlockedConversation, 160)
-  const emojiPickerPresence = useAnimatedPresence(showEmojiPicker, 160)
+  const friendsMenuPresence = useAnimatedPresence(showFriendsMenu, 210)
+  const attachmentTrayPresence = useAnimatedPresence(showAttachmentTray && !isBlockedConversation, 210)
+  const emojiPickerPresence = useAnimatedPresence(showEmojiPicker, 210)
   const actionMenuPresence = useAnimatedPresence(
     actionMessage ? { msg: actionMessage, anchor: actionMessageAnchor } : null,
-    160
+    250
   )
-  const addFriendModalPresence = useAnimatedPresence(showAddFriendModal, 210)
-  const profileDrawerPresence = useAnimatedPresence(showProfileDrawer, 210)
-  const notificationsDrawerPresence = useAnimatedPresence(showNotificationsDrawer, 210)
-  const reportModalPresence = useAnimatedPresence(showReportModal, 210)
-  const imageSendPresence = useAnimatedPresence(imageSendModal?.items?.length ? imageSendModal : null, 210)
+  const addFriendModalPresence = useAnimatedPresence(showAddFriendModal, 290)
+  const profileDrawerPresence = useAnimatedPresence(showProfileDrawer, 290)
+  const notificationsDrawerPresence = useAnimatedPresence(showNotificationsDrawer, 290)
+  const reportModalPresence = useAnimatedPresence(showReportModal, 290)
+  const imageSendPresence = useAnimatedPresence(imageSendModal?.items?.length ? imageSendModal : null, 250)
   const contactInfoPresence = useAnimatedPresence(
     showContactInfoModal && activeConversation ? activeConversation : null,
-    220
+    290
   )
   const addGroupMembersPresence = useAnimatedPresence(
     showAddGroupMembers && activeConversation?.is_group ? activeConversation : null,
-    210
+    290
   )
-  const createGroupPresence = useAnimatedPresence(showCreateGroupModal, 210)
+  const createGroupPresence = useAnimatedPresence(showCreateGroupModal, 290)
   const safetyModalPresence = useAnimatedPresence(
     showSafetyVerificationModal && activeConversation ? activeConversation : null,
-    210
+    290
   )
   const disappearingModalPresence = useAnimatedPresence(
     showDisappearingModal && (disappearingModalContact || activeConversation)
       ? (disappearingModalContact || activeConversation)
       : null,
-    210
+    290
   )
-  const friendQuickPresence = useAnimatedPresence(friendQuickActionsTarget, 210)
+  const friendQuickPresence = useAnimatedPresence(friendQuickActionsTarget, 290)
   const muteModalPresence = useAnimatedPresence(
     showMuteModal && activeConversation ? activeConversation : null,
-    210
+    290
   )
   const wallpaperModalPresence = useAnimatedPresence(
     showWallpaperModal && activeConversation ? activeConversation : null,
-    210
+    290
   )
-  const starredModalPresence = useAnimatedPresence(showStarredModal, 210)
-  const dragOverlayPresence = useAnimatedPresence(Boolean(isDraggingOver && activeConversation), 160)
-  const pwaInstallPresence = useAnimatedPresence(showPwaInstallModal, 210)
-  const confirmDialogPresence = useAnimatedPresence(confirmDialog, 180)
+  const starredModalPresence = useAnimatedPresence(showStarredModal, 290)
+  const dragOverlayPresence = useAnimatedPresence(Boolean(isDraggingOver && activeConversation), 250)
+  const pwaInstallPresence = useAnimatedPresence(showPwaInstallModal, 290)
+  const confirmDialogPresence = useAnimatedPresence(confirmDialog, 250)
 
   // Popovers are dismissible with Escape, matching the modal sheets.
   useEffect(() => {
@@ -3344,10 +3383,12 @@ export default function ChatConversation() {
     const touch = e.touches[0]
     if (touch.clientX <= 28) {
       isEdgeSwipingRef.current = true
+      setIsEdgeDragging(true)
       edgeSwipeStartRef.current = { x: touch.clientX, y: touch.clientY }
       edgeHapticFiredRef.current = false
     } else {
       isEdgeSwipingRef.current = false
+      setIsEdgeDragging(false)
     }
   }
 
@@ -3360,6 +3401,7 @@ export default function ChatConversation() {
     // Cancel if gesture is predominantly vertical scroll
     if (deltaY > 35 && deltaX < 20) {
       isEdgeSwipingRef.current = false
+      setIsEdgeDragging(false)
       setEdgeSwipeOffset(0)
       return
     }
@@ -3380,12 +3422,17 @@ export default function ChatConversation() {
   const handleEdgeTouchEnd = () => {
     if (!isEdgeSwipingRef.current) return
     isEdgeSwipingRef.current = false
+    setIsEdgeDragging(false)
 
     if (edgeSwipeOffset >= 60) {
       triggerHaptic('light')
       setMobileView('list')
     }
-    setEdgeSwipeOffset(0)
+    // Clear swipe offset on the next frame so .mobile-chat-pane re-enables
+    // its CSS transform transition before animating to 100% (or back to 0%).
+    requestAnimationFrame(() => {
+      setEdgeSwipeOffset(0)
+    })
     edgeHapticFiredRef.current = false
   }
 
@@ -3462,15 +3509,53 @@ export default function ChatConversation() {
     fetchNotifications()
     fetchUnreadCount()
     fetchInviteInfo()
+    fetchContactSuggestions()
 
     const interval = setInterval(() => {
       fetchConversations()
       fetchFriendsAndRequests()
+      fetchNotifications()
       fetchUnreadCount()
     }, 30000)
 
     return () => clearInterval(interval)
-  }, [fetchConversations, fetchFriendsAndRequests, fetchNotifications, fetchUnreadCount, fetchInviteInfo])
+  }, [fetchConversations, fetchFriendsAndRequests, fetchNotifications, fetchUnreadCount, fetchInviteInfo, fetchContactSuggestions])
+
+  // 2a-contacts. Sync device contacts & load permission status after startup prompt.
+  useEffect(() => {
+    if (!chatToken || !chatUser?.id) return undefined
+    let cancelled = false
+
+    const hydratePermissionsAndContacts = async () => {
+      await waitForStartupPermissions()
+      if (cancelled) return
+      if (isCapacitorNative()) {
+        const status = await getAppPermissionsStatus()
+        if (!cancelled) setAppPermissions(status)
+        await syncDeviceContacts({ requestPermission: false })
+      } else {
+        await fetchContactSuggestions()
+      }
+    }
+
+    hydratePermissionsAndContacts().catch(() => {})
+
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible' || !isCapacitorNative()) return
+      getAppPermissionsStatus().then((status) => {
+        if (cancelled) return
+        setAppPermissions(status)
+        if (status?.contacts === 'granted') {
+          syncDeviceContacts({ requestPermission: false }).catch(() => {})
+        }
+      }).catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [chatToken, chatUser?.id, syncDeviceContacts, fetchContactSuggestions])
 
   // 2-invite. Open the inviter's chat after login/registration when the user
   // arrived through a ?ref=@username invite link.
@@ -3678,6 +3763,12 @@ export default function ChatConversation() {
         setFriendModalTab('requests')
         return
       }
+      if (parsed.searchParams.get('open') === 'suggestions') {
+        setShowAddFriendModal(true)
+        setFriendModalTab('contacts')
+        fetchContactSuggestions()
+        return
+      }
       // Web Push / native FCM call notification: ring the in-app modal for the
       // call that woke us, even if the watcher has not polled yet. Answering
       // stays a manual tap in IncomingCallModal.
@@ -3714,7 +3805,7 @@ export default function ChatConversation() {
 
     try {
       const params = new URLSearchParams(window.location.search)
-      if (params.get('open') === 'requests' || params.get('room') || params.get('incoming_call')) {
+      if (params.get('open') === 'requests' || params.get('open') === 'suggestions' || params.get('room') || params.get('incoming_call')) {
         const target = window.location.href
         window.history.replaceState({}, document.title, window.location.pathname)
         openTarget(target)
@@ -3729,7 +3820,7 @@ export default function ChatConversation() {
       }
       window.removeEventListener('jdlx:chat-push-nav', onNativePush)
     }
-  }, [fetchConversations, selectConversation, scrollToBottom, handleCallDeepLink])
+  }, [fetchConversations, selectConversation, scrollToBottom, handleCallDeepLink, fetchContactSuggestions])
 
   // 3. Scroll to bottom when messages update
   // Only scroll for a NEW last message. Prepending an older page keeps the
@@ -3841,6 +3932,9 @@ export default function ChatConversation() {
       showFriendsMenu,
       showDisappearingModal,
       showContactInfoModal,
+      showSafetyVerificationModal,
+      showAddGroupMembers,
+      showCreateGroupModal,
       showMuteModal,
       showWallpaperModal,
       showStarredModal,
@@ -3849,6 +3943,8 @@ export default function ChatConversation() {
       showNotificationsDrawer,
       showProfileDrawer,
       showAddFriendModal,
+      showAttachmentTray,
+      showEmojiPicker,
       actionMessage,
       editingId,
       showMenu,
@@ -3865,21 +3961,37 @@ export default function ChatConversation() {
       try {
         const { App } = await import('@capacitor/app')
         const listener = await App.addListener('backButton', () => {
+          const storeState = useChatStore.getState()
+          const c = storeState.activeCall
+          const uid = storeState.chatUser?.id
+          const callFullscreen = Boolean(
+            c && !storeState.callIsMinimized
+            && (c.state === 'active' || (c.state === 'ringing' && String(c.callerId) === String(uid)))
+          )
+          if (callFullscreen) { storeState.minimizeCall(); return }
+          if (storeState.callEndedInfo) { storeState.dismissCallEnded(); return }
+          if (storeState.callHistoryOpen) { storeState.closeCallHistory(); return }
+
           const s = backHandlerStateRef.current
           if (s.confirmDialog) { setConfirmDialog(null); return }
           if (s.selectedPreviewImage) { handleClosePreview(); return }
           if (s.friendQuickActionsTarget) { setFriendQuickActionsTarget(null); return }
           if (s.showFriendsMenu) { setShowFriendsMenu(false); return }
+          if (s.showSafetyVerificationModal) { setShowSafetyVerificationModal(false); return }
           if (s.showDisappearingModal) { setShowDisappearingModal(false); return }
           if (s.showStarredModal) { setShowStarredModal(false); return }
           if (s.showMuteModal) { setShowMuteModal(false); return }
           if (s.showWallpaperModal) { setShowWallpaperModal(false); return }
+          if (s.showAddGroupMembers) { setShowAddGroupMembers(false); return }
+          if (s.showCreateGroupModal) { setShowCreateGroupModal(false); return }
           if (s.showContactInfoModal) { setShowContactInfoModal(false); return }
           if (s.showPwaInstallModal) { setShowPwaInstallModal(false); return }
           if (s.showReportModal) { setShowReportModal(false); return }
           if (s.showNotificationsDrawer) { setShowNotificationsDrawer(false); return }
           if (s.showProfileDrawer) { setShowProfileDrawer(false); return }
           if (s.showAddFriendModal) { setShowAddFriendModal(false); return }
+          if (s.showAttachmentTray) { setShowAttachmentTray(false); return }
+          if (s.showEmojiPicker) { setShowEmojiPicker(false); return }
           if (s.actionMessage) { setActionMessage(null); return }
           if (s.editingId) { setEditingId(null); setEditDraft(''); return }
           if (s.showMenu) { setShowMenu(false); return }
@@ -5258,6 +5370,19 @@ export default function ChatConversation() {
       return
     }
 
+    // 3b. Contact Suggestion / Joined notification -> open Contact Suggestions
+    if (
+      lowerTitle.includes('contact on jdlx')
+      || lowerMsg.includes('using jdlx chat')
+      || lowerMsg.includes('now on jdlx chat')
+    ) {
+      setShowNotificationsDrawer(false)
+      setShowAddFriendModal(true)
+      setFriendModalTab('contacts')
+      fetchContactSuggestions()
+      return
+    }
+
     // 4. If notification mentions @username
     const usernameMatch = n.message?.match(/@([a-zA-Z0-9_\.]+)/)
     if (usernameMatch) {
@@ -5282,7 +5407,36 @@ export default function ChatConversation() {
     setShowNotificationsDrawer(false)
   }
 
-  // 13. Copy Invite Link & Share
+  // 13. Copy Invite Link & Share (SMS / WhatsApp / Contact Sync)
+  const searchedPhoneCandidate = useMemo(
+    () => extractSearchablePhone(globalSearchQuery),
+    [globalSearchQuery]
+  )
+  const isSearchingOwnPhone = Boolean(
+    searchedPhoneCandidate && normalizeIndianPhone(chatUser?.phone) === searchedPhoneCandidate
+  )
+
+  const unconnectedContactSuggestions = useMemo(
+    () => (contactSuggestions || []).filter((u) => u.friend_status !== 'friends'),
+    [contactSuggestions]
+  )
+
+  const filteredContactSuggestions = useMemo(() => {
+    const q = contactsTabFilter.trim().toLowerCase()
+    if (!q) return contactSuggestions || []
+    return (contactSuggestions || []).filter((u) =>
+      `${u.contact_name || ''} ${u.name || ''} ${u.username || ''}`.toLowerCase().includes(q)
+    )
+  }, [contactSuggestions, contactsTabFilter])
+
+  const filteredUnregisteredContacts = useMemo(() => {
+    const q = contactsTabFilter.trim().toLowerCase()
+    if (!q) return unregisteredContacts || []
+    return (unregisteredContacts || []).filter((c) =>
+      `${c.contact_name || ''} ${c.phone || ''}`.toLowerCase().includes(q)
+    )
+  }, [unregisteredContacts, contactsTabFilter])
+
   const handleCopyInviteLink = async () => {
     const link = inviteInfo?.invite_url || `${window.location.origin}/chat/login?ref=@${chatUser?.username || 'member'}`
     const copied = await copyTextToClipboard(link)
@@ -5290,10 +5444,91 @@ export default function ChatConversation() {
     else toast.error('Could not copy invite link')
   }
 
-  const handleShareInviteWhatsapp = () => {
-    const inviteUrl = inviteInfo?.invite_url || `${window.location.origin}/chat/login?ref=@${chatUser?.username || 'member'}`
-    const text = inviteInfo?.share_text || `Hey! Chat with me on ${chatBrandName} – secure, encrypted messaging. Connect with @${chatUser?.username || 'member'} here: ${inviteUrl}`
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer')
+  const handleShareInviteWhatsapp = async () => {
+    const text = buildInviteMessage({ inviteInfo, chatUser, brandName: chatBrandName })
+    await inviteViaWhatsApp({ message: text })
+  }
+
+  const handleShareInviteSms = async () => {
+    const text = buildInviteMessage({ inviteInfo, chatUser, brandName: chatBrandName })
+    await inviteViaSms({ message: text })
+  }
+
+  const handleInvitePhoneViaSms = async (phone, recipientName = '') => {
+    const text = buildInviteMessage({ recipientName, inviteInfo, chatUser, brandName: chatBrandName })
+    const ok = await inviteViaSms({ phone, message: text })
+    if (!ok) toast.error('Could not open SMS app')
+  }
+
+  const handleInvitePhoneViaWhatsapp = async (phone, recipientName = '') => {
+    const text = buildInviteMessage({ recipientName, inviteInfo, chatUser, brandName: chatBrandName })
+    const ok = await inviteViaWhatsApp({ phone, message: text })
+    if (!ok) toast.error('Could not open WhatsApp')
+  }
+
+  const handleSyncContactsAction = async ({ requestPermission = true } = {}) => {
+    if (!isCapacitorNative()) {
+      if (isWebContactPickerSupported()) {
+        try {
+          const picked = await pickWebContacts()
+          if (!picked.length) return
+          const res = await syncDeviceContacts({ manualContacts: picked })
+          if (res.success) {
+            toast.success(`Synced ${picked.length} contacts — ${res.registered_count || 0} on ${chatBrandName}`)
+          } else {
+            toast.error(res.error || 'Could not sync contacts')
+          }
+        } catch (err) {
+          if (err?.name !== 'AbortError') {
+            toast.error('Could not open browser contact picker')
+          }
+        }
+        return
+      }
+      await fetchContactSuggestions()
+      toast.success('Contact suggestions refreshed')
+      return
+    }
+
+    const res = await syncDeviceContacts({ requestPermission })
+    const nextStatus = await getAppPermissionsStatus()
+    setAppPermissions(nextStatus)
+    if (res.needsPermission) {
+      toast.error('Contacts permission is needed to find friends from your phonebook')
+      return
+    }
+    if (res.success) {
+      toast.success(
+        res.registered_count > 0
+          ? `${res.registered_count} contact${res.registered_count > 1 ? 's' : ''} found on ${chatBrandName}!`
+          : `Synced ${res.synced_count || 0} phonebook contacts`
+      )
+    } else {
+      toast.error(res.error || 'Could not sync contacts')
+    }
+  }
+
+  const handleRequestPermissionFromSettings = async (alias) => {
+    setRequestingPermAlias(alias)
+    const startedAt = Date.now()
+    try {
+      const updated = await requestSingleAppPermission(alias)
+      setAppPermissions(updated)
+      if (updated?.[alias] === 'granted') {
+        toast.success('Permission granted!')
+        if (alias === 'contacts') {
+          syncDeviceContacts({ requestPermission: false }).catch(() => {})
+        }
+      } else if (Date.now() - startedAt < 200) {
+        // Android suppressed the popup (permanently denied): take user straight to App Settings.
+        toast('Opening Android App Settings to allow this permission…', { icon: '⚙️' })
+        await openNativeAppSettings()
+      } else {
+        toast('Enable the permission in Android Settings to use this feature', { icon: '⚙️' })
+      }
+    } finally {
+      setRequestingPermAlias('')
+    }
   }
 
   const handleEnablePush = async () => {
@@ -6453,6 +6688,32 @@ export default function ChatConversation() {
             </div>
           )}
 
+          {/* Phonebook Contact Suggestions Strip (Contacts already on JDLX Chat) */}
+          {unconnectedContactSuggestions.length > 0 && (
+            <div
+              onClick={() => {
+                triggerHaptic('light')
+                setShowAddFriendModal(true)
+                setFriendModalTab('contacts')
+              }}
+              className={`flex cursor-pointer items-center justify-between border-b px-3 py-2.5 transition-colors ${
+                isLight
+                  ? 'border-emerald-200/70 bg-emerald-50/70 text-emerald-900 hover:bg-emerald-50'
+                  : 'border-emerald-500/15 bg-emerald-500/[0.06] text-emerald-200 hover:bg-emerald-500/10'
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Phone className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
+                <span className="text-[11px] font-bold truncate">
+                  {unconnectedContactSuggestions.length} contact{unconnectedContactSuggestions.length > 1 ? 's' : ''} using {chatBrandName}
+                </span>
+              </div>
+              <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-600 text-white shrink-0">
+                Connect
+              </span>
+            </div>
+          )}
+
           {/* Conversation Threads Scroll List */}
           <div
             ref={convListRef}
@@ -6870,10 +7131,10 @@ export default function ChatConversation() {
           style={{
             touchAction: 'pan-y',
             overscrollBehaviorX: 'none',
-            '--mobile-chat-x': mobileChatPresence.isClosing
-              ? '100%'
-              : edgeSwipeOffset > 0
-                ? `${edgeSwipeOffset}px`
+            '--mobile-chat-x': edgeSwipeOffset > 0
+              ? `${edgeSwipeOffset}px`
+              : mobileChatPresence.isClosing
+                ? '100%'
                 : mobileChatSlideIn
                   ? '0%'
                   : '100%'
@@ -6882,12 +7143,12 @@ export default function ChatConversation() {
           onTouchMove={handleEdgeTouchMove}
           onTouchEnd={handleEdgeTouchEnd}
           onTouchCancel={handleEdgeTouchEnd}
-          className={`relative flex-1 flex-col overflow-hidden transition-colors jdlx-privacy-sensitive ${
+          className={`relative flex-1 flex-col overflow-hidden md:transition-colors jdlx-privacy-sensitive ${
             isLight ? 'bg-[#f6f7f9]' : 'bg-[#090a0c]'
           } ${
             mobileChatPresence.mounted
               ? `flex mobile-chat-pane max-md:shadow-[-12px_0_32px_rgba(0,0,0,0.45)] ${
-                  edgeSwipeOffset > 0 ? 'mobile-chat-dragging' : ''
+                  isEdgeDragging ? 'mobile-chat-dragging' : ''
                 } ${mobileChatPresence.isClosing ? 'max-md:pointer-events-none' : ''}`
               : 'hidden md:flex'
           }`}
@@ -6939,7 +7200,7 @@ export default function ChatConversation() {
                     role="button"
                     tabIndex={0}
                     aria-label="View contact profile and encryption details"
-                    className="group flex min-w-0 cursor-pointer select-none items-center gap-2 sm:gap-2.5 transition-all hover:opacity-90 active:scale-[0.99]"
+                    className="group flex min-w-0 flex-1 cursor-pointer select-none items-center gap-2 sm:gap-2.5 transition-all hover:opacity-90 active:scale-[0.99]"
                     title="Click to view contact profile & encryption details"
                   >
                     <div className="relative shrink-0">
@@ -6971,10 +7232,10 @@ export default function ChatConversation() {
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
-                        <h3 className={`flex min-w-0 items-center gap-1.5 truncate text-[14px] sm:text-[15px] font-semibold tracking-tight ${
+                        <h3 className={`flex min-w-0 items-center gap-1.5 text-[14px] sm:text-[15px] font-semibold tracking-tight ${
                           isLight ? 'text-slate-900' : 'text-white'
                         }`}>
-                          <span className="truncate max-w-[105px] xs:max-w-[150px] sm:max-w-[240px] md:max-w-[360px]">{getContactDisplayName(activeConversation)}</span>
+                          <span className="min-w-0 truncate">{getContactDisplayName(activeConversation)}</span>
                           {getContactCustomNickname(activeConversation) && (
                             <span className="hidden sm:inline-block text-[9px] font-mono px-1 py-0.2 rounded bg-amber-500/15 text-amber-500 dark:text-[#facc15] font-bold shrink-0 border border-amber-500/25" title={`Custom device name (Original: ${activeConversation.contact_name})`}>
                               custom
@@ -8508,7 +8769,7 @@ export default function ChatConversation() {
                     aria-expanded={showAttachmentTray}
                     aria-label={isBlockedConversation ? 'Unblock this user to attach files' : 'Attach photo, video, document or audio'}
                     title={isBlockedConversation ? 'Unblock this user to attach files' : 'Attach photo, video, document or audio'}
-                    className={`flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border transition-colors active:scale-95 ${
+                    className={`${(isRecording || voiceReview) ? 'hidden sm:flex' : 'flex'} h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl border transition-colors active:scale-95 ${
                       showAttachmentTray
                         ? 'border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-300'
                         : isLight
@@ -8610,14 +8871,14 @@ export default function ChatConversation() {
                       </button>
                     </div>
                   ) : isRecording ? (
-                    <div className={`flex flex-1 animate-in items-center justify-between rounded-2xl border px-3 py-2.5 transition-all fade-in duration-200 sm:px-4 ${
+                    <div className={`flex flex-1 min-w-0 animate-in items-center justify-between gap-1.5 rounded-2xl border px-2.5 py-2.5 transition-all fade-in duration-200 sm:px-4 ${
                       isLight ? 'border-rose-200 bg-rose-50' : 'border-rose-500/25 bg-rose-500/[0.08]'
                     }`}>
                       {/* Left: Pulsing Red Recording Indicator & Duration */}
-                      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-                        <span className="relative flex h-3.5 w-3.5 shrink-0">
+                      <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+                        <span className="relative flex h-3 w-3 sm:h-3.5 sm:w-3.5 shrink-0">
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-500 shadow-xs shadow-rose-500/50 animate-mic-recording"></span>
+                          <span className="relative inline-flex rounded-full h-3 w-3 sm:h-3.5 sm:w-3.5 bg-rose-500 shadow-xs shadow-rose-500/50 animate-mic-recording"></span>
                         </span>
                         <span className="text-xs font-mono font-black text-rose-500 tracking-wider shrink-0">
                           {formatRecordingDuration(recordingDuration)}
@@ -8641,20 +8902,20 @@ export default function ChatConversation() {
                             transform: `translateX(${voiceSlideX * 0.4}px)`,
                             opacity: Math.max(0.2, 1 - Math.abs(voiceSlideX) / 80)
                           }}
-                          className="flex items-center gap-1 text-zinc-400 text-xs font-semibold animate-pulse transition-transform"
+                          className="flex min-w-0 items-center gap-0.5 text-zinc-400 text-xs font-semibold animate-pulse transition-transform"
                         >
-                          <ChevronLeft className="w-4 h-4 text-zinc-400" />
-                          <span className="text-[11px] sm:text-xs">Slide to cancel</span>
+                          <ChevronLeft className="w-3.5 h-3.5 shrink-0 text-zinc-400" />
+                          <span className="truncate text-[11px] sm:text-xs">Slide to cancel</span>
                         </div>
                       )}
 
                       {/* Right: Stop & Review button + Discard button */}
-                      <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+                      <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
                         <button
                           type="button"
                           onClick={cancelVoiceRecording}
                           title="Discard recording"
-                          className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 active:scale-95 text-rose-500 transition-all cursor-pointer flex items-center gap-1 text-xs font-black border border-rose-500/20"
+                          className="px-2 sm:px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 active:scale-95 text-rose-500 transition-all cursor-pointer flex items-center gap-1 text-xs font-black border border-rose-500/20"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                           <span className="hidden sm:inline">Cancel</span>
@@ -8663,9 +8924,9 @@ export default function ChatConversation() {
                           type="button"
                           onClick={stopVoiceRecordingToReview}
                           title="Pause & Review recording"
-                          className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-[#facc15] transition-all cursor-pointer flex items-center gap-1.5 text-xs font-black border border-yellow-500/30"
+                          className="px-2 sm:px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-[#facc15] transition-all cursor-pointer flex items-center gap-1 text-[11px] sm:text-xs font-black border border-yellow-500/30"
                         >
-                          <Square className="w-3.5 h-3.5 fill-current" />
+                          <Square className="w-3 h-3 sm:w-3.5 sm:h-3.5 fill-current" />
                           <span>Review</span>
                         </button>
                       </div>
@@ -8953,7 +9214,7 @@ export default function ChatConversation() {
             <div
               role="tablist"
               aria-label="Add friend options"
-              className={`grid grid-cols-3 gap-1 rounded-lg p-1 text-xs font-medium ${
+              className={`grid grid-cols-4 gap-1 rounded-lg p-1 text-xs font-medium ${
                 isLight ? 'bg-slate-100 text-slate-600' : 'bg-white/[0.05] text-zinc-400'
               }`}
             >
@@ -8971,7 +9232,28 @@ export default function ChatConversation() {
                     : 'hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                Find people
+                Find
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('light')
+                  setFriendModalTab('contacts')
+                }}
+                role="tab"
+                aria-selected={friendModalTab === 'contacts'}
+                className={`relative cursor-pointer rounded-md py-1.5 transition-all ${
+                  friendModalTab === 'contacts'
+                    ? isLight ? 'bg-white font-semibold text-slate-900 shadow-sm' : 'bg-white/[0.1] font-semibold text-white'
+                    : 'hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <span>Contacts</span>
+                {unconnectedContactSuggestions.length > 0 && (
+                  <span className="ml-1 px-1.5 py-0.2 rounded-full text-[9px] bg-emerald-500 text-white font-black">
+                    {unconnectedContactSuggestions.length}
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -9008,7 +9290,7 @@ export default function ChatConversation() {
                     : 'hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                Invite friend
+                Invite
               </button>
             </div>
 
@@ -9022,7 +9304,7 @@ export default function ChatConversation() {
                     }`}>@</span>
                     <input
                       type="text"
-                      placeholder="Search by @username, name, email or phone..."
+                      placeholder="Search @username, name, email or 10-digit number..."
                       value={globalSearchQuery}
                       onChange={(e) => setGlobalSearchQuery(e.target.value)}
                       aria-label="Search people by username, name, email or phone"
@@ -9061,7 +9343,7 @@ export default function ChatConversation() {
                 </form>
 
                 {/* Results list */}
-                <div className="flex-1 overflow-y-auto space-y-2 pr-1 max-h-60">
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1 max-h-[50dvh] sm:max-h-72">
                   {searchingGlobal && globalSearchResults.length === 0 ? (
                     <div className="py-8 text-center space-y-2">
                       <Loader2 className="w-6 h-6 animate-spin mx-auto text-amber-500" />
@@ -9070,22 +9352,160 @@ export default function ChatConversation() {
                       </p>
                     </div>
                   ) : globalSearchResults.length === 0 ? (
-                    <div className="py-8 text-center space-y-2">
-                      <p className={`text-xs ${isLight ? 'text-slate-400' : 'text-[#71717a]'}`}>
-                        {globalSearchQuery ? 'No users found matching that query.' : 'Type @username or Full Name to find anyone.'}
-                      </p>
-                      {globalSearchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setFriendModalTab('invite')}
-                          className={`text-xs font-bold underline cursor-pointer ${
-                            isLight ? 'text-amber-700' : 'text-[#facc15]'
-                          }`}
-                        >
-                          Invite this friend to {chatBrandName} →
-                        </button>
-                      )}
-                    </div>
+                    isSearchingOwnPhone ? (
+                      <div className={`p-4 rounded-2xl border text-center space-y-1.5 ${
+                        isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
+                      }`}>
+                        <div className={`text-xs font-black ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                          {formatIndianPhoneDisplay(searchedPhoneCandidate)}
+                        </div>
+                        <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                          This is your own registered mobile number (@{chatUser?.username}).
+                        </p>
+                      </div>
+                    ) : searchedPhoneCandidate ? (
+                      <div className={`p-3.5 rounded-2xl border space-y-3 ${
+                        isLight ? 'bg-amber-50/70 border-amber-200' : 'bg-yellow-500/[0.06] border-yellow-500/20'
+                      }`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                              isLight ? 'bg-amber-100 text-amber-700' : 'bg-yellow-500/20 text-[#facc15]'
+                            }`}>
+                              <Phone className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className={`text-xs font-black truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                                {formatIndianPhoneDisplay(searchedPhoneCandidate)}
+                              </div>
+                              <div className={`text-[10px] font-medium ${isLight ? 'text-slate-600' : 'text-zinc-400'}`}>
+                                Not registered on {chatBrandName} yet
+                              </div>
+                            </div>
+                          </div>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider shrink-0 ${
+                            isLight ? 'bg-amber-200/70 text-amber-900' : 'bg-yellow-500/20 text-[#facc15]'
+                          }`}>
+                            Invite
+                          </span>
+                        </div>
+                        <p className={`text-[11px] leading-snug ${isLight ? 'text-slate-600' : 'text-zinc-300'}`}>
+                          Invite this friend via SMS or WhatsApp so they can join with their mobile number and connect with you directly.
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleInvitePhoneViaSms(searchedPhoneCandidate)}
+                            className={`py-2 px-3 rounded-xl border font-black text-[11px] flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all ${
+                              isLight
+                                ? 'bg-white border-slate-300 text-slate-800 hover:bg-slate-50'
+                                : 'bg-[#18181b] border-white/15 text-white hover:bg-[#27272a]'
+                            }`}
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Invite by SMS</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleInvitePhoneViaWhatsapp(searchedPhoneCandidate)}
+                            className="py-2 px-3 rounded-xl bg-emerald-600 text-white font-black text-[11px] hover:bg-emerald-700 flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all shadow-sm"
+                          >
+                            <Share2 className="w-3.5 h-3.5" />
+                            <span>WhatsApp</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : !globalSearchQuery.trim() && contactSuggestions && contactSuggestions.length > 0 ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between px-0.5">
+                          <span className={`text-[10px] font-black uppercase tracking-wider ${
+                            isLight ? 'text-slate-500' : 'text-zinc-400'
+                          }`}>
+                            Contacts Using {chatBrandName}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setFriendModalTab('contacts')}
+                            className={`text-[10px] font-bold hover:underline cursor-pointer ${
+                              isLight ? 'text-amber-700' : 'text-[#facc15]'
+                            }`}
+                          >
+                            See all contacts →
+                          </button>
+                        </div>
+                        {contactSuggestions.slice(0, 5).map((u) => {
+                          const isFriend = u.friend_status === 'friends'
+                          const isPendingSent = u.friend_status === 'pending_sent'
+                          const isPendingRecv = u.friend_status === 'pending_received'
+                          const isActionBusy = requestActionLoading === u.id
+                          return (
+                            <div
+                              key={`sugg-preview-${u.id}`}
+                              className={`p-2.5 rounded-2xl border flex items-center justify-between gap-2.5 ${
+                                isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                <div className={`w-8 h-8 rounded-xl font-black text-xs flex items-center justify-center shrink-0 border ${
+                                  isLight ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                }`}>
+                                  {u.profile_image ? (
+                                    <img src={resolveMediaUrl(u.profile_image)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover rounded-xl" />
+                                  ) : (
+                                    (u.contact_name || u.name || 'U')[0].toUpperCase()
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className={`text-xs font-bold truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                                    {u.contact_name || u.name}
+                                  </div>
+                                  <div className={`text-[10px] font-mono truncate ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
+                                    @{u.username} · Uses {chatBrandName}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="shrink-0">
+                                {isFriend ? (
+                                  <button type="button" onClick={() => handleDirectChatStart(u)} className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] text-[10px] font-black cursor-pointer">
+                                    Message
+                                  </button>
+                                ) : isPendingSent ? (
+                                  <span className={`px-2 py-1 rounded-xl text-[10px] font-bold border ${isLight ? 'bg-slate-200 text-slate-600 border-slate-300' : 'bg-[#27272a] text-zinc-300 border-[#3f3f46]'}`}>
+                                    Sent
+                                  </span>
+                                ) : isPendingRecv ? (
+                                  <button type="button" disabled={requestActionLoading === u.friend_request_id} onClick={() => handleRespondRequest(u.friend_request_id, 'accept')} className="px-2.5 py-1 rounded-xl bg-emerald-500 text-white text-[10px] font-black cursor-pointer">
+                                    Accept
+                                  </button>
+                                ) : (
+                                  <button type="button" disabled={isActionBusy} onClick={() => handleSendFriendRequest(u)} className={`px-2.5 py-1 rounded-xl border text-[10px] font-black flex items-center gap-1 cursor-pointer ${isLight ? 'bg-amber-100 text-amber-800 border-amber-300' : 'bg-yellow-500/10 text-[#facc15] border-yellow-500/30'}`}>
+                                    <UserPlus className="w-3 h-3" />
+                                    <span>{isActionBusy ? '...' : 'Add'}</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div className="py-8 text-center space-y-2">
+                        <p className={`text-xs ${isLight ? 'text-slate-400' : 'text-[#71717a]'}`}>
+                          {globalSearchQuery ? 'No users found matching that query.' : 'Type @username, name, or a 10-digit mobile number to find or invite anyone.'}
+                        </p>
+                        {globalSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setFriendModalTab('invite')}
+                            className={`text-xs font-bold underline cursor-pointer ${
+                              isLight ? 'text-amber-700' : 'text-[#facc15]'
+                            }`}
+                          >
+                            Invite this friend to {chatBrandName} →
+                          </button>
+                        )}
+                      </div>
+                    )
                   ) : (
                     globalSearchResults.map((u) => {
                       const isFriend = u.friend_status === 'friends'
@@ -9177,9 +9597,241 @@ export default function ChatConversation() {
               </div>
             )}
 
-            {/* TAB 2: FRIEND REQUESTS */}
+            {/* TAB 2: CONTACT SUGGESTIONS & PHONEBOOK INVITES */}
+            {friendModalTab === 'contacts' && (
+              <div className="flex-1 flex flex-col min-h-0 space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 ${
+                      isLight ? 'text-slate-400' : 'text-zinc-500'
+                    }`} />
+                    <input
+                      type="text"
+                      placeholder="Filter contacts by name or number..."
+                      value={contactsTabFilter}
+                      onChange={(e) => setContactsTabFilter(e.target.value)}
+                      className="ui-input pl-8 pr-3 text-xs"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={contactsSyncing}
+                    onClick={() => handleSyncContactsAction({ requestPermission: true })}
+                    className="ui-btn ui-btn-primary h-10 shrink-0 px-3 text-xs flex items-center gap-1.5"
+                    title="Sync device contacts"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${contactsSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isCapacitorNative() ? 'Sync' : isWebContactPickerSupported() ? 'Pick' : 'Refresh'}</span>
+                  </button>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1 max-h-[50dvh] sm:max-h-72">
+                  {isCapacitorNative() && contactsPermission !== 'granted' ? (
+                    <div className={`p-4 rounded-2xl border text-center space-y-2.5 ${
+                      isLight ? 'bg-amber-50/70 border-amber-200' : 'bg-yellow-500/[0.06] border-yellow-500/20'
+                    }`}>
+                      <Users className={`w-7 h-7 mx-auto ${isLight ? 'text-amber-700' : 'text-[#facc15]'}`} />
+                      <div className={`text-xs font-black ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                        Find friends from your phonebook
+                      </div>
+                      <p className={`text-[11px] leading-snug ${isLight ? 'text-slate-600' : 'text-zinc-300'}`}>
+                        Allow Contacts permission to see which friends are already on {chatBrandName} and invite others via SMS or WhatsApp.
+                      </p>
+                      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          disabled={contactsSyncing}
+                          onClick={() => handleSyncContactsAction({ requestPermission: true })}
+                          className="ui-btn ui-btn-primary px-4 py-2 text-xs"
+                        >
+                          {contactsSyncing ? 'Checking…' : 'Allow Contacts'}
+                        </button>
+                        {contactsPermission === 'denied' && (
+                          <button
+                            type="button"
+                            onClick={() => openNativeAppSettings()}
+                            className="ui-btn ui-btn-secondary px-3 py-2 text-xs"
+                          >
+                            Open App Settings
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {(!filteredContactSuggestions.length && !filteredUnregisteredContacts.length) && (contactsPermission === 'granted' || !isCapacitorNative()) ? (
+                    <div className={`p-4 rounded-2xl border text-center space-y-2 ${
+                      isLight ? 'bg-slate-50 border-slate-200 text-slate-600' : 'bg-[#18181b] border-white/[0.07] text-zinc-400'
+                    }`}>
+                      <p className="text-xs font-medium">
+                        {contactsTabFilter.trim()
+                          ? 'No contacts match that filter.'
+                          : isCapacitorNative()
+                            ? 'Tap Sync above to scan your phonebook for friends using JDLX Chat.'
+                            : isWebContactPickerSupported()
+                              ? 'Tap Pick above to check which of your contacts use JDLX Chat.'
+                              : 'Sync phonebook contacts automatically in the JDLX Chat Android app, or search any 10-digit number in the Find tab to connect or invite.'}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {filteredContactSuggestions.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h4 className={`text-[10px] font-black uppercase tracking-wider px-0.5 ${
+                        isLight ? 'text-emerald-700' : 'text-emerald-400'
+                      }`}>
+                        Using {chatBrandName} ({filteredContactSuggestions.length})
+                      </h4>
+                      {filteredContactSuggestions.map((u) => {
+                        const isFriend = u.friend_status === 'friends'
+                        const isPendingSent = u.friend_status === 'pending_sent'
+                        const isPendingRecv = u.friend_status === 'pending_received'
+                        const isActionBusy = requestActionLoading === u.id
+                        return (
+                          <div
+                            key={`contact-reg-${u.id}`}
+                            className={`p-2.5 rounded-2xl border flex items-center justify-between gap-2.5 ${
+                              isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                              <div className="relative shrink-0">
+                                <div className={`w-9 h-9 rounded-xl font-black text-xs flex items-center justify-center border ${
+                                  isLight ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                }`}>
+                                  {u.profile_image ? (
+                                    <img src={resolveMediaUrl(u.profile_image)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover rounded-xl" />
+                                  ) : (
+                                    (u.contact_name || u.name || 'U')[0].toUpperCase()
+                                  )}
+                                </div>
+                                {u.is_online && (
+                                  <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-[#18181b]" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <div className={`text-xs font-bold truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                                  {u.contact_name || u.name}
+                                </div>
+                                <div className={`text-[10px] font-mono truncate ${isLight ? 'text-amber-700' : 'text-[#facc15]'}`}>
+                                  @{u.username}
+                                  {u.name && u.contact_name && u.name.toLowerCase() !== u.contact_name.toLowerCase() ? ` · ${u.name}` : ''}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="shrink-0">
+                              {isFriend ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDirectChatStart(u)}
+                                  className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] text-[11px] font-black cursor-pointer shadow-sm active:scale-95 transition-all"
+                                >
+                                  Message
+                                </button>
+                              ) : isPendingSent ? (
+                                <span className={`px-2.5 py-1 rounded-xl text-[10px] font-bold border ${
+                                  isLight ? 'bg-slate-200 text-slate-600 border-slate-300' : 'bg-[#27272a] text-zinc-300 border-[#3f3f46]'
+                                }`}>
+                                  Request Sent
+                                </span>
+                              ) : isPendingRecv ? (
+                                <button
+                                  type="button"
+                                  disabled={requestActionLoading === u.friend_request_id}
+                                  onClick={() => handleRespondRequest(u.friend_request_id, 'accept')}
+                                  className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-[11px] font-black cursor-pointer shadow-sm active:scale-95 transition-all"
+                                >
+                                  Accept
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={isActionBusy}
+                                  onClick={() => handleSendFriendRequest(u)}
+                                  className={`px-3 py-1.5 rounded-xl border text-[11px] font-black flex items-center gap-1 cursor-pointer active:scale-95 transition-all ${
+                                    isLight
+                                      ? 'bg-amber-100 hover:bg-amber-200 text-amber-800 border-amber-300'
+                                      : 'bg-yellow-500/10 hover:bg-yellow-500/20 text-[#facc15] border-yellow-500/30'
+                                  }`}
+                                >
+                                  <UserPlus className="w-3 h-3" />
+                                  <span>{isActionBusy ? '...' : 'Add Friend'}</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {filteredUnregisteredContacts.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      <h4 className={`text-[10px] font-black uppercase tracking-wider px-0.5 ${
+                        isLight ? 'text-slate-500' : 'text-zinc-400'
+                      }`}>
+                        Invite to {chatBrandName} ({filteredUnregisteredContacts.length})
+                      </h4>
+                      {filteredUnregisteredContacts.slice(0, 80).map((c) => (
+                        <div
+                          key={`contact-unreg-${c.phone}`}
+                          className={`p-2.5 rounded-2xl border flex items-center justify-between gap-2 ${
+                            isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className={`w-8 h-8 rounded-xl font-bold text-xs flex items-center justify-center shrink-0 ${
+                              isLight ? 'bg-slate-200 text-slate-600' : 'bg-white/[0.06] text-zinc-300'
+                            }`}>
+                              {(c.contact_name || '#')[0].toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <div className={`text-xs font-bold truncate ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                                {c.contact_name || formatIndianPhoneDisplay(c.phone)}
+                              </div>
+                              <div className={`text-[10px] font-mono truncate ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
+                                {formatIndianPhoneDisplay(c.phone)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleInvitePhoneViaSms(c.phone, c.contact_name)}
+                              title="Invite via SMS"
+                              className={`px-2 py-1 rounded-xl border text-[10px] font-black cursor-pointer active:scale-95 transition-all ${
+                                isLight
+                                  ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                                  : 'bg-[#27272a] border-[#3f3f46] text-zinc-200 hover:bg-[#3f3f46]'
+                              }`}
+                            >
+                              SMS
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleInvitePhoneViaWhatsapp(c.phone, c.contact_name)}
+                              title="Invite via WhatsApp"
+                              className="px-2 py-1 rounded-xl bg-emerald-600 text-white text-[10px] font-black hover:bg-emerald-700 cursor-pointer active:scale-95 transition-all"
+                            >
+                              WhatsApp
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {filteredUnregisteredContacts.length > 80 && (
+                        <p className={`text-[10px] text-center py-1 ${isLight ? 'text-slate-500' : 'text-zinc-500'}`}>
+                          Showing 80 of {filteredUnregisteredContacts.length} — use search above to find anyone
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: FRIEND REQUESTS */}
             {friendModalTab === 'requests' && (
-              <div className="flex-1 overflow-y-auto space-y-3 max-h-64 pr-1">
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-3 max-h-[52dvh] sm:max-h-72 pr-1">
                 <div>
                   <h4 className={`text-xs font-black uppercase tracking-wider mb-2 ${
                     isLight ? 'text-slate-900' : 'text-white'
@@ -9343,17 +9995,28 @@ export default function ChatConversation() {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="grid grid-cols-3 gap-2">
+                  <button type="button"
+                    onClick={handleShareInviteSms}
+                    className={`w-full py-2.5 px-2.5 rounded-xl border font-black text-xs active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
+                      isLight
+                        ? 'bg-white border-slate-300 text-slate-800 hover:bg-slate-50'
+                        : 'bg-[#18181b] border-white/15 text-white hover:bg-[#27272a]'
+                    }`}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5 text-amber-500" />
+                    <span>SMS</span>
+                  </button>
                   <button type="button"
                     onClick={handleShareInviteWhatsapp}
-                    className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 text-white font-black text-xs hover:bg-emerald-700 active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                    className="w-full py-2.5 px-2.5 rounded-xl bg-emerald-600 text-white font-black text-xs hover:bg-emerald-700 active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                   >
                     <Share2 className="w-3.5 h-3.5" />
                     <span>WhatsApp</span>
                   </button>
                   <button type="button"
                     onClick={handleCopyInviteLink}
-                    className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] font-black text-xs hover:brightness-105 active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                    className="w-full py-2.5 px-2.5 rounded-xl bg-gradient-to-r from-[#facc15] to-[#eab308] text-[#09090b] font-black text-xs hover:brightness-105 active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                   >
                     <Copy className="w-3.5 h-3.5" />
                     <span>Copy Link</span>
@@ -9378,7 +10041,7 @@ export default function ChatConversation() {
             aria-modal="true"
             aria-label="My profile"
             tabIndex={-1}
-            className={`w-full max-w-lg rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-all flex flex-col max-h-[90dvh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${sheetModalMotionClass(profileDrawerPresence.isClosing, 'sm')} jdlx-privacy-sensitive ${
+            className={`w-full max-w-lg rounded-t-2xl sm:rounded-2xl border border-b-0 sm:border-b shadow-2xl relative overflow-hidden transition-colors flex flex-col max-h-[90dvh] pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] sm:pb-0 ${sheetModalMotionClass(profileDrawerPresence.isClosing, 'sm')} jdlx-privacy-sensitive ${
               isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#0f1114] border-white/[0.07] text-white'
             }`}
           >
@@ -10046,6 +10709,61 @@ export default function ChatConversation() {
                         Enable
                       </button>
                     </div>
+
+                    {isCapacitorNative() && (
+                      <div className={`p-3.5 rounded-2xl border space-y-2.5 ${
+                        isLight ? 'bg-slate-50 border-slate-200' : 'bg-[#18181b] border-white/[0.07]'
+                      }`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className={`text-xs font-black flex items-center gap-1.5 ${isLight ? 'text-slate-900' : 'text-white'}`}>
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                            <span>App Permissions</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openNativeAppSettings()}
+                            className={`text-[10px] font-bold hover:underline cursor-pointer ${
+                              isLight ? 'text-amber-700' : 'text-[#facc15]'
+                            }`}
+                          >
+                            Android Settings
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {[
+                            { alias: 'contacts', label: 'Contacts' },
+                            { alias: 'microphone', label: 'Microphone' },
+                            { alias: 'camera', label: 'Camera' },
+                            { alias: 'notifications', label: 'Alerts' }
+                          ].map((item) => {
+                            const granted = appPermissions?.[item.alias] === 'granted'
+                            const busy = requestingPermAlias === item.alias
+                            return (
+                              <button
+                                key={item.alias}
+                                type="button"
+                                disabled={granted || busy}
+                                onClick={() => handleRequestPermissionFromSettings(item.alias)}
+                                className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center justify-between gap-1.5 transition-all ${
+                                  granted
+                                    ? isLight
+                                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800 cursor-default'
+                                      : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300 cursor-default'
+                                    : isLight
+                                      ? 'bg-white border-amber-300 text-amber-800 hover:bg-amber-50 cursor-pointer'
+                                      : 'bg-[#27272a] border-yellow-500/30 text-[#facc15] hover:bg-yellow-500/10 cursor-pointer'
+                                }`}
+                              >
+                                <span className="truncate">{item.label}</span>
+                                <span className="text-[9px] font-black uppercase shrink-0">
+                                  {busy ? '…' : granted ? 'OK' : 'Allow'}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* 4. App Installation (PWA) */}
@@ -10642,6 +11360,7 @@ export default function ChatConversation() {
                   const lowerTitle = (n.title || '').toLowerCase()
                   const lowerMsg = (n.message || '').toLowerCase()
                   const isFriendReq = lowerTitle.includes('friend request') || lowerMsg.includes('friend request')
+                  const isContactSugg = lowerTitle.includes('contact on jdlx') || lowerMsg.includes('using jdlx chat') || lowerMsg.includes('now on jdlx chat')
                   const isMsg = Boolean(n.room_id || lowerTitle.includes('message') || lowerTitle.includes('reply'))
 
                   return (
@@ -10671,7 +11390,7 @@ export default function ChatConversation() {
                       <div className="flex items-start gap-2.5">
                         {/* Type Icon Badge */}
                         <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
-                          isFriendReq
+                          (isFriendReq || isContactSugg)
                             ? 'bg-emerald-500/15 text-emerald-500'
                             : isMsg
                               ? isLight ? 'bg-amber-500/15 text-amber-600' : 'bg-yellow-500/15 text-yellow-400'
@@ -10679,6 +11398,8 @@ export default function ChatConversation() {
                         }`}>
                           {isFriendReq ? (
                             <UserPlus className="w-4 h-4" />
+                          ) : isContactSugg ? (
+                            <Users className="w-4 h-4" />
                           ) : isMsg ? (
                             <MessageCircle className="w-4 h-4" />
                           ) : (
@@ -10712,7 +11433,7 @@ export default function ChatConversation() {
                             <span className={`text-[10px] font-bold inline-flex items-center gap-1 ${
                               isLight ? 'text-amber-700' : 'text-[#facc15]'
                             }`}>
-                              {n.room_id ? 'Open chat' : isFriendReq ? 'View friend requests' : 'View'}
+                              {n.room_id ? 'Open chat' : isFriendReq ? 'View friend requests' : isContactSugg ? 'View contact suggestions' : 'View'}
                               <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
                             </span>
 
@@ -10882,7 +11603,7 @@ export default function ChatConversation() {
                 ),
                 ...horizontalStyle,
               }}
-              className={`z-50 w-52 sm:w-56 max-h-[calc(100vh-140px)] overflow-y-auto p-1.5 rounded-2xl border shadow-2xl backdrop-blur-2xl transition-all ${popoverMotionClass(actionMenuPresence.isClosing)} space-y-0.5 custom-scrollbar ${
+              className={`z-50 w-52 sm:w-56 max-h-[calc(100dvh-140px)] overflow-y-auto p-1.5 rounded-2xl border shadow-2xl backdrop-blur-2xl transition-colors ${popoverMotionClass(actionMenuPresence.isClosing)} space-y-0.5 custom-scrollbar ${
                 isLight 
                   ? 'bg-white/95 border-slate-200/90 text-slate-800 shadow-slate-400/40' 
                   : 'bg-[#18181d]/95 border-[#2c2c34] text-white shadow-black/90'
@@ -11361,7 +12082,7 @@ export default function ChatConversation() {
             {/* Top Minimalist Header Bar */}
             <div
               onClick={(e) => e.stopPropagation()}
-              className={`w-full px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-30 bg-gradient-to-b from-black/85 via-black/40 to-transparent ${
+              className={`w-full px-3 sm:px-6 pt-[max(0.75rem,env(safe-area-inset-top,0px))] pb-3 sm:py-4 flex items-center justify-between z-30 bg-gradient-to-b from-black/85 via-black/40 to-transparent ${
                 isClosingPreview ? 'animate-viewer-header-exit' : 'animate-viewer-header'
               }`}
             >
@@ -11724,7 +12445,7 @@ export default function ChatConversation() {
           )}
 
           {/* Bottom Hint */}
-          <div className={`text-[11px] text-zinc-400 select-none pb-1 font-medium text-center ${
+          <div className={`text-[11px] text-zinc-400 select-none px-3 pt-0.5 pb-[max(0.65rem,env(safe-area-inset-bottom,0px))] font-medium text-center ${
             isClosingPreview ? 'animate-viewer-footer-exit' : 'animate-viewer-footer'
           }`}>
             {isAvatarPreview 

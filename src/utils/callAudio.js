@@ -4,24 +4,85 @@ import { Capacitor, registerPlugin } from '@capacitor/core'
 // the web build (where the plugin does not exist) never calls into it.
 const CallAudio = registerPlugin('CallAudio')
 
+export const CALL_SPEAKER_MODES = {
+  LOUD: 'loud',
+  EAR: 'ear',
+  HEADSET: 'headset'
+}
+
+export const normalizeSpeakerMode = (mode) => {
+  if (mode === CALL_SPEAKER_MODES.EAR) return CALL_SPEAKER_MODES.EAR
+  if (mode === CALL_SPEAKER_MODES.HEADSET) return CALL_SPEAKER_MODES.HEADSET
+  return CALL_SPEAKER_MODES.LOUD
+}
+
 export const isNativeCallAudioAvailable = () =>
   typeof window !== 'undefined' && Capacitor?.isNativePlatform?.() === true
 
-export const startNativeCallAudio = async ({ video = false, speaker = true } = {}) => {
-  if (!isNativeCallAudioAvailable()) return
+export const startNativeCallAudio = async ({ video = false, speakerMode, speaker = true } = {}) => {
+  if (!isNativeCallAudioAvailable()) return null
+  const mode = speakerMode !== undefined
+    ? normalizeSpeakerMode(speakerMode)
+    : (speaker === false ? CALL_SPEAKER_MODES.EAR : CALL_SPEAKER_MODES.LOUD)
   try {
-    await CallAudio.start({ video, speaker })
+    return await CallAudio.start({ video, mode, speaker: mode === CALL_SPEAKER_MODES.LOUD })
   } catch (e) {
     console.warn('native call audio start failed:', e)
+    return null
   }
 }
 
-export const setNativeSpeaker = async (enabled) => {
-  if (!isNativeCallAudioAvailable()) return
+export const setNativeSpeakerMode = async (mode) => {
+  if (!isNativeCallAudioAvailable()) return null
+  const targetMode = normalizeSpeakerMode(mode)
   try {
-    await CallAudio.setSpeakerphoneOn({ enabled })
+    return await CallAudio.setSpeakerMode({
+      mode: targetMode,
+      enabled: targetMode === CALL_SPEAKER_MODES.LOUD
+    })
   } catch (e) {
     console.warn('native speaker switch failed:', e)
+    return null
+  }
+}
+
+export const setNativeSpeaker = async (enabled) =>
+  setNativeSpeakerMode(enabled ? CALL_SPEAKER_MODES.LOUD : CALL_SPEAKER_MODES.EAR)
+
+export const getNativeCallAudioRoutes = async () => {
+  if (!isNativeCallAudioAvailable()) {
+    return { hasHeadset: false, headsetType: '', mode: CALL_SPEAKER_MODES.LOUD }
+  }
+  try {
+    return await CallAudio.getAudioRoutes()
+  } catch (e) {
+    console.warn('native audio routes query failed:', e)
+    return { hasHeadset: false, headsetType: '', mode: CALL_SPEAKER_MODES.LOUD }
+  }
+}
+
+export const subscribeNativeAudioRoutes = (onChange) => {
+  if (!isNativeCallAudioAvailable() || typeof onChange !== 'function') {
+    return () => {}
+  }
+  let listenerHandle = null
+  let disposed = false
+  Promise.resolve(CallAudio.addListener('audioRoutesChanged', (payload) => {
+    if (!disposed) onChange(payload || {})
+  }))
+    .then((handle) => {
+      if (disposed) {
+        try { handle?.remove?.() } catch { /* ignore */ }
+      } else {
+        listenerHandle = handle
+      }
+    })
+    .catch(() => {})
+  return () => {
+    disposed = true
+    if (listenerHandle && typeof listenerHandle.remove === 'function') {
+      try { listenerHandle.remove() } catch { /* ignore */ }
+    }
   }
 }
 

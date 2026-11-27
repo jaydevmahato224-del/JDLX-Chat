@@ -696,6 +696,21 @@ def chat_password_policy_error(password):
 
 
 CHAT_GENDERS = {'male', 'female', 'other', 'prefer_not_to_say'}
+MAX_SYNC_CONTACTS = 2000
+
+
+def normalize_chat_phone(raw_phone):
+    """Normalize a phone string to a canonical 10-digit mobile number, or ''."""
+    digits = re.sub(r'\D', '', str(raw_phone or ''))
+    if not digits:
+        return ''
+    if digits.startswith('0091') and len(digits) == 14:
+        digits = digits[4:]
+    elif digits.startswith('91') and len(digits) == 12:
+        digits = digits[2:]
+    elif digits.startswith('0') and len(digits) == 11:
+        digits = digits[1:]
+    return digits if len(digits) == 10 else ''
 
 
 def create_chat_identity(full_name='', username='', phone='', email='', password=None):
@@ -714,7 +729,7 @@ def create_chat_identity(full_name='', username='', phone='', email='', password
     full_name = (full_name or '').strip()
     email = (email or '').strip().lower()
     phone = (phone or '').strip()
-    cleaned_phone = phone.replace("+91", "").replace("-", "").replace(" ", "").strip() if phone else ""
+    cleaned_phone = normalize_chat_phone(phone)
 
     if not full_name or len(full_name) < 2:
         return error_response("Full Name is mandatory so friends and contacts can identify you.", 400)
@@ -723,12 +738,10 @@ def create_chat_identity(full_name='', username='', phone='', email='', password
     if u_err:
         return error_response(u_err, 400)
 
-    if not cleaned_phone and not email:
-        return error_response("Please enter your email address or mobile number.", 400)
+    if not cleaned_phone:
+        return error_response("Please enter a valid 10-digit mobile number.", 400)
     if email and not is_valid_chat_email(email):
         return error_response("Please enter a valid email address.", 400)
-    if cleaned_phone and len(cleaned_phone) < 10:
-        return error_response("Please enter a valid mobile number.", 400)
 
     pw_hash = generate_password_hash(password) if (password and len(str(password)) >= 6) else None
 
@@ -1264,6 +1277,72 @@ def chat_push_device_unregister():
         conn.close()
 
 
+def _notify_contacts_user_joined(conn, new_user):
+    """Notify users who already saved this mobile number in their synced phonebook."""
+    try:
+        new_id = int(new_user.get('id') or 0)
+        new_phone = normalize_chat_phone(new_user.get('phone'))
+        if not new_id or not new_phone:
+            return []
+        username = new_user.get('username') or f"user_{new_id}"
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT c.user_id AS owner_id, c.contact_name
+               FROM chat_user_contacts c
+               JOIN chat_users u ON u.id = c.user_id
+               WHERE c.contact_phone = ? AND c.user_id != ? AND u.is_active = 1""",
+            (new_phone, new_id),
+        )
+        matches = cursor.fetchall()
+        notified = []
+        for row in matches:
+            owner_id = row['owner_id']
+            if chat_block_exists(cursor, owner_id, new_id):
+                continue
+            cursor.execute(
+                "SELECT 1 FROM chat_contact_suggestion_alerts WHERE user_id = ? AND suggested_user_id = ? LIMIT 1",
+                (owner_id, new_id),
+            )
+            if cursor.fetchone():
+                continue
+            cursor.execute(
+                "INSERT OR IGNORE INTO chat_contact_suggestion_alerts (user_id, suggested_user_id) VALUES (?, ?)",
+                (owner_id, new_id),
+            )
+            label = (row['contact_name'] or new_user.get('name') or f"@{username}").strip()
+            msg = f"{label} (@{username}) is now on JDLX Chat! Tap to connect."
+            cursor.execute(
+                """INSERT INTO official_chat_notifications (user_id, title, message)
+                   VALUES (?, 'Contact on JDLX Chat', ?)""",
+                (owner_id, msg[:500]),
+            )
+            notified.append((owner_id, msg))
+        return notified
+    except Exception as exc:
+        logger.warning("Contact-joined notification skipped: %s", exc)
+        return []
+
+
+def _emit_contact_joined_events(new_user_id, notified):
+    if not notified:
+        return
+    try:
+        broadcast_supabase_chat_event([
+            (f"chat_user_{owner_id}", "friend_event", {'from_user_id': new_user_id, 'action': 'contact_joined'})
+            for owner_id, _ in notified
+        ])
+        for owner_id, msg in notified:
+            _dispatch_chat_pushes(
+                [owner_id],
+                "Contact on JDLX Chat",
+                msg,
+                "/chat?open=suggestions",
+                tag=f"contact-joined-{new_user_id}",
+            )
+    except Exception as exc:
+        logger.warning("Contact-joined realtime/push skipped: %s", exc)
+
+
 @chat_bp.route('/auth/login-mobile', methods=['POST'])
 def chat_login_mobile():
     """Register a NEW chat identity into the `chat_users` table.
@@ -1310,7 +1389,9 @@ def chat_login_mobile():
         )
         room = get_or_create_chat_room(conn, chat_user['id'], chat_user.get('name', 'Customer'), chat_user.get('username'))
         log_chat_security_event(conn, chat_user['id'], 'CHAT_REGISTER', f"Chat registration as @{chat_user.get('username')}")
+        notified = _notify_contacts_user_joined(conn, chat_user)
         conn.commit()
+        _emit_contact_joined_events(chat_user['id'], notified)
 
         return success_response({
             'chat_token': chat_token,
@@ -1388,19 +1469,15 @@ def chat_auth_register():
     if u_err:
         return error_response(u_err, 400)
 
-    # Email is the primary sign-in id; a mobile number is optional. At least
-    # one of the two is required so the account can actually be recovered.
+    # Email is optional if already captured elsewhere on legacy flows, while
+    # a 10-digit mobile number is mandatory on new registrations so friends
+    # can discover each other via contacts.
     if email and not is_valid_chat_email(email):
         return error_response("Please enter a valid email address.", 400)
 
-    # Mobile is optional, but when provided it must be a real 10-digit number.
-    cleaned_phone = re.sub(r'\D', '', phone)
-    if cleaned_phone.startswith('91') and len(cleaned_phone) == 12:
-        cleaned_phone = cleaned_phone[2:]
-    if cleaned_phone and len(cleaned_phone) != 10:
+    cleaned_phone = normalize_chat_phone(phone)
+    if not cleaned_phone:
         return error_response("Please enter a valid 10-digit mobile number.", 400)
-    if not cleaned_phone and not email:
-        return error_response("Please enter your email address or 10-digit mobile number.", 400)
 
     pw_policy_err = chat_password_policy_error(password)
     if pw_policy_err:
@@ -1417,18 +1494,17 @@ def chat_auth_register():
         if cursor.fetchone():
             return error_response(f"Username '@{clean_u}' is already taken. Please choose another username.", 409)
 
-        # 2. Check if mobile number already registered (only if mobile was provided)
-        if cleaned_phone:
-            cursor.execute("SELECT id FROM chat_users WHERE phone = ? LIMIT 1", (cleaned_phone,))
-            if cursor.fetchone():
-                # Never echo the existing account's @handle here: that turned a
-                # duplicate-phone error into an unauthenticated phone -> handle
-                # lookup (username enumeration + account disclosure).
-                return error_response(
-                    "An Official Chat account already exists with this mobile number. "
-                    "Please sign in with your password.",
-                    409
-                )
+        # 2. Check if mobile number already registered
+        cursor.execute("SELECT id FROM chat_users WHERE phone = ? LIMIT 1", (cleaned_phone,))
+        if cursor.fetchone():
+            # Never echo the existing account's @handle here: that turned a
+            # duplicate-phone error into an unauthenticated phone -> handle
+            # lookup (username enumeration + account disclosure).
+            return error_response(
+                "An Official Chat account already exists with this mobile number. "
+                "Please sign in with your password.",
+                409
+            )
 
         # 3. Check email if provided
         if email:
@@ -1440,7 +1516,7 @@ def chat_auth_register():
         cursor.execute(
             """INSERT INTO chat_users (name, username, phone, email, password_hash, gender, role)
                VALUES (?, ?, ?, ?, ?, ?, 'customer')""",
-            (full_name, clean_u, cleaned_phone or None, email or None, pw_hash, gender or None)
+            (full_name, clean_u, cleaned_phone, email or None, pw_hash, gender or None)
         )
         new_id = cursor.lastrowid
         cursor.execute("SELECT id, google_sub, email, phone, name, username, gender, profile_image, role, is_active FROM chat_users WHERE id = ?", (new_id,))
@@ -1455,7 +1531,9 @@ def chat_auth_register():
         )
         room = get_or_create_chat_room(conn, chat_user['id'], chat_user.get('name', 'Customer'), chat_user.get('username'))
         log_chat_security_event(conn, chat_user['id'], 'CHAT_REGISTER', f"Registered as @{chat_user.get('username')}")
+        notified = _notify_contacts_user_joined(conn, chat_user)
         conn.commit()
+        _emit_contact_joined_events(chat_user['id'], notified)
 
         return success_response({
             'chat_token': chat_token,
@@ -1472,9 +1550,9 @@ def chat_google_complete_signup():
     """Finish a Google sign-up by collecting the details Chat needs.
 
     Google only proves the email. A brand-new Google user is never inserted
-    until they choose a username, password, gender (and optionally a mobile
-    number) - otherwise the account could not sign in again without Google
-    and would be undiscoverable by friends.
+    until they choose a username, password, gender and 10-digit mobile number -
+    otherwise the account could not sign in again without Google and would be
+    undiscoverable by friends.
     """
     client_ip = get_client_ip_address()
     if not check_chat_rate_limit("google_complete", client_ip, max_requests=10, window_seconds=300):
@@ -1519,10 +1597,8 @@ def chat_google_complete_signup():
     if pw_policy_err:
         return error_response(pw_policy_err, 400)
 
-    cleaned_phone = re.sub(r'\D', '', phone)
-    if cleaned_phone.startswith('91') and len(cleaned_phone) == 12:
-        cleaned_phone = cleaned_phone[2:]
-    if cleaned_phone and len(cleaned_phone) != 10:
+    cleaned_phone = normalize_chat_phone(phone)
+    if not cleaned_phone:
         return error_response("Please enter a valid 10-digit mobile number.", 400)
 
     pw_hash = generate_password_hash(password)
@@ -1547,11 +1623,10 @@ def chat_google_complete_signup():
         if taken and taken['id'] != target_id:
             return error_response(f"Username '@{clean_u}' is already taken. Please choose another username.", 409)
 
-        if cleaned_phone:
-            cursor.execute("SELECT id FROM chat_users WHERE phone = ? LIMIT 1", (cleaned_phone,))
-            phone_row = cursor.fetchone()
-            if phone_row and phone_row['id'] != target_id:
-                return error_response("This mobile number is already linked to another chat account.", 409)
+        cursor.execute("SELECT id FROM chat_users WHERE phone = ? LIMIT 1", (cleaned_phone,))
+        phone_row = cursor.fetchone()
+        if phone_row and phone_row['id'] != target_id:
+            return error_response("This mobile number is already linked to another chat account.", 409)
 
         if target_id:
             cursor.execute(
@@ -1560,7 +1635,7 @@ def chat_google_complete_signup():
                        google_sub = ?, email = ?, profile_image = COALESCE(?, profile_image),
                        is_active = 1
                    WHERE id = ?""",
-                (full_name, clean_u, cleaned_phone or None, gender, pw_hash,
+                (full_name, clean_u, cleaned_phone, gender, pw_hash,
                  google_sub, email, picture, target_id)
             )
         else:
@@ -1570,7 +1645,7 @@ def chat_google_complete_signup():
             cursor.execute(
                 """INSERT INTO chat_users (google_sub, email, phone, name, username, password_hash, gender, profile_image, role)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'customer')""",
-                (google_sub, email, cleaned_phone or None, full_name, clean_u, pw_hash, gender, picture)
+                (google_sub, email, cleaned_phone, full_name, clean_u, pw_hash, gender, picture)
             )
             target_id = cursor.lastrowid
 
@@ -1592,7 +1667,9 @@ def chat_google_complete_signup():
             conn, chat_user['id'], 'GOOGLE_SIGNUP_COMPLETE',
             f"Google sign-up completed as @{chat_user.get('username')}"
         )
+        notified = _notify_contacts_user_joined(conn, chat_user)
         conn.commit()
+        _emit_contact_joined_events(chat_user['id'], notified)
 
         status = 200 if existing_user_id else 201
         return success_response({
@@ -2455,6 +2532,244 @@ def report_chat_user():
         conn.close()
 
 
+def _serialize_discovery_user(row, my_id):
+    u = {
+        'id': row['id'],
+        'name': row['name'],
+        'username': row['username'],
+        'profile_image': row['profile_image'],
+        'role': row['role'],
+        'is_online': bool(row['is_online']),
+        'room_id': row['room_id'],
+        'friend_request_id': row['friend_request_id']
+    }
+    fr_status = row['fr_status']
+    if fr_status == 'accepted':
+        u['friend_status'] = 'friends'
+    elif fr_status and row['fr_sender_id'] == my_id:
+        u['friend_status'] = 'pending_sent'
+    elif fr_status:
+        u['friend_status'] = 'pending_received'
+    else:
+        u['friend_status'] = 'none'
+    return u
+
+
+_DISCOVERY_USER_SELECT = """
+    SELECT
+        u.id,
+        u.name,
+        u.username,
+        u.profile_image,
+        u.role,
+        u.phone AS matched_phone,
+        CASE WHEN u.last_seen_at >= datetime('now', '-90 seconds') THEN 1 ELSE 0 END AS is_online,
+        fr.id AS friend_request_id,
+        fr.sender_id AS fr_sender_id,
+        fr.status AS fr_status,
+        r.id AS room_id
+    FROM chat_users u
+    LEFT JOIN official_chat_friend_requests fr ON fr.id = (
+        SELECT id FROM official_chat_friend_requests
+        WHERE (sender_id = ? AND receiver_id = u.id) OR (sender_id = u.id AND receiver_id = ?)
+        ORDER BY id DESC LIMIT 1
+    )
+    LEFT JOIN official_chat_rooms r ON r.id = (
+        SELECT id FROM official_chat_rooms
+        WHERE (user_id = ? AND user_two_id = u.id) OR (user_id = u.id AND user_two_id = ?)
+        LIMIT 1
+    )
+"""
+
+
+def _build_contact_matches(cursor, my_id):
+    """Split a user's synced phonebook into registered JDLX Chat users and
+    unregistered contacts available for SMS/WhatsApp invite."""
+    cursor.execute(
+        "SELECT contact_phone, contact_name FROM chat_user_contacts WHERE user_id = ? ORDER BY contact_name ASC, contact_phone ASC",
+        (my_id,),
+    )
+    saved_rows = cursor.fetchall()
+    if not saved_rows:
+        return [], []
+
+    phone_to_name = {}
+    for r in saved_rows:
+        p = normalize_chat_phone(r['contact_phone'])
+        if p and p not in phone_to_name:
+            phone_to_name[p] = (r['contact_name'] or '').strip()
+
+    if not phone_to_name:
+        return [], []
+
+    phones = list(phone_to_name.keys())
+    registered = []
+    seen_user_ids = set()
+    matched_phones = set()
+
+    # Keep IN (...) clauses bounded well below SQLite's parameter limit.
+    chunk_size = 300
+    for idx in range(0, len(phones), chunk_size):
+        chunk = phones[idx:idx + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        cursor.execute(
+            _DISCOVERY_USER_SELECT + f"""
+            WHERE u.phone IN ({placeholders})
+              AND u.id != ?
+              AND COALESCE(u.is_active, 1) = 1
+              AND u.id NOT IN (SELECT blocked_id FROM chat_blocks WHERE blocker_id = ?)
+              AND u.id NOT IN (SELECT blocker_id FROM chat_blocks WHERE blocked_id = ?)
+            """,
+            (my_id, my_id, my_id, my_id, *chunk, my_id, my_id, my_id),
+        )
+        for row in cursor.fetchall():
+            phone_val = normalize_chat_phone(row['matched_phone'])
+            if phone_val:
+                matched_phones.add(phone_val)
+            uid = row['id']
+            if uid in seen_user_ids:
+                continue
+            seen_user_ids.add(uid)
+            user_obj = _serialize_discovery_user(row, my_id)
+            user_obj['contact_name'] = phone_to_name.get(phone_val) or row['name']
+            user_obj['uses_jdlx_chat'] = True
+            registered.append(user_obj)
+
+    status_rank = {'pending_received': 0, 'none': 1, 'pending_sent': 2, 'friends': 3}
+    registered.sort(key=lambda u: (
+        status_rank.get(u.get('friend_status'), 9),
+        (u.get('contact_name') or u.get('name') or '').lower(),
+    ))
+
+    unregistered = [
+        {'contact_name': name or phone, 'phone': phone}
+        for phone, name in phone_to_name.items()
+        if phone not in matched_phones
+    ]
+    unregistered.sort(key=lambda c: ((c.get('contact_name') or '').lower(), c.get('phone') or ''))
+    return registered, unregistered
+
+
+@chat_bp.route('/contacts/sync', methods=['POST'])
+@chat_token_required
+def sync_chat_contacts():
+    """Sync phonebook contacts and return registered JDLX Chat matches + invite candidates."""
+    my_id = request.chat_user['user_id']
+    if not check_chat_rate_limit("contacts_sync", f"user_{my_id}", max_requests=30, window_seconds=300):
+        return error_response("Too many contact sync attempts. Please wait a moment.", 429)
+
+    data = request.get_json(silent=True) or {}
+    raw_contacts = data.get('contacts')
+    if not isinstance(raw_contacts, list):
+        return error_response("contacts must be a list", 400)
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT phone FROM chat_users WHERE id = ? LIMIT 1", (my_id,))
+        me_row = cursor.fetchone()
+        my_phone = normalize_chat_phone(me_row['phone']) if me_row else ''
+
+        deduped = {}
+        for item in raw_contacts:
+            if isinstance(item, dict):
+                raw_phone = item.get('phone') or item.get('number') or ''
+                raw_name = item.get('name') or item.get('contact_name') or ''
+            elif isinstance(item, str):
+                raw_phone = item
+                raw_name = ''
+            else:
+                continue
+            phone = normalize_chat_phone(raw_phone)
+            if not phone or (my_phone and phone == my_phone):
+                continue
+            name = str(raw_name or '').strip()[:120]
+            if phone not in deduped:
+                if len(deduped) >= MAX_SYNC_CONTACTS:
+                    continue
+                deduped[phone] = name
+            elif not deduped[phone] and name:
+                deduped[phone] = name
+
+        cursor.execute("DELETE FROM chat_user_contacts WHERE user_id = ?", (my_id,))
+        if deduped:
+            cursor.executemany(
+                """INSERT INTO chat_user_contacts (user_id, contact_phone, contact_name)
+                   VALUES (?, ?, ?)""",
+                [(my_id, p, n or None) for p, n in deduped.items()],
+            )
+
+        registered, unregistered = _build_contact_matches(cursor, my_id)
+
+        # Notify the user once when already-registered phonebook contacts are
+        # discovered (and not yet connected or sent a request).
+        newly_discovered = []
+        for u in registered:
+            if u.get('friend_status') != 'none':
+                continue
+            cursor.execute(
+                "SELECT 1 FROM chat_contact_suggestion_alerts WHERE user_id = ? AND suggested_user_id = ? LIMIT 1",
+                (my_id, u['id']),
+            )
+            if not cursor.fetchone():
+                newly_discovered.append(u)
+
+        notifications_created = 0
+        if newly_discovered:
+            cursor.executemany(
+                "INSERT OR IGNORE INTO chat_contact_suggestion_alerts (user_id, suggested_user_id) VALUES (?, ?)",
+                [(my_id, u['id']) for u in newly_discovered],
+            )
+            if len(newly_discovered) == 1:
+                first = newly_discovered[0]
+                label = first.get('contact_name') or first.get('name') or f"@{first.get('username')}"
+                msg = f"{label} (@{first.get('username')}) is using JDLX Chat! Tap to connect."
+            else:
+                first = newly_discovered[0]
+                label = first.get('contact_name') or first.get('name') or f"@{first.get('username')}"
+                others = len(newly_discovered) - 1
+                msg = f"{label} and {others} other contact{'s' if others > 1 else ''} are using JDLX Chat! Tap to view."
+            cursor.execute(
+                """INSERT INTO official_chat_notifications (user_id, title, message)
+                   VALUES (?, 'Contact on JDLX Chat', ?)""",
+                (my_id, msg[:500]),
+            )
+            notifications_created = 1
+
+        conn.commit()
+        return success_response({
+            'registered': registered,
+            'unregistered': unregistered,
+            'registered_count': len(registered),
+            'unregistered_count': len(unregistered),
+            'synced_count': len(deduped),
+            'notifications_created': notifications_created,
+        }, "Contacts synced")
+    finally:
+        conn.close()
+
+
+@chat_bp.route('/contacts/suggestions', methods=['GET'])
+@chat_token_required
+@db_retry_on_transient
+def get_chat_contact_suggestions():
+    """Return previously synced contacts split into registered users and invitees."""
+    my_id = request.chat_user['user_id']
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        registered, unregistered = _build_contact_matches(cursor, my_id)
+        return success_response({
+            'registered': registered,
+            'unregistered': unregistered,
+            'registered_count': len(registered),
+            'unregistered_count': len(unregistered),
+            'synced_count': len(registered) + len(unregistered),
+        }, "Contact suggestions retrieved")
+    finally:
+        conn.close()
+
+
 @chat_bp.route('/users/search', methods=['GET'])
 @chat_token_required
 def search_chat_users():
@@ -2474,40 +2789,18 @@ def search_chat_users():
     # (people share those deliberately). Prefix/wildcard phone/email search is
     # removed so nobody can walk the number/handle space and harvest accounts.
     phone_exact = None
-    if re.fullmatch(r'(?:\+91)?\d{10}', q):
-        phone_exact = q[-10:]
+    if re.fullmatch(r'[\d+\-\s()]+', q):
+        candidate_phone = normalize_chat_phone(q)
+        if candidate_phone:
+            phone_exact = candidate_phone
     email_exact = q if is_valid_chat_email(q) else None
 
     conn = get_db()
     try:
         cursor = conn.cursor()
-        base_select = """
-            SELECT 
-                u.id, 
-                u.name, 
-                u.username, 
-                u.profile_image, 
-                u.role,
-                CASE WHEN u.last_seen_at >= datetime('now', '-90 seconds') THEN 1 ELSE 0 END AS is_online,
-                fr.id AS friend_request_id,
-                fr.sender_id AS fr_sender_id,
-                fr.status AS fr_status,
-                r.id AS room_id
-            FROM chat_users u
-            LEFT JOIN official_chat_friend_requests fr ON fr.id = (
-                SELECT id FROM official_chat_friend_requests
-                WHERE (sender_id = ? AND receiver_id = u.id) OR (sender_id = u.id AND receiver_id = ?)
-                ORDER BY id DESC LIMIT 1
-            )
-            LEFT JOIN official_chat_rooms r ON r.id = (
-                SELECT id FROM official_chat_rooms
-                WHERE (user_id = ? AND user_two_id = u.id) OR (user_id = u.id AND user_two_id = ?)
-                LIMIT 1
-            )
-        """
         if email_exact:
             cursor.execute(
-                base_select + """
+                _DISCOVERY_USER_SELECT + """
                 WHERE LOWER(u.email) = ? AND u.id != ?
                   AND u.id NOT IN (SELECT blocked_id FROM chat_blocks WHERE blocker_id = ?)
                   AND u.id NOT IN (SELECT blocker_id FROM chat_blocks WHERE blocked_id = ?)
@@ -2517,7 +2810,7 @@ def search_chat_users():
             )
         elif phone_exact:
             cursor.execute(
-                base_select + """
+                _DISCOVERY_USER_SELECT + """
                 WHERE u.phone = ? AND u.id != ?
                   AND u.id NOT IN (SELECT blocked_id FROM chat_blocks WHERE blocker_id = ?)
                   AND u.id NOT IN (SELECT blocker_id FROM chat_blocks WHERE blocked_id = ?)
@@ -2529,7 +2822,7 @@ def search_chat_users():
             prefix = f"{q}%"
             like_q = f"%{q}%"
             cursor.execute(
-                base_select + """
+                _DISCOVERY_USER_SELECT + """
                 WHERE (LOWER(u.username) LIKE ? OR LOWER(u.name) LIKE ?) AND u.id != ?
                   AND u.id NOT IN (SELECT blocked_id FROM chat_blocks WHERE blocker_id = ?)
                   AND u.id NOT IN (SELECT blocker_id FROM chat_blocks WHERE blocked_id = ?)
@@ -2545,29 +2838,7 @@ def search_chat_users():
             )
 
         rows = cursor.fetchall()
-        users = []
-        for row in rows:
-            u = {
-                'id': row['id'],
-                'name': row['name'],
-                'username': row['username'],
-                'profile_image': row['profile_image'],
-                'role': row['role'],
-                'is_online': bool(row['is_online']),
-                'room_id': row['room_id'],
-                'friend_request_id': row['friend_request_id']
-            }
-            fr_status = row['fr_status']
-            if fr_status == 'accepted':
-                u['friend_status'] = 'friends'
-            elif fr_status and row['fr_sender_id'] == my_id:
-                u['friend_status'] = 'pending_sent'
-            elif fr_status:
-                u['friend_status'] = 'pending_received'
-            else:
-                u['friend_status'] = 'none'
-            users.append(u)
-
+        users = [_serialize_discovery_user(row, my_id) for row in rows]
         return success_response(users, "Users found")
     finally:
         conn.close()
@@ -3802,6 +4073,18 @@ def _chat_social_revision(cursor, my_id):
     max_msg_id = (msg_state['max_id'] if msg_state else 0) or 0
     unread_msgs = (msg_state['unread'] if msg_state else 0) or 0
     signature += f"|msg:{max_msg_id}:{unread_msgs}"
+
+    cursor.execute(
+        """SELECT COALESCE(MAX(id), 0) AS max_notif_id,
+                  COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) AS unread_notifs
+           FROM official_chat_notifications
+           WHERE user_id = ?""",
+        (my_id,)
+    )
+    notif_state = cursor.fetchone()
+    max_notif_id = (notif_state['max_notif_id'] if notif_state else 0) or 0
+    unread_notifs = (notif_state['unread_notifs'] if notif_state else 0) or 0
+    signature += f"|notif:{max_notif_id}:{unread_notifs}"
     return (
         max_msg_id,
         unread_msgs,

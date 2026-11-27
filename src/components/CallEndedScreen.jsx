@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Phone, Video, X, PhoneOff } from 'lucide-react'
 import { useChatStore } from '../store/useChatStore'
+import { resolveMediaUrl } from '../config'
 import { backdropMotionClass, modalMotionClass, useAnimatedPresence } from '../hooks/useAnimatedPresence'
 
 // Copy for the moment right after a call drops. 'completed' wins whenever the
@@ -31,6 +32,11 @@ export default function CallEndedScreen() {
   const dismissCallEnded = useChatStore((s) => s.dismissCallEnded)
   const initiateCall = useChatStore((s) => s.initiateCall)
   const activeCall = useChatStore((s) => s.activeCall)
+  const [avatarFailed, setAvatarFailed] = useState(false)
+
+  useEffect(() => {
+    setAvatarFailed(false)
+  }, [callEndedInfo?.peerAvatar])
 
   // Auto-dismiss so the summary never blocks the conversation behind it. A new
   // incoming call cancels it immediately (the modal takes over the screen).
@@ -45,7 +51,7 @@ export default function CallEndedScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callEndedInfo, activeCall])
 
-  const presence = useAnimatedPresence(callEndedInfo, 180)
+  const presence = useAnimatedPresence(callEndedInfo, 250)
 
   if (!presence.mounted) return null
 
@@ -54,6 +60,7 @@ export default function CallEndedScreen() {
   const completed = info.outcome === 'completed'
   const isVideo = info.callType === 'video'
   const initial = (info.peerName || '?').trim().charAt(0).toUpperCase()
+  const resolvedAvatar = resolveMediaUrl(info.peerAvatar)
   const redial = () => {
     dismissCallEnded()
     initiateCall(info.roomId, info.callType).then((res) => {
@@ -62,11 +69,16 @@ export default function CallEndedScreen() {
   }
 
   return (
-    <div className={`fixed inset-0 z-[95] flex items-center justify-center bg-[#0b0b0d] px-6 ${backdropMotionClass(presence.isClosing)}`}>
+    <div className={`fixed inset-0 z-[95] flex items-center justify-center bg-[#0b0b0d] px-6 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] ${backdropMotionClass(presence.isClosing)}`}>
       <div className={`w-full max-w-sm text-center ${modalMotionClass(presence.isClosing)}`}>
         <div className="mx-auto mb-5 flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-[#1b1b20] ring-2 ring-[#2a2a31]">
-          {info.peerAvatar ? (
-            <img src={info.peerAvatar} alt="" className="h-full w-full object-cover" />
+          {resolvedAvatar && !avatarFailed ? (
+            <img
+              src={resolvedAvatar}
+              alt=""
+              onError={() => setAvatarFailed(true)}
+              className="h-full w-full object-cover"
+            />
           ) : (
             <span className="text-3xl font-black text-zinc-300">{initial}</span>
           )}

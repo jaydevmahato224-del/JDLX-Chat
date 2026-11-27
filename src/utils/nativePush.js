@@ -11,6 +11,7 @@ import { PushNotifications } from '@capacitor/push-notifications'
 import toast from 'react-hot-toast'
 import { apiFetch } from './apiFetch'
 import { isCapacitorNative } from '../config'
+import { waitForStartupPermissions } from './appPermissions'
 
 const TOKEN_KEY = 'jdlx_chat_device_push_token'
 let started = false
@@ -115,6 +116,8 @@ export async function enableChatNativePush() {
     return { success: false, error: 'Device notifications are only available in the app.' }
   }
   try {
+    await waitForStartupPermissions()
+
     let permission = (await PushNotifications.checkPermissions()).receive
     if (permission === 'prompt' || permission === 'prompt-with-rationale') {
       permission = (await PushNotifications.requestPermissions()).receive
@@ -140,6 +143,8 @@ export async function initChatNativePush() {
   started = true
 
   try {
+    await waitForStartupPermissions()
+
     let permission = (await PushNotifications.checkPermissions()).receive
     if (permission === 'prompt' || permission === 'prompt-with-rationale') {
       permission = (await PushNotifications.requestPermissions()).receive
