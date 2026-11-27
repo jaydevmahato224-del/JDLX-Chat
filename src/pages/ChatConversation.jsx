@@ -1317,6 +1317,8 @@ export default function ChatConversation() {
   const rootContainerRef = useRef(null)
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false)
   const maxViewportHeightRef = useRef(typeof window !== 'undefined' ? window.innerHeight : 800)
+  const syncVisualViewportRef = useRef(null)
+  const focusViewportTimersRef = useRef([])
 
   // Mobile Edge Swipe-to-Back (iOS / Android Native standard: clientX <= 28px)
   const [edgeSwipeOffset, setEdgeSwipeOffset] = useState(0)
@@ -3305,11 +3307,10 @@ export default function ChatConversation() {
     return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`
   }
 
-  // Mobile VisualViewport listener: lock layout to visible area smoothly with 0ms jitter
+  // Mobile VisualViewport listener: lock layout and mobile chat pane to visible area with 0ms jitter
   useEffect(() => {
     if (typeof window === 'undefined') return
     const vv = window.visualViewport
-    if (!vv) return
 
     let rafId = null
 
@@ -3321,8 +3322,8 @@ export default function ChatConversation() {
           window.scrollTo(0, 0)
         }
 
-        const vh = Math.round(vv.height)
-        const vTop = Math.round(vv.offsetTop || 0)
+        const vh = Math.round(vv ? vv.height : window.innerHeight)
+        const vTop = Math.round(vv?.offsetTop || 0)
 
         if (vh > maxViewportHeightRef.current) {
           maxViewportHeightRef.current = vh
@@ -3336,16 +3337,20 @@ export default function ChatConversation() {
           return keyboardOpen
         })
 
-        // Dock root container height & top directly to visual viewport without React re-render stutter
-        // vTop ensures container is never pushed above the viewport when browser pans
+        // Dock root container and .mobile-chat-pane via CSS vars so React re-renders never reset them
         if (rootContainerRef.current) {
-          rootContainerRef.current.style.top = `${vTop}px`
-          rootContainerRef.current.style.height = `${vh}px`
-          rootContainerRef.current.style.maxHeight = `${vh}px`
-          rootContainerRef.current.style.bottom = 'auto'
+          const elStyle = rootContainerRef.current.style
+          elStyle.setProperty('--mobile-vv-top', `${vTop}px`)
+          elStyle.setProperty('--mobile-vv-height', `${vh}px`)
+          elStyle.top = `${vTop}px`
+          elStyle.height = `${vh}px`
+          elStyle.maxHeight = `${vh}px`
+          elStyle.bottom = 'auto'
         }
       })
     }
+
+    syncVisualViewportRef.current = handleViewportChange
 
     const handleWindowScroll = () => {
       if (typeof window !== 'undefined' && (window.scrollY !== 0 || window.scrollX !== 0)) {
@@ -3355,23 +3360,33 @@ export default function ChatConversation() {
 
     const handleOrientationChange = () => {
       setTimeout(() => {
-        if (typeof window !== 'undefined' && window.visualViewport) {
-          maxViewportHeightRef.current = Math.round(window.visualViewport.height)
+        if (typeof window !== 'undefined') {
+          const nextVh = window.visualViewport ? window.visualViewport.height : window.innerHeight
+          maxViewportHeightRef.current = Math.round(nextVh)
           handleViewportChange()
         }
       }, 150)
     }
 
     handleViewportChange()
-    vv.addEventListener('resize', handleViewportChange, { passive: true })
-    vv.addEventListener('scroll', handleViewportChange, { passive: true })
+    if (vv) {
+      vv.addEventListener('resize', handleViewportChange, { passive: true })
+      vv.addEventListener('scroll', handleViewportChange, { passive: true })
+    }
+    window.addEventListener('resize', handleViewportChange, { passive: true })
     window.addEventListener('scroll', handleWindowScroll, { passive: true })
     window.addEventListener('orientationchange', handleOrientationChange)
 
     return () => {
       if (rafId) cancelAnimationFrame(rafId)
-      vv.removeEventListener('resize', handleViewportChange)
-      vv.removeEventListener('scroll', handleViewportChange)
+      syncVisualViewportRef.current = null
+      focusViewportTimersRef.current.forEach((id) => clearTimeout(id))
+      focusViewportTimersRef.current = []
+      if (vv) {
+        vv.removeEventListener('resize', handleViewportChange)
+        vv.removeEventListener('scroll', handleViewportChange)
+      }
+      window.removeEventListener('resize', handleViewportChange)
       window.removeEventListener('scroll', handleWindowScroll)
       window.removeEventListener('orientationchange', handleOrientationChange)
     }
@@ -6035,14 +6050,15 @@ export default function ChatConversation() {
       ref={rootContainerRef}
       style={{
         position: 'fixed',
-        top: 0,
+        top: 'var(--mobile-vv-top, 0px)',
         left: 0,
         right: 0,
+        bottom: 'auto',
         width: '100%',
-        height: '100%',
-        maxHeight: '100dvh'
+        height: 'var(--mobile-vv-height, 100dvh)',
+        maxHeight: 'var(--mobile-vv-height, 100dvh)'
       }}
-      className={`fixed top-0 left-0 right-0 z-[100] flex flex-col font-sans overflow-hidden transition-colors duration-200 ${
+      className={`fixed left-0 right-0 z-[100] flex flex-col font-sans overflow-hidden transition-colors duration-200 ${
         isLight ? 'bg-[#f6f7f9] text-slate-900' : 'official-chat-dark dark bg-[#090a0c] text-white'
       }`}
     >
@@ -6207,7 +6223,7 @@ export default function ChatConversation() {
       </header>
 
       {/* ── MAIN WHATSAPP-STYLE DUAL-PANE BODY ── */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div className="flex-1 flex min-h-0 min-w-0 overflow-hidden relative">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* LEFT PANE: CONVERSATIONS & CHATS LIST (WhatsApp Sidebar)     */}
         {/* ══════════════════════════════════════════════════════════════ */}
@@ -7143,7 +7159,7 @@ export default function ChatConversation() {
           onTouchMove={handleEdgeTouchMove}
           onTouchEnd={handleEdgeTouchEnd}
           onTouchCancel={handleEdgeTouchEnd}
-          className={`relative flex-1 flex-col overflow-hidden md:transition-colors jdlx-privacy-sensitive ${
+          className={`relative w-full max-w-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:transition-colors jdlx-privacy-sensitive ${
             isLight ? 'bg-[#f6f7f9]' : 'bg-[#090a0c]'
           } ${
             mobileChatPresence.mounted
@@ -7543,7 +7559,7 @@ export default function ChatConversation() {
                   touchAction: 'pan-y',
                   overscrollBehaviorX: 'none'
                 }}
-                className={`relative flex-1 space-y-1.5 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4 transition-colors sm:px-6 ${
+                className={`relative flex-1 min-h-0 min-w-0 space-y-1.5 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4 transition-colors sm:px-6 ${
                   activeWallpaperClass
                 } ${
                   !activeWallpaperClass ? (isLight ? 'bg-[#f8f9fb]' : 'bg-[#0b0d10]') : ''
@@ -8463,7 +8479,7 @@ export default function ChatConversation() {
               {/* Active Chat Message Input Bar */}
               <footer
                 ref={footerRef}
-                className={`relative z-20 shrink-0 border-t px-2 pt-2 sm:px-3 sm:pt-3 ${
+                className={`relative z-20 w-full max-w-full min-w-0 shrink-0 border-t px-2 pt-2 sm:px-3 sm:pt-3 ${
                   isKeyboardOpen ? 'pb-2' : 'pb-[max(0.65rem,env(safe-area-inset-bottom,0px))]'
                 } transition-colors ${
                   isLight
@@ -8737,7 +8753,7 @@ export default function ChatConversation() {
                     )}
                   </div>
                 )}
-                <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex items-end gap-1.5 sm:gap-2 relative">
+                <form onSubmit={handleSendMessage} className="w-full max-w-4xl min-w-0 mx-auto flex items-end gap-1.5 sm:gap-2 relative">
                   <input
                     type="file"
                     ref={fileInputRef}
@@ -8788,7 +8804,7 @@ export default function ChatConversation() {
 
                   {/* Center Composer: Voice Review Mode OR Live Recording Bar OR Luxury Input Capsule */}
                   {voiceReview ? (
-                    <div className={`flex flex-1 animate-in items-center justify-between rounded-2xl border px-2.5 py-2 transition-all fade-in duration-200 sm:px-3.5 sm:py-2.5 ${
+                    <div className={`flex flex-1 min-w-0 animate-in items-center justify-between rounded-2xl border px-2.5 py-2 transition-all fade-in duration-200 sm:px-3.5 sm:py-2.5 ${
                       isLight ? 'border-amber-300/70 bg-amber-50' : 'border-amber-500/20 bg-[#16191e]'
                     }`}>
                       {/* Hidden audio element for preview */}
@@ -8932,7 +8948,7 @@ export default function ChatConversation() {
                       </div>
                     </div>
                   ) : (
-                    <div className={`flex flex-1 items-end rounded-2xl border py-1 pl-1.5 pr-3 transition-colors sm:pr-3.5 ${
+                    <div className={`flex flex-1 min-w-0 items-end rounded-2xl border py-1 pl-1 pr-1.5 transition-colors sm:pl-1.5 sm:pr-3.5 ${
                       isLight
                         ? 'border-transparent bg-[#f2f4f7] hover:bg-[#eef0f4] focus-within:border-amber-500/40 focus-within:bg-white'
                         : 'border-white/[0.06] bg-[#16191e] hover:border-white/10 focus-within:border-amber-500/30 focus-within:bg-[#171b21]'
@@ -8962,6 +8978,7 @@ export default function ChatConversation() {
                       <textarea
                         ref={textareaRef}
                         rows={1}
+                        cols={1}
                         placeholder={mobileView === 'chat' ? "Type a message…" : (enterToSend ? "Type a message (Shift+Enter for new line)…" : "Type a message (Enter for new line)…")}
                         value={inputText}
                         enterKeyHint={enterToSend ? "send" : "enter"}
@@ -8969,14 +8986,19 @@ export default function ChatConversation() {
                           if (typeof window !== 'undefined') {
                             window.scrollTo(0, 0)
                           }
-                          if (mobileView === 'chat') {
+                          syncVisualViewportRef.current?.()
+                          focusViewportTimersRef.current.forEach((id) => clearTimeout(id))
+                          focusViewportTimersRef.current = [80, 220, 380].map((delay) =>
                             setTimeout(() => {
                               if (typeof window !== 'undefined') {
                                 window.scrollTo(0, 0)
                               }
-                              scrollToBottom(false)
-                            }, 120)
-                          }
+                              syncVisualViewportRef.current?.()
+                              if (mobileView === 'chat') {
+                                scrollToBottom(false)
+                              }
+                            }, delay)
+                          )
                         }}
                         onBlur={() => stopTyping(activeRoomId)}
                         onPaste={handlePaste}
@@ -8997,7 +9019,7 @@ export default function ChatConversation() {
                           }
                         }}
                         disabled={isBlockedConversation}
-                        className={`flex-1 min-w-0 px-2 py-1.5 sm:py-2 bg-transparent border-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 no-focus-outline text-base sm:text-sm font-medium resize-none overflow-y-auto max-h-[120px] leading-relaxed ${
+                        className={`flex-1 w-full min-w-0 px-1.5 sm:px-2 py-1.5 sm:py-2 bg-transparent border-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 no-focus-outline text-base sm:text-sm font-medium resize-none overflow-x-hidden overflow-y-auto max-h-[120px] leading-relaxed ${
                           isLight ? 'text-slate-900 placeholder:text-slate-400' : 'text-white placeholder:text-zinc-400'
                         }`}
                       />
